@@ -26,7 +26,7 @@ pub fn menu_bar() -> Menu {
     app_submenu
         .append_items(&[
             &MenuItemBuilder::new()
-                .text(format!("About {}", PRODUCT_NAME))
+                .text(format!("About {PRODUCT_NAME}"))
                 .id(DASHBOARD_ABOUT.into())
                 .enabled(true)
                 .build(),

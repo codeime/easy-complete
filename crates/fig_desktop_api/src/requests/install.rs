@@ -112,12 +112,13 @@ where
             cfg_if::cfg_if! {
                 if #[cfg(target_os = "macos")] {
                     use macos_utils::accessibility::{
-                        open_accessibility,
                         accessibility_is_enabled,
+                        open_accessibility,
                         prompt_for_accessibility,
                     };
 
-                    if !accessibility_is_enabled() && !prompt_for_accessibility() {
+                    if !accessibility_is_enabled() {
+                        prompt_for_accessibility();
                         open_accessibility();
                     }
 

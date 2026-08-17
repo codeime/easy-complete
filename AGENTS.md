@@ -21,8 +21,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo build --release -p fig_desktop -p figterm -p ec_cli -p fig_input_method
 
 # Run a specific crate in dev mode
-cargo run --bin ec_cli -- <subcommand>
+cargo run --bin ec -- <subcommand>
 cargo run --bin easy-complete
+
+# Headless completion (uses bundle/specs-ir)
+cargo run --bin ec -- engine complete --buffer "git ch"
 
 # Lint (CI enforces -D warnings)
 cargo clippy --locked --workspace --color always -- -D warnings
@@ -43,8 +46,8 @@ cargo test -p <crate_name> <test_name>
 # Build all packages
 pnpm turbo build --filter="./packages/*"
 
-# Dev watch mode for autocomplete UI (port 3124)
-pnpm dev:autocomplete
+# Compile bundled Fig specs to JSON IR + extracted JS hooks
+node scripts/compile-spec-ir.mjs
 
 # Lint all packages
 pnpm lint
@@ -81,11 +84,11 @@ The script outputs the exact next steps:
 
 Three cooperating native processes communicate via Unix domain sockets (protobuf messages):
 
-1. **`easy-complete`** (`fig_desktop`) — Native desktop app. Owns the autocomplete overlay window and settings dashboard, both rendered as React apps inside `wry` WebViews. Handles system tray, window management, and the JS↔Rust bridge via `fig_desktop_api`.
+1. **`easy-complete`** (`fig_desktop`) — Native desktop app. Owns the GPUI autocomplete overlay (`ec_gpui` + `overlay.rs`) and the GPUI settings window (`settings_ui.rs`). Hosts the completion engine worker, system tray, Accessibility / IME plumbing, and process-wide `NSApplication` via `gpui_host.rs`.
 
-2. **`ecterm`** (`figterm`) — Pseudoterminal that sits between the user's shell and their terminal emulator. Intercepts keystrokes and the shell edit buffer to drive autocomplete. Built on a vendored fork of `alacritty_terminal`.
+2. **`ecterm`** (`figterm`) — Pseudoterminal that sits between the user's shell and their terminal emulator. Intercepts keystrokes and the shell edit buffer to drive autocomplete. Built on a vendored fork of `alacritty_terminal`. Process title is rewritten to `<shell> (ecterm)`.
 
-3. **`ec`** (`ec_cli`) — CLI entry point. Subcommands include `setup`, `integrations`, `hook`, `settings`, `diagnostic`, `inline`, and more.
+3. **`ec`** (`ec_cli`) — CLI entry point. Subcommands include `setup`, `integrations`, `hook`, `settings`, `diagnostic`, `engine`, and more.
 
 ### IPC
 
@@ -107,27 +110,48 @@ Three cooperating native processes communicate via Unix domain sockets (protobuf
 - Integration install/uninstall is managed via `ec integrations install input-method`
 - Enabled state is stored in SQLite: `~/Library/Application Support/easy-complete/data.sqlite3`, table `state`, key `input-method=dev.emmmm.easy-complete.inputmethod.enabled`
 
-### WebView UI
+### Native UI
 
-The autocomplete overlay and dashboard are React + Tailwind apps in `packages/autocomplete-app` and `packages/dashboard-app`. In production they are served from `Contents/Resources/{autocomplete,dashboard}/`. In dev, Vite serves them on localhost and `fig_desktop` connects to that instead. Both are served over the `ecresource://localhost` custom protocol (`fig_desktop/src/protocol/resource.rs`), which falls back to `index.html` for extension-less paths so SPA routes like `/about` work.
+The overlay and settings window are GPUI views, not WebViews. Do not reintroduce `wry` / WKWebView for either surface.
 
-### WebView Lifecycle
+- **Overlay** — `crates/ec_gpui` renders the list; `crates/fig_desktop/src/overlay.rs` owns completion requests, insertion, intercept flags, and caret placement. The window is parked with `orderOut` when hidden (last size kept). Caret coordinates are Quartz (top-left, origin at the primary display). Convert to Cocoa with `NSScreen.screens[0]`, **not** `mainScreen` — `mainScreen` is the focused display and breaks external-monitor placement.
+- **Settings** — `crates/fig_desktop/src/settings_ui.rs`. Appearance / Behavior / About, plus a permission gate. Language key is still `dashboard.language` (`system`, `en`, `zh-CN`).
+- **Host** — `crates/fig_desktop/src/gpui_host.rs` runs one `NSApplication` for overlay + settings + tray.
 
-Neither webview is built at startup. `AutocompleteLifecycle` in `fig_desktop/src/webview/mod.rs` creates and releases them on demand:
-
-- **Autocomplete** is built when a `figterm` session connects (`RemoteHookHandler::sessions_changed`) and released after the last session disconnects. Window events that need a live window (`Show`, `Devtools`) rebuild it on the spot.
-- **Dashboard** is built on `Show`/`Devtools` and fully released on close (`WindowEvent::Close`, distinct from `Hide`), so closing the settings window reclaims its memory.
-
-Because a rebuilt overlay starts blank, native window events are deferred until the app posts `__ec_autocomplete_mounted__` over the IPC bridge, then replayed in order. A 5s timeout drains the queue if that signal never arrives. Two more IPC signals feed startup telemetry: `__ec_autocomplete_ready__` (first suggestions rendered) and `__ec_autocomplete_specs_ready__` (spec preload finished).
+`overlay.rs` reproduces the WebView's `HIDDEN_UNTIL_KEYPRESS` triggers: backspacing a whole token away, and a buffer change that does not look like typing (a paste or a shell history recall). Both hide the list until the next keystroke; an insertion the overlay made itself is exempt, which is what `self_insertion` tracks.
 
 Relevant settings:
 
-| Key                                          | Default | Effect                                                                          |
-| -------------------------------------------- | ------- | ------------------------------------------------------------------------------- |
-| `autocomplete.keepReady`                     | `false` | Keep the overlay loaded with no terminals connected — faster first suggestion, more memory |
-| `developer.autocomplete.releaseDelaySeconds` | `600`   | Idle delay before releasing the overlay, clamped to 1s–24h. Debug only; low values cause constant rebuilds |
-| `dashboard.language`                         | unset   | Dashboard UI language: `system`, `en`, or `zh-CN`                                |
-| `app.silentLaunch`                           | `false` | Start without opening the dashboard, same as `--no-dashboard`. A `ec://` deep link naming a page overrides it |
+| Key                | Default | Effect                                                                                                              |
+| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `dashboard.language` | unset | Settings UI language: `system`, `en`, or `zh-CN`                                                                    |
+| `app.silentLaunch` | `false` | Start without opening settings, same as `--no-dashboard`. A `ec://` deep link naming a page overrides it            |
+| `autocomplete.scriptTimeout` | `5000` | Per-hook script budget in ms. The overlay retires `···` after this plus 1s (floor 2s) but keeps waiting, so a late result still renders. The engine worker's wedged-thread watchdog stays at ≥30s. |
+
+The WebView overlay and dashboard sources (`packages/autocomplete-app`, `packages/dashboard-app`) were deleted after v2.2.2 — nothing loaded them once both surfaces went native. Read them out of git when you need the legacy insertion / ranking behavior as a reference. The repo carries no tags, so use the v2.2.2 bump commit `edf0936a`: `git show edf0936a:packages/autocomplete-app/src/state/insertion.ts`, or `git worktree add /tmp/ec-baseline edf0936a` for a full tree to diff against.
+
+The Rust half of that bridge is gone too: `fig_desktop/src/protocol/` (the `fig://`, `ecresource://` and `spec://` handlers), `fig_desktop/src/request/`, and most of `fig_desktop_api`. `crates/fig_desktop/src/webview/` keeps its name but is now just the app bootstrap — `WebviewManager` owns the event loop, tray and IPC, and starts GPUI. Do not restore `#![allow(dead_code)]` on those modules; it is what let the bridge rot in place unnoticed. Note that `mod` versus `pub mod` matters here: a `pub mod` at the crate root exempts its items from both the `dead_code` lint and clippy's `avoid_breaking_exported_api` lints, which hides exactly this class of leftover.
+
+`crates/fig_desktop/src/platform/` still carries `linux/` and `windows.rs` behind the `cfg_if!` in `platform/mod.rs`, but **neither compiles** and neither has since before the GPUI migration. `windows.rs` refers to `RelativeDirection` and `FigWindowMap`, two types that no longer exist anywhere in the crate; `linux/` needs `x11rb`, `zbus` and `dbus`, none of which are declared in `Cargo.toml`. Only the macOS branch is real, so `cargo clippy --workspace -- -D warnings` on macOS covers everything that builds. Treat those two branches as fork archaeology: reviving either means repairing it against the current `event.rs` / `webview` types, not just flipping a target.
+
+### Completion engine
+
+`ec_engine` runs on a dedicated worker thread (`EngineClient`). Bundled Fig specs are compiled at build time by `scripts/compile-spec-ir.mjs` into `bundle/specs-ir/` (JSON IR + extracted hook modules). `build-app.sh` copies that tree to `Contents/Resources/specs-ir/`. Override the directory with `EC_SPECS_DIR`.
+
+Most completions are pure Rust (lookup, builtins, file paths, history, ranking). QuickJS (`rquickjs`) runs only when the current argument's generator has a JS hook:
+
+| Hook            | Role                                              |
+| --------------- | ------------------------------------------------- |
+| `postProcess`   | Native script stdout → suggestion rows            |
+| `script`        | JS returns the command line; Rust executes it     |
+| `custom`        | Whole generator in JS; may call injected `exec`   |
+| `generateSpec`  | Walk-time: JS returns a spec merged into the node |
+
+The JS runtime is thread-local and created on first hook. Empty `cwd` skips JS hooks. Results are cached (`cached_suggestions` / `cached_spec`). A request that turns on the `···` marker owns that latch and must clear it even if its result is stale.
+
+Fig semantics the Rust side has to reproduce exactly: a generator's `splitOn` wins over its `postProcess`, and `custom` hooks get the shell's process name and environment variables on their context argument (`JsHost::enter_with_context`, fed from `CompleteRequest::environment_variables`).
+
+`packages/autocomplete-engine` is a TypeScript experiment and is not on the desktop path.
 
 ### Website Tailwind CSS
 
@@ -142,7 +166,7 @@ The product website under `website/src` uses Tailwind CSS v4. When editing it:
 
 ### Bundled Specs
 
-Completion specs are **bundled into the `.app` at build time**, not fetched at runtime. `scripts/sync-bundled-specs.mjs` assembles them into `bundle/specs/`, which `build-app.sh` copies to `Contents/Resources/specs/`. At runtime the `spec://localhost/<name>.js` custom protocol (`fig_desktop/src/protocol/spec.rs`) reads these local files only — there is **no network fallback**, so a spec absent from the bundle simply has no completion.
+Completion specs are **bundled into the `.app` at build time**, not fetched at runtime. `scripts/sync-bundled-specs.mjs` assembles the Fig JS sources into `bundle/specs/`. `scripts/compile-spec-ir.mjs` then writes `bundle/specs-ir/` (JSON IR + `hooks/*.js`). `build-app.sh` always recompiles IR and copies both trees to `Contents/Resources/`. The engine reads **`specs-ir` only** — a spec missing from that tree has no completion.
 
 **Source.** The default source is the installed npm dependency [`@chen86860/autocomplete-specs`](https://www.npmjs.com/package/@chen86860/autocomplete-specs), published from our forked spec repo [`chen86860/autocomplete-specs`](https://github.com/chen86860/autocomplete-specs). The version is pinned by root `package.json` plus `pnpm-lock.yaml`. The sync script reads the package from `node_modules`, copies `build/*.js` and `icons/*.png` into `bundle/specs`, then derives `index.json` from the bundled file tree.
 
@@ -160,12 +184,14 @@ To keep the bundle small, the sync script supports excluding whole namespaces vi
 
 | Crate              | Role                                                             |
 | ------------------ | ---------------------------------------------------------------- |
-| `fig_desktop`      | Native app host: windowing (`tao`), WebView (`wry`), system tray |
+| `fig_desktop`      | Native app host: GPUI overlay + settings, tray, engine client    |
+| `ec_gpui`          | Overlay list, theme, macOS window placement                      |
+| `ec_engine`        | Headless completion: IR lookup, generators, QuickJS hooks        |
 | `figterm`          | PTY interceptor, shell edit buffer tracking                      |
 | `ec_cli`           | CLI binary, all `ec` subcommands                                 |
 | `fig_input_method` | macOS IMKit input method helper                                  |
 | `fig_integrations` | Shell/terminal/editor integration install logic                  |
-| `fig_desktop_api`  | Request/response handlers for WebView↔native bridge             |
+| `fig_desktop_api`  | All that is left of the WebView bridge: the `install` request      |
 | `fig_ipc`          | Unix socket IPC primitives                                       |
 | `fig_proto`        | Generated Protobuf message types                                 |
 | `fig_settings`     | Settings persistence (JSON)                                      |
@@ -174,20 +200,20 @@ To keep the bundle small, the sync script supports excluding whole namespaces vi
 
 ## Key TypeScript Packages
 
-| Package                 | Role                                   |
-| ----------------------- | -------------------------------------- |
-| `autocomplete-app`      | Autocomplete overlay React UI          |
-| `dashboard-app`         | Settings/onboarding React UI           |
-| `autocomplete-parser`   | CLI spec parser, suggestion generation |
-| `shell-parser`          | Shell command-line tokenizer           |
-| `api-bindings`          | Generated TS Protobuf IPC bindings     |
-| `api-bindings-wrappers` | Ergonomic wrappers over `api-bindings` |
+| Package                 | Role                                                                 |
+| ----------------------- | -------------------------------------------------------------------- |
+| `autocomplete-parser`   | Used by `compile-spec-ir.mjs` to evaluate Fig specs at build time    |
+| `shell-parser`          | Shell command-line tokenizer used by the spec compiler               |
+| `api-bindings`          | Generated TS Protobuf IPC bindings                                   |
+| `api-bindings-wrappers` | Ergonomic wrappers over `api-bindings`                               |
+
+Everything under `packages/` now exists to serve `scripts/compile-spec-ir.mjs`; nothing there ships in the `.app`.
 
 ## Toolchain Versions
 
-- Rust: `1.87.0` (pinned in `rust-toolchain.toml`), edition 2024
-- Node: `^22.0.0`
-- pnpm: `10.0.0`
+- Rust: `1.88.0` (pinned in `rust-toolchain.toml`), edition 2024
+- Node: `>=22.13 <23`
+- pnpm: `11.14.0` (see root `package.json` `packageManager`)
 - Turborepo handles the TypeScript build graph
 
 ## macOS-Specific Notes
@@ -197,3 +223,6 @@ To keep the bundle small, the sync script supports excluding whole namespaces vi
 - IME symlink target: `~/Library/Input Methods/EasyCompleteInputMethod.app`
 - HIToolbox prefs (`com.apple.HIToolbox`) must include the IME bundle ID for Ghostty/Kitty cursor following to work
 - `TISCreateInputSourceList` returns NULL when called without NSApplication; always call TIS APIs via `run_on_main` or from within the IME process itself
+- Overlay Y conversion must use `NSScreen.screens[0]` (menu-bar / global-origin display). `NSScreen.mainScreen` is whichever display holds keyboard focus.
+- Accessibility: `prompt_for_accessibility()` plus `open_accessibility()` (System Settings deep link). There is no drag-to-authorize coach.
+- Process memory: `./scripts/memory-usage.sh` (`--watch`, `--peak`, `--csv`). Reports `phys_footprint`, the same number as Activity Monitor. `ecterm` appears as `<shell> (ecterm)`.

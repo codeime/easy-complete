@@ -1,14 +1,29 @@
 # Easy Complete Desktop
 
-This is the main Easy Complete desktop app written in Rust. It should be
-ready to run and start developing with if you follow the
-instructions in the [root README](../../README.md).
+Native macOS host (`easy-complete`). The autocomplete overlay and settings
+window are GPUI views. Completions run in `ec_engine` on a worker thread.
+
+Follow the [root README](../../README.md) for toolchain and install steps.
 
 ## Developing
 
-1. Run `pnpm -C packages/dashboard-app dev` from the repo root to start the
-   dashboard development server.
-1. Run `cargo run`.
-1. Once the UI opens, right click anywhere to inspect element, go to the console tab, and set `window.location.href`
-to the URL of the dashboard development server.
-   - Alternatively, you can use the `DASHBOARD_URL` environment variable instead of manually setting `window.location.href`, e,g. `DASHBOARD_URL=http://localhost:3433 cargo run`.
+```bash
+cargo run --bin easy-complete
+```
+
+Settings open from the menu bar or a `ec://` deep link. There is no dashboard
+dev server and no `DASHBOARD_URL`.
+
+Headless completions (no overlay):
+
+```bash
+cargo run --bin ec -- engine complete --buffer "git ch"
+```
+
+## Layout
+
+- `src/gpui_host.rs` — process-wide `NSApplication`, event dispatch
+- `src/overlay.rs` — completion requests, insertion, caret placement
+- `src/settings_ui.rs` — native settings window
+- `crates/ec_gpui` — list rendering, theme, AppKit frame
+- `crates/ec_engine` — IR lookup, generators, QuickJS hooks

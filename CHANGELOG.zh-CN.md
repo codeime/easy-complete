@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- 变更：补全浮层与设置窗口从 WebView 换成 GPUI——补全由 `ec_engine` 在构建期 JSON IR 上运行，QuickJS 只执行 spec hook（`postProcess`、`script`、`custom`、`generateSpec`）
+- 修复：浮层坐标换算改用 `NSScreen.screens[0]` 作为全局原点，不再用 `mainScreen`——外接屏上 `mainScreen` 是焦点所在屏，浮层会落到错误高度
+- 修复：打开 `···` 的那次请求结束时必须关掉标记，即使结果已过期；标记最多显示到 `autocomplete.scriptTimeout`（默认 6 秒），不再等引擎 30 秒监工上限。请求本身继续跑，慢生成器返回后仍会渲染
+- 修复：补全失败后允许同一条 buffer 重新请求——原本用来抑制重复 buffer 通知的去重逻辑会在失败时锁死，这一行从此再也出不来建议
+- 修复：生成器超时后从缓存的 spec 索引重建引擎，不再重新遍历 specs 目录
+- 修复：spec 的 `custom` 生成器现在能拿到 Shell 的进程名和环境变量，之前拿到的是空上下文，会悄悄改变建议结果
+- 修复：生成器同时声明 `splitOn` 和 `postProcess` 时，按 Fig 的顺序优先走 `splitOn`
+- 修复：公共前缀已经等于选中项整体插入内容时，Tab 视为完整接受，补上尾随空格与分隔符，行为与回车一致
+- 修复：整段删除一个 token 之后，以及粘贴或调用 Shell 历史之后，列表保持隐藏，下一次按键再出现
+- 变更：辅助功能权限只打开系统设置，已去掉拖拽授权浮层
+- 清理：删除 GPUI 迁移后就不再加载的 WebView 源码（`packages/autocomplete-app`、`packages/dashboard-app`），其中的打包图标清单迁到 `specs.config.json`
+- 清理：删除 WebView 桥接的 Rust 部分——`fig://`、`ecresource://`、`spec://` 协议处理器，它们背后的请求处理器，以及 `fig_desktop_api` 的大部分内容，自 GPUI 迁移后就没有 WebView 需要它们应答。两个向已不存在的窗口发事件的监听器也一并删除，同时移除 `fig_desktop` 的 14 个和 `fig_desktop_api` 的 16 个依赖。此前整个模块上的 `#![allow(dead_code)]` 把这些都遮住了
+- 文档：补充 GPUI 浮层、IR 引擎、QuickJS hook 与 `scripts/memory-usage.sh` 的说明
+
 ## v2.2.2
 
 - 修复：Shell 历史建议改为按最近使用倒序排列——历史记录本身是从旧到新读取的，去重时又保留了最早出现的那条，因此输入 `git` 时排在最前面的是很久以前用过的命令，而不是一分钟前刚执行的 `git status`。历史参数值的顺序同样调整

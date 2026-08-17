@@ -1,6 +1,7 @@
 #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]
 use std::ffi::c_void;
 
+use core_foundation::base::TCFType;
 use core_foundation::{declare_TCFType, impl_TCFType};
 use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::{CFIndex, CFTypeID, CFTypeRef};

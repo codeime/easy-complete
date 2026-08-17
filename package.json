@@ -23,8 +23,6 @@
     "licenses:generate": "node scripts/generate-third-party-notices.mjs",
     "licenses:check": "node scripts/generate-third-party-notices.mjs --check THIRD_PARTY_NOTICES.txt",
     "dev": "turbo dev",
-    "dev:autocomplete": "pnpm -C packages/autocomplete-app dev",
-    "preview:autocomplete": "pnpm -C packages/autocomplete-app preview",
     "clean": "turbo clean",
     "prepare": "husky",
     "precommit": "lint-staged --config .lintstagedrc.mjs",

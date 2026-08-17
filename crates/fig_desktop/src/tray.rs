@@ -159,9 +159,7 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
                 // entry that no longer grants anything — it returns silently. Always open the
                 // settings pane too so the user has somewhere to go in that case.
                 prompt_for_accessibility();
-                if !open_accessibility() {
-                    error!("Failed to open Accessibility settings");
-                }
+                open_accessibility();
             }
         },
         "user-manual" => {

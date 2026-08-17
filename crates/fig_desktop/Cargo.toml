@@ -41,10 +41,11 @@ anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
-camino.workspace = true
 cfg-if.workspace = true
 clap.workspace = true
 dashmap.workspace = true
+ec_engine = { path = "../ec_engine" }
+ec_gpui = { path = "../ec_gpui" }
 fig_desktop_api.workspace = true
 fig_telemetry.workspace = true
 fig_install.workspace = true
@@ -59,25 +60,16 @@ fig_util.workspace = true
 flume.workspace = true
 fnv = "1.0.7"
 futures.workspace = true
-http.workspace = true
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 image = "0.25.6"
-infer = "0.22.0"
-keyboard-types = "0.8.0"
-mime = "0.3.17"
-moka = { version = "0.12.1", features = ["future"] }
 muda = { version = "0.19.3", default-features = false }
 notify = "8.0.0"
 parking_lot = { workspace = true, features = ["serde"] }
 paste = "1.0.11"
-percent-encoding.workspace = true
-rand.workspace = true
-regex.workspace = true
-reqwest.workspace = true
 rfd = "0.17.2"
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-shellexpand.workspace = true
 sysinfo.workspace = true
 tao = { version = "0.36.0", features = ["serde"] }
 tempfile.workspace = true
@@ -87,15 +79,6 @@ tracing.workspace = true
 tray-icon = { version = "0.24.2", default-features = false }
 url.workspace = true
 uuid.workspace = true
-which.workspace = true
-whoami.workspace = true
-wry = { version = "0.48.1", default-features = false, features = [
-    # "tao",
-    "protocol",
-    "devtools",
-    "transparent",
-    "linux-body",
-] }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

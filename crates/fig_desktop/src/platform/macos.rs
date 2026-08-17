@@ -3,8 +3,6 @@
 #![allow(deprecated)]
 
 use std::ffi::CString;
-use std::path::Path;
-use std::slice;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
@@ -12,7 +10,7 @@ use accessibility_sys::{
     AXError, AXIsProcessTrusted, AXUIElementCreateSystemWide, AXUIElementSetMessagingTimeout, pid_t,
 };
 use anyhow::Context;
-use cocoa::base::{NO, YES, id};
+use cocoa::base::{YES, id};
 use core_graphics::display::CGRect;
 use core_graphics::window::CGWindowID;
 use fig_integrations::input_method::InputMethod;
@@ -24,17 +22,16 @@ use macos_utils::caret_position::{CaretPosition, get_caret_position};
 use macos_utils::window_server::{CGWindowLevelForKey, UIElement};
 use macos_utils::{NotificationCenter, WindowServer, WindowServerEvent};
 use objc::declare::MethodImplementation;
-use objc::runtime::{BOOL, Class, Object, Sel, class_addMethod, objc_getClass};
+use objc::runtime::{BOOL, Class, Object, Sel, class_addMethod};
 use objc::{Encode, EncodeArguments, Encoding, msg_send, sel, sel_impl};
 use objc2_foundation::{NSDictionary, NSOperationQueue, ns_string};
 use serde::Serialize;
 use tao::dpi::{LogicalPosition, LogicalSize, Position};
-use tao::platform::macos::{ActivationPolicy, EventLoopWindowTargetExtMacOS, WindowExtMacOS as _};
+use tao::platform::macos::ActivationPolicy;
 use tracing::{debug, error, trace, warn};
 
 use super::{PlatformBoundEvent, PlatformWindow};
 use crate::event::{Event, WindowEvent, WindowPosition};
-use crate::protocol::icons::{AssetKind, AssetSpecifier, ProcessedAsset};
 use crate::utils::Rect;
 use crate::webview::notification::WebviewNotificationsState;
 use crate::webview::{FigIdMap, GLOBAL_PROXY, WindowId};
@@ -61,6 +58,7 @@ static MACOS_VERSION: LazyLock<semver::Version> = LazyLock::new(|| {
 
 pub static ACTIVATION_POLICY: Mutex<ActivationPolicy> = Mutex::new(ActivationPolicy::Regular);
 
+#[allow(dead_code)]
 pub fn activate_app() {
     // LSUIElement/menu-bar apps can switch back from Accessory to Regular without
     // AppKit automatically bringing the process forward. Explicit activation keeps
@@ -199,18 +197,29 @@ impl PlatformWindowImpl {
 /// Quake mode by explicitly setting the window level, see
 /// <https://github.com/gnachman/iTerm2/blob/1a5a09f02c62afcc70a647603245e98862e51911/sources/iTermProfileHotKey.m#L276-L310>
 /// for more on window levels.
-fn apply_autocomplete_window_level(window_map: &FigIdMap, terminal_level: Option<i64>) {
-    let Some(window) = window_map.get(&AUTOCOMPLETE_ID) else {
-        return;
+pub fn set_activation_policy(policy: ActivationPolicy) {
+    let ns_policy: i64 = match policy {
+        ActivationPolicy::Regular => 0,
+        ActivationPolicy::Accessory => 1,
+        ActivationPolicy::Prohibited => 2,
+        _ => 1,
     };
+    unsafe {
+        let Some(application) = Class::get("NSApplication") else {
+            return;
+        };
+        let app: id = msg_send![application, sharedApplication];
+        let _: BOOL = msg_send![app, setActivationPolicy: ns_policy];
+    }
+}
 
-    let ns_window = window.window.ns_window().cast::<Object>();
+fn apply_autocomplete_window_level(_window_map: &FigIdMap, terminal_level: Option<i64>) {
     let above = match terminal_level {
         None | Some(0) => unsafe { CGWindowLevelForKey(kCGFloatingWindowLevelKey) as i64 },
         Some(level) => level,
     };
-    debug!("Setting window level to {terminal_level:?}");
-    let _: () = unsafe { msg_send![ns_window, setLevel: above] };
+    debug!("Setting overlay window level to {terminal_level:?}");
+    ec_gpui::set_overlay_window_level_for_title(AUTOCOMPLETE_WINDOW_TITLE, above);
 }
 
 impl PlatformStateImpl {
@@ -223,10 +232,6 @@ impl PlatformStateImpl {
     }
 
     //
-    fn count_args(sel: Sel) -> usize {
-        sel.name().chars().filter(|&c| c == ':').count()
-    }
-
     fn method_type_encoding(ret: &Encoding, args: &[Encoding]) -> CString {
         let mut types = ret.as_str().to_owned();
         // First two arguments are always self and the selector
@@ -236,47 +241,30 @@ impl PlatformStateImpl {
         CString::new(types).unwrap()
     }
 
-    // Add an implementation for an ObjC selector, which will override default WKWebView & WryWebView
-    // behavior
-    fn override_webview_method<F>(sel: Sel, func: F)
-    where
-        F: MethodImplementation<Callee = Object>,
-    {
-        // https://github.com/tauri-apps/wry/blob/17d324b70e4d580c43c9d4ab37bd265005356bf4/src/webview/wkwebview/mod.rs#L258
-        Self::override_objc_class_method("WryWebView", sel, func);
-    }
-
     fn override_app_delegate_method<F>(sel: Sel, func: F)
     where
         F: MethodImplementation<Callee = Object>,
     {
-        // https://github.com/tauri-apps/tao/blob/75eb0c1e7e83a766af0e083ce09c761d1974cde4/src/platform_impl/macos/app_delegate.rs#L42
-        Self::override_objc_class_method("TaoAppDelegateParent", sel, func);
-    }
-
-    fn override_objc_class_method<F>(class: &str, sel: Sel, func: F)
-    where
-        F: MethodImplementation<Callee = Object>,
-    {
-        let encs = F::Args::encodings();
-        let encs = encs.as_ref();
-        let sel_args = Self::count_args(sel);
-        assert!(
-            sel_args == encs.len(),
-            "Selector accepts {} arguments, but function accepts {}",
-            sel_args,
-            encs.len(),
-        );
-
-        let types = Self::method_type_encoding(&F::Ret::encode(), encs);
-
-        let name = CString::new(class).unwrap();
-
-        let res = unsafe {
-            let cls = objc_getClass(name.as_ptr()) as *mut Class;
-            class_addMethod(cls, sel, func.imp(), types.as_ptr())
-        };
-        trace!(%class, sel =% sel.name(), %res, "class_addMethod");
+        unsafe {
+            let app: id = {
+                let Some(application) = Class::get("NSApplication") else {
+                    warn!("NSApplication class missing");
+                    return;
+                };
+                msg_send![application, sharedApplication]
+            };
+            let delegate: id = msg_send![app, delegate];
+            if delegate.is_null() {
+                warn!("NSApplication has no delegate yet; reopen handler not installed");
+                return;
+            }
+            let cls: *mut Class = msg_send![delegate, class];
+            let encs = F::Args::encodings();
+            let encs = encs.as_ref();
+            let types = Self::method_type_encoding(&F::Ret::encode(), encs);
+            let res = class_addMethod(cls, sel, func.imp(), types.as_ptr());
+            trace!(sel =% sel.name(), %res, "class_addMethod on app delegate");
+        }
     }
 
     pub(super) fn handle(
@@ -376,64 +364,6 @@ impl PlatformStateImpl {
                 Ok(())
             },
             PlatformBoundEvent::InitializePostRun => {
-                fn to_s<'a>(nsstring_obj: *mut Object) -> Option<&'a str> {
-                    const UTF8_ENCODING: libc::c_uint = 4;
-
-                    let bytes = unsafe {
-                        let length = msg_send![nsstring_obj, lengthOfBytesUsingEncoding: UTF8_ENCODING];
-                        let utf8_str: *const u8 = msg_send![nsstring_obj, UTF8String];
-                        slice::from_raw_parts(utf8_str, length)
-                    };
-                    std::str::from_utf8(bytes).ok()
-                }
-
-                extern "C" fn should_delay_window_ordering(this: &Object, _cmd: Sel, _event: id) -> BOOL {
-                    debug!("should_delay_window_ordering");
-
-                    unsafe {
-                        let window: id = msg_send![this, window];
-                        let title: id = msg_send![window, title];
-
-                        // TODO: implement better method for determining if WebView belongs to autocomplete
-                        if let Some(title) = to_s(title) {
-                            if title == AUTOCOMPLETE_WINDOW_TITLE {
-                                return YES;
-                            }
-                        }
-                    }
-
-                    NO
-                }
-
-                extern "C" fn mouse_down(this: &Object, _cmd: Sel, event: id) {
-                    let application = Class::get("NSApplication").unwrap();
-
-                    unsafe {
-                        let window: id = msg_send![this, window];
-                        let title: id = msg_send![window, title];
-
-                        // TODO: implement better method for determining if WebView belongs to autocomplete
-                        if let Some(title) = to_s(title) {
-                            if title == AUTOCOMPLETE_WINDOW_TITLE {
-                                // Prevent clicked window from taking focus
-                                let app: id = msg_send![application, sharedApplication];
-                                let _: () = msg_send![app, preventWindowOrdering];
-                            }
-                        }
-
-                        // Invoke superclass implementation
-                        let supercls = msg_send![this, superclass];
-                        let _: () = msg_send![super(this, supercls), mouseDown: event];
-                    }
-                }
-
-                // Use objc runtime to override WryWebview methods
-                Self::override_webview_method(
-                    sel!(shouldDelayWindowOrderingForEvent:),
-                    should_delay_window_ordering as extern "C" fn(&Object, Sel, id) -> BOOL,
-                );
-                Self::override_webview_method(sel!(mouseDown:), mouse_down as extern "C" fn(&Object, Sel, id));
-
                 extern "C" fn application_should_handle_reopen(
                     _this: &Object,
                     _cmd: Sel,
@@ -541,11 +471,7 @@ impl PlatformStateImpl {
                 let policy = if fullscreen {
                     ActivationPolicy::Accessory
                 } else {
-                    let dashboard_visible = dashboard_visible.unwrap_or_else(|| {
-                        window_map
-                            .get(&DASHBOARD_ID)
-                            .is_some_and(|window| window.window.is_visible())
-                    });
+                    let dashboard_visible = dashboard_visible.unwrap_or_else(crate::settings_ui::is_open);
 
                     if dashboard_visible {
                         ActivationPolicy::Regular
@@ -753,14 +679,8 @@ impl PlatformStateImpl {
     }
 
     #[allow(clippy::unused_self)]
-    pub(super) fn position_window(
-        &self,
-        webview_window: &tao::window::Window,
-        _window_id: &WindowId,
-        position: Position,
-    ) -> wry::Result<()> {
-        webview_window.set_outer_position(position);
-        std::result::Result::Ok(())
+    pub(super) fn position_window(&self, _window_id: &WindowId, _position: Position) -> anyhow::Result<()> {
+        Ok(())
     }
 
     #[allow(clippy::unused_self)]
@@ -784,32 +704,6 @@ impl PlatformStateImpl {
             rect: active_window.get_bounds()?.into(),
             inner: active_window,
         })
-    }
-
-    pub(super) async fn icon_lookup(asset: &AssetSpecifier<'_>) -> Option<ProcessedAsset> {
-        let data = match asset {
-            AssetSpecifier::Named(name) => unsafe { macos_utils::image::png_for_name(name)? },
-            AssetSpecifier::PathBased(path) => (unsafe { macos_utils::image::png_for_path(path) })
-                .or_else(|| {
-                    if path.to_str()?.ends_with('/') {
-                        // /bin will always exist and looks like the default folder
-                        // TODO: replace with `iconForContentType`
-                        unsafe { macos_utils::image::png_for_path(Path::new("/bin")) }
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| {
-                    if let Some(ext) = path.extension() {
-                        unsafe { macos_utils::image::png_for_name(ext.to_str()?) }
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| unsafe { macos_utils::image::png_for_name("file") })?,
-        };
-
-        Some((Arc::new(data.into()), AssetKind::Png))
     }
 
     pub(super) fn accessibility_is_enabled() -> Option<bool> {

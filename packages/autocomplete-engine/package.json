@@ -1,0 +1,25 @@
+{
+  "name": "@easy-complete/autocomplete-engine",
+  "private": true,
+  "license": "MIT",
+  "version": "2.2.2",
+  "type": "module",
+  "exports": "./dist/index.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest",
+    "lint": "eslint src && prettier --check src",
+    "lint:fix": "eslint src --fix && prettier --write src",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@easy-complete/eslint-config": "workspace:^",
+    "@easy-complete/tsconfig": "workspace:^",
+    "esbuild": "^0.25.0",
+    "eslint": "^10.8.1",
+    "prettier": "^3.9.6",
+    "typescript": "5.8.3",
+    "vitest": "^4.1.10"
+  }
+}

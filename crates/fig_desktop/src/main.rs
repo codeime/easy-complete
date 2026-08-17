@@ -1,15 +1,18 @@
 mod cli;
 mod event;
+mod event_loop;
+mod gpui_host;
+mod overlay;
+mod permissions;
+mod settings_ui;
 // mod figterm;
 mod auth_watcher;
 mod file_watcher;
 mod install;
 mod local_ipc;
-pub mod notification_bus;
+mod notification_bus;
 mod platform;
-pub mod protocol;
 mod remote_ipc;
-mod request;
 mod tray;
 mod update;
 mod utils;
@@ -17,7 +20,7 @@ mod webview;
 
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use clap::Parser;
 use event::Event;
@@ -26,30 +29,21 @@ use fig_os_shim::Context;
 use fig_util::consts::{APP_PROCESS_NAME, PRODUCT_NAME};
 use fig_util::{URL_SCHEMA, directories};
 use sysinfo::{ProcessRefreshKind, RefreshKind, System, get_current_pid};
-use tao::event_loop::{
-    EventLoop as WryEventLoop, EventLoopProxy as WryEventLoopProxy, EventLoopWindowTarget as WryEventLoopWindowTarget,
-};
 use tracing::{error, warn};
 use url::Url;
-use webview::notification::WebviewNotificationsState;
+use webview::WebviewManager;
 pub use webview::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID};
-use webview::{DashboardOptions, WebviewManager, build_dashboard, dashboard};
 
 // #[global_allocator]
 // static GLOBAL: Jemalloc = Jemalloc;
 
-#[derive(Debug, Default)]
-pub struct InterceptState {
-    pub intercept_bound_keystrokes: RwLock<bool>,
-    pub intercept_global_keystrokes: RwLock<bool>,
-}
-
-pub type EventLoop = WryEventLoop<Event>;
-pub type EventLoopProxy = WryEventLoopProxy<Event>;
-pub type EventLoopWindowTarget = WryEventLoopWindowTarget<Event>;
+pub use event_loop::{EventLoopClosed, EventLoopProxy, EventLoopWindowTarget};
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    #[cfg(target_os = "macos")]
+    gpui_host::ensure_gpui_ns_application();
+
     let cli = cli::Cli::parse();
 
     #[cfg(target_os = "macos")]
@@ -76,8 +70,8 @@ async fn main() -> ExitCode {
     .expect("Failed to init logging");
 
     // macOS Tahoe's autofill heuristic controller attaches an "AutoFill (…)" helper to
-    // any app with text input (including our WKWebViews). SMS / contact autofill is not
-    // useful here, and the helper is pure overhead — same rationale as Ghostty.
+    // any app with text input. SMS / contact autofill is not useful here, and the helper
+    // is pure overhead — same rationale as Ghostty.
     #[cfg(target_os = "macos")]
     {
         use objc2_foundation::{NSUserDefaults, ns_string};
@@ -198,9 +192,6 @@ async fn main() -> ExitCode {
         platform::gtk::init().expect("Failed initializing GTK");
     }
 
-    // fig_auth removed - treat as always logged in
-    let is_logged_in = true;
-
     // A deep link names the page to open, so it outranks the setting.
     let silent_launch = page.is_none() && fig_settings::settings::get_bool_or("app.silentLaunch", false);
 
@@ -213,7 +204,7 @@ async fn main() -> ExitCode {
     let defer_dashboard_for_modern_login_item = false;
     let visible = !cli.no_dashboard && !silent_launch && !defer_dashboard_for_modern_login_item;
 
-    let mut webview_manager = WebviewManager::new(ctx, visible, defer_dashboard_for_modern_login_item);
+    let webview_manager = WebviewManager::new(ctx, visible, defer_dashboard_for_modern_login_item);
     let auto_updates_enabled = !fig_settings::settings::get_bool_or("app.disableAutoupdates", false);
     if auto_updates_enabled {
         // start_automatic_checks dispatches to the main thread asynchronously,
@@ -225,21 +216,6 @@ async fn main() -> ExitCode {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let _ = update::check_for_update(false, false).await;
         });
-    }
-    if visible {
-        webview_manager
-            .build_webview(
-                DASHBOARD_ID,
-                build_dashboard,
-                DashboardOptions {
-                    show_onboarding: !is_logged_in,
-                    visible,
-                    page,
-                },
-                true,
-                dashboard::url,
-            )
-            .unwrap();
     }
     webview_manager.run().await.unwrap();
     ExitCode::SUCCESS

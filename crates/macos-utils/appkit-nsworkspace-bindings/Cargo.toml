@@ -11,3 +11,10 @@ bindgen = "0.71.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc.workspace = true
+
+[lints.rust]
+unnecessary_transmutes = "allow"
+
+[lints.clippy]
+all = "allow"
+useless_transmute = "allow"

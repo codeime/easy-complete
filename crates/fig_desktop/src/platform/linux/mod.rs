@@ -1,5 +1,4 @@
 pub mod ibus;
-pub mod icons;
 pub mod integrations;
 mod sway;
 mod x11;
@@ -19,7 +18,6 @@ use tracing::{error, info, trace, warn};
 use self::x11::X11State;
 use super::PlatformBoundEvent;
 use crate::platform::linux::sway::SwayState;
-use crate::protocol::icons::{AssetSpecifier, ProcessedAsset};
 use crate::utils::Rect;
 use crate::webview::notification::WebviewNotificationsState;
 use crate::webview::{FigIdMap, WindowId};
@@ -157,10 +155,6 @@ impl PlatformStateImpl {
                         Err(err) => error!(%err, "Unable to detect display server"),
                     }
 
-                    if let Err(err) = icons::init() {
-                        error!(%err, "Unable to initialize icons");
-                    }
-
                     if let Err(err) =
                         ibus::launch_ibus_connection(platform_state.proxy.clone(), platform_state.clone()).await
                     {
@@ -202,17 +196,11 @@ impl PlatformStateImpl {
         Ok(())
     }
 
-    pub(super) fn position_window(
-        &self,
-        webview_window: &tao::window::Window,
-        _window_id: &WindowId,
-        position: Position,
-    ) -> wry::Result<()> {
+    pub(super) fn position_window(&self, _window_id: &WindowId, position: Position) -> anyhow::Result<()> {
         match &*self.display_server_state.lock() {
             Some(DisplayServerState::Sway(sway)) => {
                 let (x, y) = match position {
                     Position::Physical(PhysicalPosition { x, y }) => (x, y),
-                    // TODO(grant): prob do something with logical position here
                     Position::Logical(LogicalPosition { x, y }) => (x as i32, y as i32),
                 };
 
@@ -223,9 +211,7 @@ impl PlatformStateImpl {
                     tracing::warn!(%err, "Failed to send sway command");
                 }
             },
-            _ => {
-                webview_window.set_outer_position(position);
-            },
+            _ => {},
         };
         Ok(())
     }
@@ -248,35 +234,6 @@ impl PlatformStateImpl {
                 inner: PlatformWindowImpl,
             }),
             _ => None,
-        }
-    }
-
-    pub(super) async fn icon_lookup(asset: &AssetSpecifier<'_>) -> Option<ProcessedAsset> {
-        match asset {
-            AssetSpecifier::Named(name) => icons::lookup(name).await,
-            AssetSpecifier::PathBased(path) => {
-                if let Ok(metadata) = path.metadata() {
-                    let name = if metadata.is_dir() {
-                        Some("folder")
-                    } else if metadata.is_file() {
-                        Some("text-x-generic-template")
-                    } else {
-                        None
-                    };
-                    if let Some(name) = name {
-                        icons::lookup(name).await
-                    } else {
-                        None
-                    }
-                } else {
-                    icons::lookup(if path.to_str().map(|x| x.ends_with('/')).unwrap_or_default() {
-                        "folder"
-                    } else {
-                        "text-x-generic-template"
-                    })
-                    .await
-                }
-            },
         }
     }
 

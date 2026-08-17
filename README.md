@@ -197,7 +197,7 @@ sockets (Protobuf messages):
 
 | Binary          | Crate         | Role                                                                                                                             |
 | --------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `easy-complete` | `fig_desktop` | Native app host — owns the autocomplete overlay and dashboard (React apps in `wry` WebViews), system tray, and window management |
+| `easy-complete` | `fig_desktop` | Native app host — GPUI overlay and settings, completion engine worker, system tray, and window management |
 | `ecterm`        | `figterm`     | Pseudoterminal between your shell and terminal emulator; intercepts the shell edit buffer to drive completions                   |
 | `ec`            | `ec_cli`      | CLI entry point — `setup`, `integrations`, `diagnostic`, `settings`, and more                                                    |
 
@@ -217,8 +217,8 @@ cursor position — back to `ecterm` on every prompt and keystroke. On macOS, th
 
 ### Toolchain
 
-- Rust `1.87.0` (pinned in `rust-toolchain.toml`), edition 2024
-- Node `>=22.13 <23`, pnpm `11.13`
+- Rust `1.88.0` (pinned in `rust-toolchain.toml`), edition 2024
+- Node `>=22.13 <23`, pnpm `11.14`
 - Turborepo for the TypeScript build graph
 
 ### Rust
@@ -240,19 +240,21 @@ cargo test -p <crate_name>                                        # test a crate
 
 ```bash
 pnpm turbo build --filter="./packages/*"   # build all packages
-pnpm dev:autocomplete                       # watch the autocomplete UI (port 3124)
+node scripts/compile-spec-ir.mjs            # Fig specs → JSON IR + JS hooks
 pnpm lint                                   # lint
 pnpm test                                   # run Vitest
 ```
 
-In dev, Vite serves the WebView UIs on localhost and `fig_desktop` connects to those
-instead of the bundled `Contents/Resources/`.
+Headless completion (no overlay): `cargo run --bin ec -- engine complete --buffer "git ch"`.
+Process memory: `./scripts/memory-usage.sh` (`--watch 5`, `--peak`, `--csv mem.csv`).
 
 ### Key crates
 
 | Crate                   | Role                                                             |
 | ----------------------- | ---------------------------------------------------------------- |
-| `fig_desktop`           | Native app host: windowing (`tao`), WebView (`wry`), system tray |
+| `fig_desktop`           | Native app host: GPUI overlay + settings, tray, engine client    |
+| `ec_gpui`               | Overlay list, theme, macOS window placement                      |
+| `ec_engine`             | Headless completion: IR lookup, generators, QuickJS hooks        |
 | `figterm`               | PTY interceptor, shell edit-buffer tracking                      |
 | `ec_cli`                | CLI crate, providing the `ec` binary and all its subcommands     |
 | `fig_input_method`      | macOS input method helper (cursor tracking)                      |
@@ -261,13 +263,11 @@ instead of the bundled `Contents/Resources/`.
 
 ### Key TypeScript packages
 
-| Package               | Role                                   |
-| --------------------- | -------------------------------------- |
-| `autocomplete-app`    | Autocomplete overlay React UI          |
-| `dashboard-app`       | Settings / onboarding React UI         |
-| `autocomplete-parser` | CLI spec parser, suggestion generation |
-| `shell-parser`        | Shell command-line tokenizer           |
-| `api-bindings`        | Generated TS Protobuf IPC bindings     |
+| Package               | Role                                                              |
+| --------------------- | ----------------------------------------------------------------- |
+| `autocomplete-parser` | Evaluates Fig specs at build time for `compile-spec-ir.mjs`       |
+| `shell-parser`        | Shell command-line tokenizer                                      |
+| `api-bindings`        | Generated TS Protobuf IPC bindings                                |
 
 ---
 

@@ -1,0 +1,19 @@
+[package]
+name = "ec_overlay_spike"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+publish.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ec-overlay-spike"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+ec_gpui = { path = "../ec_gpui" }
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }

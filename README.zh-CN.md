@@ -185,7 +185,7 @@ Easy Complete 由三个相互协作的原生进程组成，通过 Unix 域套接
 
 | 二进制          | Crate         | 职责                                                                                           |
 | --------------- | ------------- | ---------------------------------------------------------------------------------------------- |
-| `easy-complete` | `fig_desktop` | 原生应用宿主——承载补全浮层与设置面板（运行于 `wry` WebView 的 React 应用）、系统托盘、窗口管理 |
+| `easy-complete` | `fig_desktop` | 原生应用宿主——GPUI 补全浮层与设置窗口、补全引擎工作线程、系统托盘、窗口管理 |
 | `ecterm`        | `figterm`     | 介于 shell 与终端模拟器之间的伪终端；拦截 shell 编辑缓冲区以驱动补全                           |
 | `ec`            | `ec_cli`      | CLI 入口——`setup`、`integrations`、`diagnostic`、`settings` 等                                 |
 
@@ -205,8 +205,8 @@ Shell 钩子（`.zshrc`、`.bashrc`、fish 配置）在每次提示符和按键�
 
 ### 工具链
 
-- Rust `1.87.0`（在 `rust-toolchain.toml` 中固定），edition 2024
-- Node `>=22.13 <23`，pnpm `11.13`
+- Rust `1.88.0`（在 `rust-toolchain.toml` 中固定），edition 2024
+- Node `>=22.13 <23`，pnpm `11.14`
 - TypeScript 构建图由 Turborepo 管理
 
 ### Rust
@@ -228,19 +228,21 @@ cargo test -p <crate_name>                                        # 测试某个
 
 ```bash
 pnpm turbo build --filter="./packages/*"   # 构建所有包
-pnpm dev:autocomplete                       # 监听补全 UI（端口 3124）
+node scripts/compile-spec-ir.mjs            # Fig spec → JSON IR + JS hook
 pnpm lint                                   # lint
 pnpm test                                   # 运行 Vitest
 ```
 
-开发模式下，Vite 在 localhost 提供 WebView UI，`fig_desktop` 会连接到它，而不是包内
-`Contents/Resources/` 下的产物。
+无界面补全：`cargo run --bin ec -- engine complete --buffer "git ch"`。
+进程内存：`./scripts/memory-usage.sh`（`--watch 5`、`--peak`、`--csv mem.csv`）。
 
 ### 核心 crate
 
 | Crate                   | 职责                                                    |
 | ----------------------- | ------------------------------------------------------- |
-| `fig_desktop`           | 原生应用宿主：窗口（`tao`）、WebView（`wry`）、系统托盘 |
+| `fig_desktop`           | 原生应用宿主：GPUI 浮层与设置、托盘、引擎客户端         |
+| `ec_gpui`               | 补全列表、主题、macOS 窗口定位                          |
+| `ec_engine`             | 无界面补全：IR 查找、生成器、QuickJS hook               |
 | `figterm`               | PTY 拦截、shell 编辑缓冲区追踪                          |
 | `ec_cli`                | CLI crate，提供 `ec` 二进制及其所有子命令               |
 | `fig_input_method`      | macOS 输入法辅助应用（光标追踪）                        |
@@ -249,13 +251,11 @@ pnpm test                                   # 运行 Vitest
 
 ### 核心 TypeScript 包
 
-| 包                    | 职责                        |
-| --------------------- | --------------------------- |
-| `autocomplete-app`    | 补全浮层 React UI           |
-| `dashboard-app`       | 设置 / 引导 React UI        |
-| `autocomplete-parser` | CLI spec 解析、建议生成     |
-| `shell-parser`        | shell 命令行分词器          |
-| `api-bindings`        | 生成的 TS Protobuf IPC 绑定 |
+| 包                    | 职责                                          |
+| --------------------- | --------------------------------------------- |
+| `autocomplete-parser` | 构建时由 `compile-spec-ir.mjs` 用来执行 Fig spec |
+| `shell-parser`        | shell 命令行分词器                            |
+| `api-bindings`        | 生成的 TS Protobuf IPC 绑定                   |
 
 ---
 

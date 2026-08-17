@@ -20,11 +20,8 @@ echo "Bumping version to $VERSION"
 # Cargo workspace (all crates inherit this)
 sed -i '' "s/^version = \".*\"$/version = \"$VERSION\"/" "$REPO_DIR/Cargo.toml"
 
-# App-facing TS packages (version shown in Dashboard About section)
-for pkg in dashboard-app autocomplete-app; do
-  PKG_JSON="$REPO_DIR/packages/$pkg/package.json"
-  sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$PKG_JSON"
-done
+# The About section reads the version from the Cargo workspace now that the
+# settings window is native, so no TypeScript package carries it.
 
 # App version published in the website's SoftwareApplication structured data.
 sed -i '' \

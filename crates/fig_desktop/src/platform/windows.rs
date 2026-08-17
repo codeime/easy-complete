@@ -27,7 +27,6 @@ use windows::core::implement;
 
 use crate::event::{Event, RelativeDirection, WindowEvent};
 use crate::platform::{PlatformBoundEvent, PlatformWindow};
-use crate::protocol::icons::{AssetSpecifier, ProcessedAsset};
 use crate::utils::Rect;
 use crate::webview::{FigWindowMap, WindowId};
 use crate::{AUTOCOMPLETE_ID, EventLoopProxy, EventLoopWindowTarget};
@@ -194,13 +193,7 @@ impl PlatformStateImpl {
         }
     }
 
-    pub fn position_window(
-        &self,
-        webview_window: &tao::window::Window,
-        _window_id: &WindowId,
-        position: Position,
-    ) -> wry::Result<()> {
-        webview_window.set_outer_position(position);
+    pub fn position_window(&self, _window_id: &WindowId, _position: Position) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -210,10 +203,6 @@ impl PlatformStateImpl {
     }
 
     pub fn get_active_window(&self) -> Option<PlatformWindow> {
-        None
-    }
-
-    pub fn icon_lookup(_asset: &AssetSpecifier) -> Option<ProcessedAsset> {
         None
     }
 

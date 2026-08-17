@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- change: replace the autocomplete WebView and dashboard WebView with GPUI — the overlay and settings window are native views; completions run in `ec_engine` from build-time JSON IR, with QuickJS only for spec hooks (`postProcess`, `script`, `custom`, `generateSpec`)
+- fix: place the overlay using `NSScreen.screens[0]` as the global-coordinate origin, not `mainScreen` — on an external display `mainScreen` is the focused screen and the popup landed at the wrong height
+- fix: clear the `···` loading marker when the request that turned it on finishes, even if that result is stale, and retire it after `autocomplete.scriptTimeout` (default 6s) instead of the 30s engine watchdog — the request keeps running, so a slow generator still gets rendered when it answers
+- fix: retry the same edit buffer after a failed completion — the guard that stops repeated buffer notifications from restarting an in-flight request used to latch on a failure, leaving the line permanently without suggestions
+- fix: after a timed-out generator, rebuild the engine from the cached spec index instead of walking the specs directory again
+- fix: pass the shell's process name and environment variables to spec `custom` generators, which received an empty context and silently changed their suggestions
+- fix: honour a generator's `splitOn` ahead of its `postProcess` hook, matching Fig's own order for specs that declare both
+- fix: treat Tab as a full acceptance when the shared prefix already spells out the selected row, so the trailing space and separator are inserted as they are on Enter
+- fix: keep the list down after backspacing a whole token away, and after a paste or a shell history recall — the next keystroke brings it back
+- change: Accessibility permission opens System Settings only — the drag-to-authorize coach was removed
+- chore: delete the leftover WebView sources (`packages/autocomplete-app`, `packages/dashboard-app`), which had not been loaded since the GPUI migration; the bundled icon list they carried now lives in `specs.config.json`
+- chore: delete the Rust side of the WebView bridge — the `fig://`, `ecresource://` and `spec://` protocol handlers, the request handlers behind them, and most of `fig_desktop_api`, none of which had a WebView to answer since the GPUI migration. Two watchers that fired into a window that no longer exists went with them, as did 14 dependencies of `fig_desktop` and 16 of `fig_desktop_api`. A crate-wide `#![allow(dead_code)]` had been hiding all of it
+- docs: document the GPUI overlay, IR engine, QuickJS hooks, and `scripts/memory-usage.sh`
+
 ## v2.2.2
 
 - fix: order shell history suggestions most-recent-first — history is read oldest-first and deduplication kept the earliest occurrence, so typing `git` put a long-forgotten command at the top of the list instead of the `git status` run a minute earlier. History argument values now follow the same order

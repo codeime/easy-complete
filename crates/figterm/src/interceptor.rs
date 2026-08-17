@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use anyhow::Result;
 use dashmap::DashMap;
 use fig_proto::figterm::Action;
@@ -13,8 +11,28 @@ const GLOBAL_ACTIONS: &[&str] = &["toggleAutocomplete", "showAutocomplete"];
 
 const IGNORE_ACTION: &str = "ignore";
 
-static ONLY_SHOW_ON_TAB: LazyLock<bool> =
-    LazyLock::new(|| fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false));
+/// Read this setting at the point where a global Tab is intercepted.
+///
+/// `figterm` is a long-lived process and normally loads the settings file once
+/// at startup.  `onlyShowOnTab` is editable from the dashboard while a shell is
+/// still running, though, so caching it in a `LazyLock` makes the old setting
+/// stick until the terminal is restarted.  Refresh the settings snapshot
+/// before reading it; this branch only runs for a Tab while the overlay is
+/// hidden and has kept rows, so it is not on the ordinary typing path.
+fn only_show_on_tab_enabled() -> bool {
+    let _ = fig_settings::settings::init_global();
+    fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false)
+}
+
+/// Return the private action used for the one-item Tab shortcut.
+///
+/// This must stay distinct from `showAutocomplete`: the latter is also a user
+/// keybinding/action and showing the list must never accept a row as a side
+/// effect.  The overlay can therefore preserve the legacy special case only
+/// for this action.
+fn tab_only_action(key_event: &KeyEvent, only_show_on_tab: bool) -> Option<&'static str> {
+    (only_show_on_tab && key_event.key == KeyCode::Tab).then_some("showAutocompleteFromTab")
+}
 
 pub fn key_from_text(text: impl AsRef<str>) -> Option<KeyEvent> {
     let text = text.as_ref();
@@ -190,17 +208,14 @@ impl KeyInterceptor {
 
         match (self.intercept_global, self.intercept) {
             (true, false) => {
-                // TODO: only show on tab should be encoded in AE
-                if key_event.key == KeyCode::Tab && *ONLY_SHOW_ON_TAB {
-                    Some("showAutocomplete".into())
-                } else {
-                    match self.mappings.get(key_event) {
-                        Some(action) if action.value() == IGNORE_ACTION => None,
-                        Some(action) if GLOBAL_ACTIONS.contains(&action.value().as_str()) => {
-                            Some(action.value().clone())
-                        },
-                        _ => None,
-                    }
+                if let Some(action) = tab_only_action(key_event, only_show_on_tab_enabled()) {
+                    return Some(action.into());
+                }
+
+                match self.mappings.get(key_event) {
+                    Some(action) if action.value() == IGNORE_ACTION => None,
+                    Some(action) if GLOBAL_ACTIONS.contains(&action.value().as_str()) => Some(action.value().clone()),
+                    _ => None,
                 }
             },
             (_, true) => {
@@ -269,5 +284,21 @@ mod tests {
             }),
             Some("navigateDown".into())
         );
+    }
+
+    #[test]
+    fn only_show_on_tab_is_limited_to_a_hidden_tab() {
+        let tab = KeyEvent {
+            key: KeyCode::Tab,
+            modifiers: Modifiers::NONE,
+        };
+        let enter = KeyEvent {
+            key: KeyCode::Enter,
+            modifiers: Modifiers::NONE,
+        };
+
+        assert_eq!(tab_only_action(&tab, true), Some("showAutocompleteFromTab"));
+        assert_eq!(tab_only_action(&enter, true), None);
+        assert_eq!(tab_only_action(&tab, false), None);
     }
 }

@@ -1,94 +1,11 @@
-use std::borrow::Cow;
-use std::future::Future;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use fig_os_shim::Context;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tao::dpi::{Position, Size};
 use tao::window::Icon;
-use tracing::{Instrument, debug, debug_span, error};
-use wry::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE};
-use wry::http::status::StatusCode;
-use wry::http::{HeaderValue, Request as HttpRequest, Response as HttpResponse};
-use wry::{RequestAsyncResponder, WebViewId};
-
-use crate::webview::WindowId;
-use crate::webview::window_id::WindowIdProvider;
 
 /// Determines if the build is ran in debug mode
 #[allow(dead_code)]
 pub fn is_cargo_debug_build() -> bool {
     cfg!(debug_assertions) && !fig_settings::state::get_bool_or("developer.override-cargo-debug", false)
-}
-
-pub fn wrap_custom_protocol<F, Fut, W>(
-    ctx: Arc<Context>,
-    proto_name: &'static str,
-    window_id: W,
-    f: F,
-) -> impl Fn(WebViewId<'_>, HttpRequest<Vec<u8>>, RequestAsyncResponder) + 'static
-where
-    F: Fn(Arc<Context>, HttpRequest<Vec<u8>>, WindowId) -> Fut + Send + Copy + 'static,
-    Fut: Future<Output = anyhow::Result<HttpResponse<Cow<'static, [u8]>>>> + Send + 'static,
-    W: WindowIdProvider + Copy + Send + Sync + 'static,
-{
-    move |_web_view_id: WebViewId<'_>, req: HttpRequest<Vec<u8>>, responder: RequestAsyncResponder| {
-        let proto = proto_name;
-
-        static ID_CTR: AtomicU64 = AtomicU64::new(0);
-        let id = ID_CTR.fetch_add(1, Ordering::Relaxed);
-
-        let span = debug_span!("custom-proto", %proto, %id);
-        let _enter = span.enter();
-
-        let ctx_clone = Arc::clone(&ctx);
-        tokio::spawn(
-            async move {
-                debug!(uri =% req.uri(), "{proto_name} proto request");
-
-                let accept_json = req
-                    .headers()
-                    .get("Accept")
-                    .and_then(|accept| accept.to_str().ok())
-                    .is_some_and(|accept| accept.split('/').next_back() == Some("json"));
-
-                let mut response = match f(ctx_clone, req, window_id.window_id()).in_current_span().await {
-                    Ok(res) => res,
-                    Err(err) => {
-                        error!(%err, "Custom protocol failed");
-
-                        let response = HttpResponse::builder().status(StatusCode::INTERNAL_SERVER_ERROR);
-                        if accept_json {
-                            response.header(CONTENT_TYPE, "application/json").body(
-                                serde_json::to_vec(&json!({ "error": err.to_string() }))
-                                    .map_or_else(|_| b"{}".as_ref().into(), Into::into),
-                            )
-                        } else {
-                            response
-                                .header(CONTENT_TYPE, "text/plain")
-                                .body(err.to_string().into_bytes().into())
-                        }
-                        .unwrap()
-                    },
-                };
-
-                response
-                    .headers_mut()
-                    .insert("X-Request-Id", HeaderValue::from_str(&id.to_string()).unwrap());
-
-                response
-                    .headers_mut()
-                    .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-
-                debug!(status = %response.status(), "Custom proto response");
-
-                responder.respond(response);
-            }
-            .in_current_span(),
-        );
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -101,6 +18,7 @@ pub fn icon() -> Icon {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 pub fn icon() -> Icon {
     load_from_memory()
 }
@@ -113,6 +31,7 @@ fn load_icon(path: impl AsRef<std::path::Path>) -> Option<Icon> {
     Icon::from_rgba(rgba, width, height).ok()
 }
 
+#[allow(dead_code)]
 fn load_from_memory() -> Icon {
     let (icon_rgba, icon_width, icon_height) = {
         // TODO: Use different per platform icons

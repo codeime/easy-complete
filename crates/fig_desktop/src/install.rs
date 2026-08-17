@@ -66,15 +66,13 @@ fn run_input_method_migration() {
 #[cfg(target_os = "macos")]
 fn prompt_for_accessibility_permission() {
     use macos_utils::accessibility::{accessibility_is_enabled, open_accessibility, prompt_for_accessibility};
-    use tracing::warn;
 
     if accessibility_is_enabled() {
         return;
     }
 
-    if !prompt_for_accessibility() && !open_accessibility() {
-        warn!("Failed to open Accessibility permission prompt");
-    }
+    prompt_for_accessibility();
+    open_accessibility();
 }
 
 /// Tracks whether macOS has ever actually granted us Accessibility, so a grant that silently stops

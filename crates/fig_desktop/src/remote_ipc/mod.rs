@@ -6,9 +6,8 @@ use base64::prelude::*;
 use bytes::BytesMut;
 use fig_proto::fig::server_originated_message::Submessage as ServerOriginatedSubMessage;
 use fig_proto::fig::{
-    EditBufferChangedNotification, HistoryUpdatedNotification, KeybindingPressedNotification,
-    LocationChangedNotification, Notification, NotificationType, Process, ProcessChangedNotification,
-    ServerOriginatedMessage, ShellPromptReturnedNotification,
+    EditBufferChangedNotification, HistoryUpdatedNotification, LocationChangedNotification, Notification,
+    NotificationType, Process, ProcessChangedNotification, ServerOriginatedMessage, ShellPromptReturnedNotification,
 };
 use fig_proto::local::{EditBufferHook, InterceptedKeyHook, PostExecHook, PreExecHook, PromptHook};
 use fig_proto::prost::Message;
@@ -33,11 +32,7 @@ pub struct RemoteHook {
 impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
     type Error = anyhow::Error;
 
-    async fn sessions_changed(&mut self, _figterm_state: &Arc<FigtermState>) {
-        self.proxy
-            .send_event(Event::AutocompleteLifecycleChanged { keep_ready: None })
-            .ok();
-    }
+    async fn sessions_changed(&mut self, _figterm_state: &Arc<FigtermState>) {}
 
     async fn edit_buffer(
         &mut self,
@@ -120,14 +115,15 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
                 .send_event(Event::PlatformBoundEvent(PlatformBoundEvent::EditBufferChanged))?;
         }
 
-        self.proxy.send_event(Event::WindowEvent {
-            window_id: AUTOCOMPLETE_ID,
-            // If editbuffer is empty, hide the autocomplete window to avoid flickering
-            window_event: if empty_edit_buffer {
-                WindowEvent::Hide
-            } else {
-                WindowEvent::Show
-            },
+        self.proxy.send_event(Event::GpuiOverlayBuffer {
+            buffer: hook.text.clone(),
+            cwd: hook
+                .context
+                .as_ref()
+                .and_then(|ctx| ctx.current_working_directory.clone())
+                .unwrap_or_default(),
+            cursor: hook.cursor.max(0) as u32,
+            session_id,
         })?;
 
         Ok(None)
@@ -276,26 +272,15 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
 
     async fn intercepted_key(
         &mut self,
-        InterceptedKeyHook { action, context, .. }: InterceptedKeyHook,
+        InterceptedKeyHook { action, context: _, .. }: InterceptedKeyHook,
         _session_id: Uuid,
     ) -> Result<Option<clientbound::response::Response>> {
         debug!(%action, "Intercepted Key Action");
 
-        self.notifications_state
-            .broadcast_notification_all(
-                &NotificationType::NotifyOnKeybindingPressed,
-                Notification {
-                    r#type: Some(fig_proto::fig::notification::Type::KeybindingPressedNotification(
-                        KeybindingPressedNotification {
-                            keypress: None,
-                            action: Some(action),
-                            context,
-                        },
-                    )),
-                },
-                &self.proxy,
-            )
-            .await?;
+        self.proxy.send_event(Event::AutocompleteAction {
+            action,
+            session_id: _session_id,
+        })?;
 
         Ok(None)
     }

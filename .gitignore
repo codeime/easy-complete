@@ -52,8 +52,9 @@ run-build.sh
 # Amazon Q CLI files
 .amazonq/
 *.app/
-packages/dashboard-app/dist/
 dist/
+crates/ec_engine/js/engine.bundled.js
+bundle/specs-ir/
 .codex-audit
 .claude/settings.local.json
 .secrets/

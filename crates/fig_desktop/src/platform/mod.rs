@@ -5,7 +5,6 @@ use macos_utils::window_server::ApplicationSpecifier;
 use serde::Serialize;
 use tao::dpi::Position;
 
-use crate::protocol::icons::{AssetSpecifier, ProcessedAsset};
 use crate::utils::Rect;
 use crate::webview::notification::WebviewNotificationsState;
 use crate::webview::{FigIdMap, WindowId};
@@ -58,13 +57,9 @@ impl PlatformState {
     }
 
     /// Position the window at the given coordinates
-    pub fn position_window(
-        &self,
-        webview_window: &tao::window::Window,
-        window_id: &WindowId,
-        position: Position,
-    ) -> wry::Result<()> {
-        self.0.position_window(webview_window, window_id, position)
+    #[allow(dead_code)]
+    pub fn position_window(&self, _window_id: &WindowId, position: Position) -> anyhow::Result<()> {
+        self.0.position_window(_window_id, position)
     }
 
     /// Gets the current cursor position on the screen
@@ -76,11 +71,6 @@ impl PlatformState {
     /// Gets the currently active window on the platform
     pub fn get_active_window(&self) -> Option<PlatformWindow> {
         self.0.get_active_window()
-    }
-
-    /// Looks up icons by name on the platform
-    pub async fn icon_lookup(name: &AssetSpecifier<'_>) -> Option<ProcessedAsset> {
-        PlatformStateImpl::icon_lookup(name).await
     }
 
     /// Whether or not accessibility is enabled

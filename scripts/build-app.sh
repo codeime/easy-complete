@@ -62,15 +62,9 @@ POSTHOG_ENDPOINT="${POSTHOG_ENDPOINT:-}" \
 POSTHOG_API_KEY="${POSTHOG_API_KEY:-}" \
 cargo build --profile "$CARGO_PROFILE" -p fig_desktop -p figterm -p ec_cli -p fig_input_method
 
-info "Building TypeScript frontend..."
-pnpm turbo build --filter="./packages/*"
-
-# ── 2. Assemble .app bundle ───────────────────────────────────────────────────
 info "Assembling '${APP_DISPLAY}.app'..."
 rm -rf "$STAGING_BUNDLE"
 mkdir -p "$MACOS_DIR"
-mkdir -p "${RESOURCES_DIR}/autocomplete"
-mkdir -p "${RESOURCES_DIR}/dashboard"
 mkdir -p "${RESOURCES_DIR}/themes"
 
 if [ ! -f "${REPO_DIR}/bundle/specs/index.json" ]; then
@@ -78,11 +72,26 @@ if [ ! -f "${REPO_DIR}/bundle/specs/index.json" ]; then
   node "${REPO_DIR}/scripts/sync-bundled-specs.mjs"
 fi
 
+info "Compiling spec IR and JS hooks..."
+node "${REPO_DIR}/scripts/compile-spec-ir.mjs"
+if [ ! -f "${REPO_DIR}/bundle/specs-ir/index.json" ]; then
+  echo "error: spec IR compile did not write index.json" >&2
+  exit 1
+fi
+if ! find "${REPO_DIR}/bundle/specs-ir/hooks" -name '*.js' -print -quit | grep -q .; then
+  echo "error: spec IR hooks directory is missing or empty" >&2
+  exit 1
+fi
+
 info "Embedding Sparkle.framework..."
 SPARKLE_FRAMEWORK="${SPARKLE_FRAMEWORK:-$("${REPO_DIR}/scripts/fetch-sparkle.sh")}"
 [ -d "$SPARKLE_FRAMEWORK" ] || { echo "error: Sparkle framework not found: $SPARKLE_FRAMEWORK" >&2; exit 1; }
 
-node "${REPO_DIR}/scripts/generate-third-party-notices.mjs" --check "${REPO_DIR}/THIRD_PARTY_NOTICES.txt"
+if [ "${SKIP_NOTICES_CHECK:-}" = "1" ]; then
+  info "Skipping third-party notices check (SKIP_NOTICES_CHECK=1)"
+else
+  node "${REPO_DIR}/scripts/generate-third-party-notices.mjs" --check "${REPO_DIR}/THIRD_PARTY_NOTICES.txt"
+fi
 
 mkdir -p "$FRAMEWORKS_DIR"
 cp -R "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/"
@@ -128,10 +137,15 @@ cp "${TARGET_DIR}/${APP_NAME}" "$MACOS_DIR/"
 cp "${TARGET_DIR}/ec"          "$MACOS_DIR/"
 cp "${TARGET_DIR}/ecterm"      "$MACOS_DIR/"
 
-cp -r packages/autocomplete-app/dist/* "${RESOURCES_DIR}/autocomplete/"
-cp -r packages/dashboard-app/dist/*    "${RESOURCES_DIR}/dashboard/"
 cp themes/*.json                       "${RESOURCES_DIR}/themes/"
 cp -R bundle/specs                     "${RESOURCES_DIR}/specs"
+if [ -d "${REPO_DIR}/bundle/specs-ir" ]; then
+  cp -R bundle/specs-ir                "${RESOURCES_DIR}/specs-ir"
+fi
+if ! find "${RESOURCES_DIR}/specs-ir/hooks" -name '*.js' -print -quit | grep -q .; then
+  echo "error: app bundle is missing specs-ir/hooks" >&2
+  exit 1
+fi
 
 LICENSES_DIR="${RESOURCES_DIR}/Licenses"
 mkdir -p "$LICENSES_DIR"

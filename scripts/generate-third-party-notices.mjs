@@ -57,6 +57,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.`;
+const cc0LicenseTerms = `CC0 1.0 Universal
+
+The authors of this work have dedicated it to the public domain by waiving
+all of their rights to the work worldwide under copyright law, including all
+related and neighboring rights, to the extent allowed by law.
+
+You can copy, modify, distribute and perform the work, even for commercial
+purposes, all without asking permission. See
+https://creativecommons.org/publicdomain/zero/1.0/ for the full legal text.`;
 const protobufGoogleBsdNotice = `Copyright 2008 Google Inc. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -195,27 +204,22 @@ function rustComponents() {
 }
 
 function javascriptComponents() {
-  const grouped = JSON.parse(command("pnpm", ["licenses", "list", "--prod", "--json"]));
+  // `pnpm licenses list --json` crashes on current pnpm ("undefined is not a function").
+  // The shipped JS payload is the bundled spec package plus the vendored fuzzysort
+  // crate/package copied into notices; do not scrape unused workspace webview deps.
   const components = [];
-
-  for (const entries of Object.values(grouped)) {
-    for (const entry of entries) {
-      for (const packagePath of entry.paths ?? []) {
-        components.push(componentFromPackage(realpathSync(packagePath)));
-      }
-    }
+  const bundledSpecsPath = join(repoDir, "node_modules/@chen86860/autocomplete-specs");
+  if (!existsSync(bundledSpecsPath)) {
+    throw new Error(
+      "Missing @chen86860/autocomplete-specs. Run pnpm install before generating notices.",
+    );
   }
-
-  const bundledSpecsPath = realpathSync(
-    join(repoDir, "node_modules/@chen86860/autocomplete-specs"),
-  );
   components.push(
-    componentFromPackage(bundledSpecsPath, {
+    componentFromPackage(realpathSync(bundledSpecsPath), {
       license: "MIT (license file; package metadata declares ISC)",
     }),
   );
   components.push(componentFromPackage(join(repoDir, "packages/fuzzysort")));
-
   return components;
 }
 
@@ -297,6 +301,13 @@ function addFallbackLicense(component) {
           ),
         },
       ],
+    };
+  }
+
+  if (/CC0-1\.0/.test(component.license)) {
+    return {
+      ...component,
+      inlineFiles: [{ name: "LICENSE-CC0-1.0", content: cc0LicenseTerms }],
     };
   }
 

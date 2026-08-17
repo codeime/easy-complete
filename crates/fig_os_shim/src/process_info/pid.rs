@@ -38,8 +38,8 @@ pub enum Pid {
 impl std::fmt::Display for Pid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Pid::Real(_, raw) => write!(f, "{}", raw),
-            Pid::Fake(fake) => write!(f, "{}", fake),
+            Pid::Real(_, raw) => write!(f, "{raw}"),
+            Pid::Fake(fake) => write!(f, "{fake}"),
         }
     }
 }
@@ -70,7 +70,8 @@ macro_rules! pid_decl {
         }
         impl fmt::Display for RawPid {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{}", self.0)
+                let pid = self.0;
+                write!(f, "{pid}")
             }
         }
     };

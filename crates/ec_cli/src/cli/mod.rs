@@ -5,6 +5,7 @@ mod completion;
 mod debug;
 mod diagnostics;
 mod doctor;
+mod engine;
 mod hook;
 mod init;
 mod installation;
@@ -125,6 +126,8 @@ pub enum CliRootCommands {
     Telemetry(telemetry::TelemetrySubcommand),
     /// Show version information
     Version,
+    /// Run the headless completion engine
+    Engine(engine::EngineArgs),
 }
 
 const HELP_TEXT: &str = color_print::cstr! {"
@@ -216,6 +219,7 @@ impl Cli {
                 CliRootCommands::Integrations(subcommand) => subcommand.execute().await,
                 CliRootCommands::Telemetry(subcommand) => subcommand.execute().await,
                 CliRootCommands::Version => Self::print_version(),
+                CliRootCommands::Engine(args) => args.execute().await,
             },
             // Root command - show help
             None => {

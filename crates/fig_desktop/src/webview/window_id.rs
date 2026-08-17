@@ -18,31 +18,3 @@ impl serde::Serialize for WindowId {
         serializer.serialize_str(&self.0)
     }
 }
-
-pub trait WindowIdProvider {
-    fn window_id(&self) -> WindowId;
-}
-
-impl WindowIdProvider for WindowId {
-    fn window_id(&self) -> WindowId {
-        self.clone()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct DashboardId;
-
-impl WindowIdProvider for DashboardId {
-    fn window_id(&self) -> WindowId {
-        DASHBOARD_ID
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct AutocompleteId;
-
-impl WindowIdProvider for AutocompleteId {
-    fn window_id(&self) -> WindowId {
-        AUTOCOMPLETE_ID
-    }
-}

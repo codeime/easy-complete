@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use fig_proto::local::caret_position_hook::Origin;
 use tao::dpi::{LogicalSize, Position, Size};
 use tao::event_loop::ControlFlow;
+use tao::window::Theme;
 use tokio::sync::mpsc::UnboundedSender;
-use wry::Theme;
 
 use crate::platform::PlatformBoundEvent;
 use crate::webview::WindowId;
@@ -29,33 +29,50 @@ pub enum Event {
     ReloadTray {
         is_logged_in: bool,
     },
-    AutocompleteLifecycleChanged {
-        /// The new `autocomplete.keepReady` value, when the sender already knows it.
-        ///
-        /// `fig_desktop` loads settings into a process-global map once at startup and never
-        /// refreshes it from disk, so re-reading the setting here returns the value as of launch
-        /// whenever another process (`ec settings`) wrote the file. Senders that come from a
-        /// settings notification pass the fresh value through instead.
-        keep_ready: Option<bool>,
+
+    /// Menu bar or tray item activated. Delivered by `muda::MenuEvent::set_event_handler`.
+    MenuClicked(String),
+    /// Fresh permission check for the native settings gate.
+    PermissionSnapshot(crate::permissions::PermissionSnapshot),
+
+    /// Headless engine input for the GPUI overlay.
+    GpuiOverlayBuffer {
+        buffer: String,
+        cwd: String,
+        cursor: u32,
+        session_id: uuid::Uuid,
     },
-    AutocompleteReleaseTimerElapsed {
+    /// The current completion request exceeded the loading threshold. This is
+    /// routed through the host event queue so GPUI state is only touched from
+    /// the top-level dispatcher.
+    GpuiOverlayLoading {
         generation: u64,
     },
-    /// The hidden autocomplete webview exceeded its age or resize budget and should be rebuilt
-    /// before it can accumulate more retained WebKit graphics surfaces.
-    AutocompleteRecycleRequested {
-        age_seconds: u64,
-        resize_count: u64,
-    },
-    /// The autocomplete webview finished loading and can receive window events.
-    AutocompleteWebviewMounted,
-    /// Fallback for when the autocomplete webview never reports mounting.
-    AutocompleteMountTimeoutElapsed {
+    /// The request outlived the user's script budget. Only the `···` marker is
+    /// retired; the request itself keeps running under the engine watchdog.
+    GpuiOverlayLoadingExpired {
         generation: u64,
     },
-    /// The autocomplete webview rendered suggestions for the first time.
-    AutocompleteWebviewReady,
-    AutocompleteSpecsReady,
+    /// A completion request finished on the engine thread.
+    GpuiOverlayComplete {
+        generation: u64,
+        result: anyhow::Result<ec_engine::CompleteResult>,
+        session_id: uuid::Uuid,
+        cwd: String,
+    },
+    /// Figterm intercepted a key bound to an autocomplete action.
+    AutocompleteAction {
+        action: String,
+        session_id: uuid::Uuid,
+    },
+    /// A mouse click carries the exact row that was clicked. Keeping this in
+    /// the event avoids a shared pending slot being overwritten by a second
+    /// click before the host event loop handles the first one.
+    AutocompleteClick {
+        click: ec_gpui::ClickInsert,
+        session_id: uuid::Uuid,
+        generation: u64,
+    },
 
     ShowMessageNotification(ShowMessageNotification),
 }
@@ -129,9 +146,9 @@ pub enum WindowEvent {
         dry_run: bool,
         tx: Option<UnboundedSender<WindowGeometryResult>>,
     },
-    /// Hides the window without releasing its webview.
+    /// Hides the window.
     Hide,
-    /// Closes the window and releases its webview when supported.
+    /// Closes the window.
     Close,
     Show,
     Emit {
@@ -141,11 +158,6 @@ pub enum WindowEvent {
     NavigateRelative {
         path: Cow<'static, str>,
     },
-    NavigateAbsolute {
-        url: url::Url,
-    },
-    NavigateForward,
-    NavigateBack,
 
     Event {
         event_name: Cow<'static, str>,
@@ -154,17 +166,10 @@ pub enum WindowEvent {
 
     Reload,
 
-    Api {
-        /// A base64 encoded protobuf
-        payload: String,
-    },
     Devtools,
     DebugMode(bool),
 
-    Drag,
     Batch(Vec<WindowEvent>),
-    /// Evaluate a JavaScript string in the webview.
-    EvalScript(String),
 }
 
 impl WindowEvent {
@@ -174,17 +179,10 @@ impl WindowEvent {
             WindowEvent::Hide
                 | WindowEvent::Close
                 | WindowEvent::SetEnabled(_)
-                // TODO: we really shouldnt need to allow these to be called when disabled,
-                // however we allow them at the moment because notification listeners are
+                // TODO: we really shouldnt need to allow this to be called when disabled,
+                // however we allow it at the moment because notification listeners are
                 // initialized early on and we dont have a way to delay them until the window
                 // is enabled
-                | WindowEvent::Api { .. }
-                // Emit only delivers a payload to the webview's JS context and can never
-                // show the window, so it is safe while disabled. Notification emits in
-                // particular must go through: settings changes (e.g. the autocomplete
-                // theme) are broadcast while the dashboard is focused, which is exactly
-                // when the autocomplete window is disabled — dropping them left the
-                // webview with stale settings until restart.
                 | WindowEvent::Emit { .. }
         )
     }

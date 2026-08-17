@@ -50,14 +50,10 @@ const sourceMode = process.env.BUNDLED_SPECS_SOURCE || "dependency";
 
 const outDir =
   process.env.BUNDLED_SPECS_DIR || join(repoDir, "bundle", "specs");
-const iconListPath = join(
-  repoDir,
-  "packages",
-  "autocomplete-app",
-  "src",
-  "fig",
-  "icons.ts",
-);
+// Named spec icons to keep. `crates/ec_gpui/src/icons.rs` embeds each of these
+// with include_bytes!, so the two lists have to move together. An empty list
+// keeps every icon the archive ships.
+const iconNames = Array.isArray(config.icons) ? config.icons : [];
 
 const concurrency = Number(process.env.BUNDLED_SPECS_CONCURRENCY || 16);
 const maxAttempts = Number(process.env.BUNDLED_SPECS_FETCH_ATTEMPTS || 5);
@@ -65,7 +61,7 @@ const maxAttempts = Number(process.env.BUNDLED_SPECS_FETCH_ATTEMPTS || 5);
 // Spec namespaces to exclude from the bundle (config.exclude, e.g. ["aws","gcloud","az"]).
 // A namespace `ns` drops the top-level `ns` spec and everything under `ns/`. Excluded
 // specs are absent from both the files on disk AND the written index.json, so the runtime
-// loader never references them (there is no network fallback — see protocol/spec.rs).
+// loader never references them, and there is no network fallback to fetch them at runtime.
 //
 // Current repo default ["aws", "az"]: the AWS and Azure CLI specs are large and
 // most users never trigger them. Edit specs.config.json to change.
@@ -133,15 +129,6 @@ async function runPool(items, task) {
     },
   );
   await Promise.all(workers);
-}
-
-async function iconNames() {
-  const source = await readFile(iconListPath, "utf8");
-  const match = source.match(/export const icons:[\s\S]*?=\s*\[([\s\S]*?)\]/);
-  if (!match) {
-    throw new Error(`Unable to parse icon list from ${iconListPath}`);
-  }
-  return [...match[1].matchAll(/"([^"]+)"/g)].map(([, name]) => name);
 }
 
 // Recursively list every *.js file under `dir`, returning paths relative to `dir`
@@ -297,7 +284,7 @@ async function syncFromPackageRoot(packageRoot, label) {
   });
 
   // icons (only those the app references, if present in the archive)
-  const wantedIcons = new Set(await iconNames());
+  const wantedIcons = new Set(iconNames);
   const iconsRoot = join(packageRoot, "icons");
   let icons = 0;
   try {
@@ -384,7 +371,6 @@ async function syncFromCdn() {
     completions.length +
     (allDiffVersioned.length - diffVersioned.length);
   const diffVersionedSet = new Set(diffVersioned);
-  const icons = await iconNames();
 
   const filteredIndex = {
     ...index,
@@ -397,7 +383,7 @@ async function syncFromCdn() {
       .filter((name) => !diffVersionedSet.has(name))
       .map((name) => `${name}.js`),
     ...diffVersioned.map((name) => `${name}/index.js`),
-    ...icons.map((name) => `icons/${name}.png`),
+    ...iconNames.map((name) => `icons/${name}.png`),
   ];
 
   await rm(outDir, { force: true, recursive: true });
@@ -434,3 +420,6 @@ if (sourceMode === "dependency") {
 } else {
   throw new Error(`Unsupported BUNDLED_SPECS_SOURCE: ${sourceMode}`);
 }
+
+const { compileSpecsIr } = await import("./compile-spec-ir.mjs");
+await compileSpecsIr({ srcDir: outDir });
