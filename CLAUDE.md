@@ -166,7 +166,7 @@ The product website under `website/src` uses Tailwind CSS v4. When editing it:
 
 ### Bundled Specs
 
-Completion specs are **bundled into the `.app` at build time**, not fetched at runtime. `scripts/sync-bundled-specs.mjs` assembles the Fig JS sources into `bundle/specs/`. `scripts/compile-spec-ir.mjs` then writes `bundle/specs-ir/` (JSON IR + `hooks/*.js`). `build-app.sh` always recompiles IR and copies both trees to `Contents/Resources/`. The engine reads **`specs-ir` only** — a spec missing from that tree has no completion.
+Completion specs are **bundled into the `.app` at build time**, not fetched at runtime. `scripts/sync-bundled-specs.mjs` assembles the Fig JS sources into `bundle/specs/`. `scripts/compile-spec-ir.mjs` then writes `bundle/specs-ir/` (JSON IR + `hooks/*.js`). `build-app.sh` always recompiles IR and ships **only `specs-ir`** in `Contents/Resources/`. `bundle/specs` stays out of the `.app`: it exists to feed the IR compiler and to supply the icons `ec_gpui` embeds with `include_bytes!`, both build-time concerns. Bundling it too cost 28 MB of dead weight until it was dropped. The engine reads **`specs-ir` only** — a spec missing from that tree has no completion.
 
 **Source.** The default source is the installed npm dependency [`@chen86860/autocomplete-specs`](https://www.npmjs.com/package/@chen86860/autocomplete-specs), published from our forked spec repo [`chen86860/autocomplete-specs`](https://github.com/chen86860/autocomplete-specs). The version is pinned by root `package.json` plus `pnpm-lock.yaml`. The sync script reads the package from `node_modules`, copies `build/*.js` and `icons/*.png` into `bundle/specs`, then derives `index.json` from the bundled file tree.
 

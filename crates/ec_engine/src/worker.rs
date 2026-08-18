@@ -367,25 +367,25 @@ pub fn default_specs_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("EC_SPECS_DIR") {
         return PathBuf::from(dir);
     }
-    if let Ok(resources) = fig_util_specs_dir() {
-        return specs_ir_from_bundle_specs(resources);
+    if let Ok(dir) = bundled_specs_ir_dir() {
+        return dir;
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bundle/specs-ir")
 }
 
-fn specs_ir_from_bundle_specs(resources_specs: PathBuf) -> PathBuf {
-    resources_specs.with_file_name("specs-ir")
+fn bundled_specs_ir_dir() -> anyhow::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    match exe.parent().filter(|dir| dir.ends_with("MacOS")) {
+        Some(macos) => Ok(specs_ir_in_bundle(macos)),
+        None => anyhow::bail!("not running from an app bundle"),
+    }
 }
 
-fn fig_util_specs_dir() -> anyhow::Result<PathBuf> {
-    let exe = std::env::current_exe()?;
-    // Easy Complete.app/Contents/MacOS/easy-complete → Contents/Resources/specs
-    if let Some(macos) = exe.parent() {
-        if macos.ends_with("MacOS") {
-            return Ok(macos.join("../Resources/specs"));
-        }
-    }
-    anyhow::bail!("not running from an app bundle")
+/// `Easy Complete.app/Contents/MacOS` → `Contents/Resources/specs-ir`. Only the
+/// compiled IR is bundled; the JS specs it was built from never enter the `.app`,
+/// so pointing at `Resources/specs` would silently yield an empty registry.
+fn specs_ir_in_bundle(macos_dir: &Path) -> PathBuf {
+    macos_dir.join("../Resources/specs-ir")
 }
 
 #[cfg(test)]
@@ -764,10 +764,12 @@ mod tests {
 
     #[test]
     fn app_bundle_uses_specs_ir_not_js_specs() {
-        let specs = PathBuf::from("/Applications/easy-complete.app/Contents/Resources/specs");
+        let macos = Path::new("/Applications/easy-complete.app/Contents/MacOS");
+        let dir = specs_ir_in_bundle(macos);
+        assert_eq!(dir.file_name().unwrap(), "specs-ir");
         assert_eq!(
-            specs_ir_from_bundle_specs(specs),
-            PathBuf::from("/Applications/easy-complete.app/Contents/Resources/specs-ir")
+            dir,
+            PathBuf::from("/Applications/easy-complete.app/Contents/MacOS/../Resources/specs-ir")
         );
     }
 }

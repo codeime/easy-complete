@@ -138,7 +138,8 @@ cp "${TARGET_DIR}/ec"          "$MACOS_DIR/"
 cp "${TARGET_DIR}/ecterm"      "$MACOS_DIR/"
 
 cp themes/*.json                       "${RESOURCES_DIR}/themes/"
-cp -R bundle/specs                     "${RESOURCES_DIR}/specs"
+# Only specs-ir ships. bundle/specs is build-time input: it feeds the IR compiler
+# above, and ec_gpui embeds its icons with include_bytes!. The .app never reads it.
 if [ -d "${REPO_DIR}/bundle/specs-ir" ]; then
   cp -R bundle/specs-ir                "${RESOURCES_DIR}/specs-ir"
 fi

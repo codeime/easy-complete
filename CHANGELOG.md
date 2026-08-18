@@ -14,6 +14,7 @@
 - change: Accessibility permission opens System Settings only — the drag-to-authorize coach was removed
 - chore: delete the leftover WebView sources (`packages/autocomplete-app`, `packages/dashboard-app`), which had not been loaded since the GPUI migration; the bundled icon list they carried now lives in `specs.config.json`
 - chore: delete the Rust side of the WebView bridge — the `fig://`, `ecresource://` and `spec://` protocol handlers, the request handlers behind them, and most of `fig_desktop_api`, none of which had a WebView to answer since the GPUI migration. Two watchers that fired into a window that no longer exists went with them, as did 14 dependencies of `fig_desktop` and 16 of `fig_desktop_api`. A crate-wide `#![allow(dead_code)]` had been hiding all of it
+- chore: stop copying `bundle/specs` into the `.app` — the engine has resolved `specs-ir` only since the IR compiler landed, and the spec icons are embedded into the binary at build time, so that 28 MB tree was shipped without ever being opened. The installed app drops from 109 MB to 81 MB and the DMG from 25 MB to 22 MB
 - docs: document the GPUI overlay, IR engine, QuickJS hooks, and `scripts/memory-usage.sh`
 
 ## v2.2.2

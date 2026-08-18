@@ -262,16 +262,6 @@ pub fn themes_dir(ctx: &Context) -> Result<PathBuf> {
     Ok(resources_path_ctx(ctx)?.join("themes"))
 }
 
-/// The autocomplete directory
-pub fn autocomplete_dir() -> Result<PathBuf> {
-    Ok(fig_data_dir()?.join("autocomplete"))
-}
-
-/// The autocomplete specs directory
-pub fn autocomplete_specs_dir() -> Result<PathBuf> {
-    Ok(autocomplete_dir()?.join("specs"))
-}
-
 /// The directory to all the fig logs
 /// - Linux: `/tmp/fig/$USER/logs`
 /// - MacOS: `$TMPDIR/logs`
@@ -448,13 +438,6 @@ pub fn update_lock_path(ctx: &impl FsProvider) -> Result<PathBuf> {
     Ok(fig_data_dir_ctx(ctx)?.join("update.lock"))
 }
 
-/// The path to the midway cookie
-///
-/// Path: `$HOME/.midway/cookie`
-pub fn midway_cookie_path() -> Result<PathBuf> {
-    Ok(home_dir()?.join(".midway").join("cookie"))
-}
-
 /// The path to the .zip bundle containing the GNOME Shell Extension identified by
 /// `extension_uuid`.
 pub fn bundled_gnome_extension_zip_path<Ctx: EnvProvider + PlatformProvider>(
@@ -551,7 +534,6 @@ mod linux_tests {
         assert!(logs_dir().is_ok());
         assert!(settings_path().is_ok());
         assert!(update_lock_path(&ctx).is_ok());
-        assert!(midway_cookie_path().is_ok());
     }
 }
 
@@ -740,13 +722,6 @@ mod tests {
         linux!(update_lock_path(&ctx), @"$HOME/.local/share/easy-complete/update.lock");
         macos!(update_lock_path(&ctx), @"$HOME/Library/Application Support/easy-complete/update.lock");
         windows!(update_lock_path(&ctx), @r"C:\Users\$USER\AppData\Local\AmazonQ\update.lock");
-    }
-
-    #[test]
-    fn snapshot_midway_cookie_path() {
-        linux!(midway_cookie_path(), @"$HOME/.midway/cookie");
-        macos!(midway_cookie_path(), @"$HOME/.midway/cookie");
-        windows!(midway_cookie_path(), @r"C:\Users\$USER\.midway\cookie");
     }
 
     #[test]
