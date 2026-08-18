@@ -25,9 +25,19 @@ const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
 const STACK_LIMIT: usize = 512 * 1024;
 const MAX_JOBS: usize = 10_000;
 
+/// Slack added to a hook's script budget before the interpreter is interrupted.
+/// A generator whose final `executeCommand` finishes right on its own timeout
+/// still needs a moment of JS time to shape the result rows.
+const HOOK_DEADLINE_MARGIN: Duration = Duration::from_secs(2);
+
 thread_local! {
     static ACTIVE: Cell<Option<Active>> = const { Cell::new(None) };
     static INNER: RefCell<Option<Inner>> = const { RefCell::new(None) };
+    /// Wall-clock bound for the currently running hook. QuickJS polls this
+    /// through the interrupt handler, so a hook that spins in JS (or keeps
+    /// scheduling promise jobs) is aborted instead of wedging the completion
+    /// attempt until the 30s supervisor watchdog abandons the whole thread.
+    static HOOK_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 #[derive(Clone, Copy)]
@@ -120,6 +130,9 @@ impl JsHost {
                 let runtime = Runtime::new().ok()?;
                 runtime.set_memory_limit(MEMORY_LIMIT);
                 runtime.set_max_stack_size(STACK_LIMIT);
+                runtime.set_interrupt_handler(Some(Box::new(|| {
+                    HOOK_DEADLINE.with(|cell| cell.get().is_some_and(|deadline| Instant::now() > deadline))
+                })));
                 let context = Context::full(&runtime).ok()?;
                 if context
                     .with(|ctx| {
@@ -160,7 +173,7 @@ globalThis.console = {
     }
 
     pub fn post_process(&self, hook_id: &str, stdout: &str, tokens: &[String]) -> Option<Vec<Suggestion>> {
-        let json = self.call_hook(hook_id, |ctx, hook| {
+        let json = self.call_hook(hook_id, default_hook_budget(), |ctx, hook| {
             let tokens = tokens_value(ctx, tokens)?;
             call_hook(ctx, hook, (stdout, tokens))
         })?;
@@ -176,7 +189,7 @@ globalThis.console = {
         timeout: Duration,
         is_dangerous: bool,
     ) -> Option<Vec<Suggestion>> {
-        let json = self.call_hook(hook_id, |ctx, hook| {
+        let json = self.call_hook(hook_id, timeout, |ctx, hook| {
             let tokens_js = tokens_value(ctx, tokens)?;
             let exec = execute_command_fn(ctx, cwd, timeout)?;
             let context = custom_context(ctx, cwd, search_term, is_dangerous)?;
@@ -186,7 +199,7 @@ globalThis.console = {
     }
 
     pub fn script_command(&self, hook_id: &str, tokens: &[String]) -> Option<ScriptCommand> {
-        let json = self.call_hook(hook_id, |ctx, hook| {
+        let json = self.call_hook(hook_id, default_hook_budget(), |ctx, hook| {
             let tokens_js = tokens_value(ctx, tokens)?;
             call_hook(ctx, hook, (tokens_js,))
         })?;
@@ -194,7 +207,7 @@ globalThis.console = {
     }
 
     pub fn generate_spec(&self, hook_id: &str, tokens: &[String], cwd: &str, timeout: Duration) -> Option<Spec> {
-        let json = self.call_hook(hook_id, |ctx, hook| {
+        let json = self.call_hook(hook_id, timeout, |ctx, hook| {
             let tokens_js = tokens_value(ctx, tokens)?;
             let exec = execute_command_fn(ctx, cwd, timeout)?;
             call_hook(ctx, hook, (tokens_js, exec))
@@ -202,11 +215,12 @@ globalThis.console = {
         spec_from_fig_json(&json)
     }
 
-    fn call_hook<F>(&self, hook_id: &str, invoke: F) -> Option<JsonValue>
+    fn call_hook<F>(&self, hook_id: &str, budget: Duration, invoke: F) -> Option<JsonValue>
     where
         F: for<'js> FnOnce(&Ctx<'js>, Function<'js>) -> rquickjs::Result<JsValue<'js>>,
     {
         let source = self.hook_source(hook_id)?;
+        let _deadline = HookDeadlineGuard::arm(budget.saturating_add(HOOK_DEADLINE_MARGIN));
         Self::with_inner(|inner| {
             let pending = inner.context.with(|ctx| {
                 let hook = eval_hook(&ctx, &source).ok()?;
@@ -233,6 +247,44 @@ globalThis.console = {
         })
         .flatten()
     }
+}
+
+/// The budget for hooks whose call site has no script timeout of its own
+/// (`postProcess` result shaping and `script` command construction).
+fn default_hook_budget() -> Duration {
+    let ms = crate::generate::configured_script_timeout_ms();
+    Duration::from_millis(u64::try_from(ms).unwrap_or(0)).max(Duration::from_millis(
+        u64::try_from(DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000),
+    ))
+}
+
+/// Arms [`HOOK_DEADLINE`] for one hook invocation and restores the previous
+/// value on drop, so a `generateSpec` hook firing during the walk of another
+/// hook's completion keeps the outer deadline intact.
+struct HookDeadlineGuard {
+    previous: Option<Instant>,
+}
+
+impl HookDeadlineGuard {
+    fn arm(budget: Duration) -> Self {
+        let previous = HOOK_DEADLINE.with(|cell| cell.replace(Some(Instant::now() + budget)));
+        Self { previous }
+    }
+}
+
+impl Drop for HookDeadlineGuard {
+    fn drop(&mut self) {
+        HOOK_DEADLINE.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Time left before the running hook is interrupted. `None` when no hook
+/// deadline is armed (e.g. host functions exercised directly by tests).
+fn hook_time_remaining() -> Option<Duration> {
+    HOOK_DEADLINE.with(|cell| {
+        cell.get()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    })
 }
 
 enum HookOutcome {
@@ -283,6 +335,18 @@ pub fn cache_key(cache_by_directory: bool, cwd: &str, cache_key: Option<&str>, t
     }
 }
 
+/// Ceiling for each per-engine hook cache. Directory-keyed generators mint a
+/// new entry per cwd, so a long desktop session would otherwise grow these
+/// maps without bound. Wholesale clearing at the cap is fine: entries are
+/// cheap to regenerate and the cap is far above one session's working set.
+const MAX_CACHE_ENTRIES: usize = 512;
+
+fn evict_at_cap<T>(cache: &mut HashMap<String, T>, key: &str) {
+    if cache.len() >= MAX_CACHE_ENTRIES && !cache.contains_key(key) {
+        cache.clear();
+    }
+}
+
 pub fn cached_spec(host: &JsHost, cache_key: &str, run: impl FnOnce() -> Option<Spec>) -> Option<Spec> {
     {
         let cache = host.spec_cache.lock().unwrap_or_else(|err| err.into_inner());
@@ -292,6 +356,7 @@ pub fn cached_spec(host: &JsHost, cache_key: &str, run: impl FnOnce() -> Option<
     }
     let value = run()?;
     let mut cache = host.spec_cache.lock().unwrap_or_else(|err| err.into_inner());
+    evict_at_cap(&mut cache, cache_key);
     cache.insert(cache_key.to_string(), value.clone());
     Some(value)
 }
@@ -312,6 +377,7 @@ fn cache_get<T: Clone>(cache: &Mutex<HashMap<String, CacheEntry<T>>>, key: &str,
 
 fn cache_put<T>(cache: &Mutex<HashMap<String, CacheEntry<T>>>, key: String, value: T) {
     let mut cache = cache.lock().unwrap_or_else(|err| err.into_inner());
+    evict_at_cap(&mut cache, &key);
     cache.insert(
         key,
         CacheEntry {
@@ -481,7 +547,17 @@ fn run_execute_command<'js>(
 ) -> rquickjs::Result<Object<'js>> {
     let parsed =
         parse_execute_input(&input, default_cwd, default_timeout_ms).map_err(|_parse| rquickjs::Error::Unknown)?;
-    let timeout = Duration::from_millis(parsed.timeout_ms);
+    let mut timeout = Duration::from_millis(parsed.timeout_ms);
+    // The interrupt handler cannot fire while this blocking call runs, so a
+    // hook chaining subprocess calls has to hand each one only the time the
+    // hook itself has left. Without this, one more 5s command scheduled right
+    // before the deadline stretches the attempt well past its budget.
+    if let Some(remaining) = hook_time_remaining() {
+        if remaining.is_zero() {
+            return Err(rquickjs::Error::Unknown);
+        }
+        timeout = timeout.min(remaining);
+    }
     let result = process::execute_full(&parsed.command, &parsed.args, &parsed.cwd, &parsed.env, timeout);
     let output = Object::new(ctx.clone())?;
     match result {
@@ -1091,6 +1167,106 @@ mod tests {
     fn shell_context_is_empty_outside_a_completion_attempt() {
         assert!(current_shell().current_process.is_empty());
         assert!(current_shell().environment_variables.is_empty());
+    }
+
+    #[test]
+    fn an_infinite_js_loop_is_interrupted_at_the_hook_deadline() {
+        // Without the interrupt handler this hook wedged the completion
+        // attempt until the 30s supervisor watchdog abandoned the thread —
+        // and every retype of the same buffer wedged the next attempt too,
+        // which the user experienced as completions never coming back.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("demo_custom_0.js"),
+            "export default function() { for (;;) {} }\n",
+        )
+        .unwrap();
+        let host = JsHost::new(dir.path().to_path_buf());
+        let started = Instant::now();
+        let rows = host.custom(
+            "demo#custom#0",
+            &["demo".into()],
+            "/",
+            "",
+            Duration::from_millis(100),
+            false,
+        );
+        assert!(rows.is_none(), "the spinning hook must fail, not hang");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "interrupted after {:?}, expected roughly budget + margin",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_runtime_survives_an_interrupted_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("spin_custom_0.js"),
+            "export default function() { for (;;) {} }\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("ok_custom_0.js"),
+            "export default function() { return [{ name: 'alive' }]; }\n",
+        )
+        .unwrap();
+        let host = JsHost::new(dir.path().to_path_buf());
+        assert!(
+            host.custom(
+                "spin#custom#0",
+                &["spin".into()],
+                "/",
+                "",
+                Duration::from_millis(100),
+                false
+            )
+            .is_none()
+        );
+        let rows = host
+            .custom(
+                "ok#custom#0",
+                &["ok".into()],
+                "/",
+                "",
+                Duration::from_millis(5_000),
+                false,
+            )
+            .expect("the runtime must stay usable after an interrupt");
+        assert_eq!(
+            rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            vec!["alive"]
+        );
+    }
+
+    #[test]
+    fn exec_calls_are_clamped_to_the_hook_deadline() {
+        // The interrupt handler cannot fire inside a blocking subprocess
+        // call, so a hook chaining `exec` invocations must hand each one only
+        // its remaining budget. Two 5s sleeps under a ~100ms budget would
+        // otherwise run for the full 10 seconds.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("slow_custom_0.js"),
+            "export default async function(tokens, exec) {\n  try { await exec({ command: 'sleep', args: ['5'], timeout: 5000 }); } catch (e) {}\n  try { await exec({ command: 'sleep', args: ['5'], timeout: 5000 }); } catch (e) {}\n  return [{ name: 'done' }];\n}\n",
+        )
+        .unwrap();
+        let host = JsHost::new(dir.path().to_path_buf());
+        let started = Instant::now();
+        let _rows = host.custom(
+            "slow#custom#0",
+            &["slow".into()],
+            "/",
+            "",
+            Duration::from_millis(100),
+            false,
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "exec calls ran for {:?}, expected them clamped to the budget",
+            started.elapsed()
+        );
     }
 
     #[test]

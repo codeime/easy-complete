@@ -147,7 +147,9 @@ Most completions are pure Rust (lookup, builtins, file paths, history, ranking).
 | `custom`        | Whole generator in JS; may call injected `exec`   |
 | `generateSpec`  | Walk-time: JS returns a spec merged into the node |
 
-The JS runtime is thread-local and created on first hook. Empty `cwd` skips JS hooks. Results are cached (`cached_suggestions` / `cached_spec`). A request that turns on the `···` marker owns that latch and must clear it even if its result is stale.
+The JS runtime is thread-local and created on first hook. Empty `cwd` skips JS hooks. Results are cached (`cached_suggestions` / `cached_spec`, capped at 512 entries each). A request that turns on the `···` marker owns that latch and must clear it even if its result is stale.
+
+Every hook runs under a hard wall-clock deadline (its script budget plus a 2s margin) enforced by a QuickJS interrupt handler, and `executeCommand` calls are clamped to the hook's remaining budget — a spinning or slow hook is aborted instead of wedging the attempt thread until the 30s supervisor watchdog. Watchdog timeouts/panics log at ERROR (the default log filter) with the root command and cwd.
 
 Fig semantics the Rust side has to reproduce exactly: a generator's `splitOn` wins over its `postProcess`, and `custom` hooks get the shell's process name and environment variables on their context argument (`JsHost::enter_with_context`, fed from `CompleteRequest::environment_variables`).
 

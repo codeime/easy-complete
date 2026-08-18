@@ -577,12 +577,32 @@ fn history_commands_from_output(output: &str) -> Vec<(String, u64)> {
         .collect()
 }
 
+/// Cap on how much shell history feeds frecency and history suggestions.
+///
+/// The engine reloads this after every watchdog reset, and ranking walks the
+/// loaded list per request, so an unbounded `all_rows` scan made both scale
+/// with the lifetime size of the history database. Recent commands are the
+/// only ones frecency meaningfully weights anyway.
+const MAX_DATABASE_HISTORY_COMMANDS: usize = 10_000;
+
 fn load_database_commands<F>(include: F) -> Vec<(String, u64)>
 where
     F: Fn(&HistoryShell) -> bool,
 {
+    use fig_settings::history::{HistoryColumn, Order, OrderBy};
     let history = fig_settings::history::History::new();
-    let rows = history.all_rows().unwrap_or_default();
+    // Newest first via the integer primary key (start_time is unindexed),
+    // then restored to chronological order, which history_suggestions
+    // depends on to surface the most recent match.
+    let mut rows = history
+        .rows(
+            None,
+            vec![OrderBy::new(HistoryColumn::Id, Order::Desc)],
+            MAX_DATABASE_HISTORY_COMMANDS,
+            0,
+        )
+        .unwrap_or_default();
+    rows.reverse();
     rows.into_iter()
         .filter_map(|row| {
             let shell = normalize_history_shell(row.shell.as_deref());

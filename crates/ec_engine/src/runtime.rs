@@ -395,9 +395,17 @@ impl Engine {
     }
 
     pub(crate) fn record_acceptance_at(&mut self, root_command: &str, accepted_name: &str, timestamp: u64) {
-        let mut acceptance = self.acceptance.lock().unwrap_or_else(|err| err.into_inner());
-        if acceptance.record_at(root_command, accepted_name, timestamp) {
-            acceptance.persist();
+        // Persist from a snapshot taken outside the lock: ranking clones this
+        // index on every completion, and a slow SQLite write while holding the
+        // mutex would stall those attempts.
+        let snapshot = {
+            let mut acceptance = self.acceptance.lock().unwrap_or_else(|err| err.into_inner());
+            acceptance
+                .record_at(root_command, accepted_name, timestamp)
+                .then(|| acceptance.clone())
+        };
+        if let Some(snapshot) = snapshot {
+            snapshot.persist();
         }
     }
 

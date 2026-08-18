@@ -79,8 +79,15 @@ impl Db {
             }
         }
 
-        let conn = SqliteConnectionManager::file(path);
-        let pool = Pool::builder().build(conn)?;
+        let conn = SqliteConnectionManager::file(path).with_init(init_connection);
+        // The default r2d2 checkout timeout is 30s. The completion engine's
+        // supervisor thread reads this database between requests; if wedged
+        // generator threads are sitting on connections, a 30s wait there
+        // freezes every completion in the queue. Fail fast instead — callers
+        // already treat database errors as best-effort.
+        let pool = Pool::builder()
+            .connection_timeout(std::time::Duration::from_secs(3))
+            .build(conn)?;
 
         // Check the unix permissions of the database file, set them to 0600 if they are not
         #[cfg(unix)]
@@ -271,6 +278,20 @@ impl Db {
         })
         .map(|val| val.and_then(|val| val.as_bool()).unwrap_or(false))
     }
+}
+
+/// Applied to every pooled connection of the on-disk database.
+///
+/// figterm inserts history rows while the desktop reads them; without WAL a
+/// writer blocks readers for the whole transaction, and without a busy
+/// timeout a contended statement fails immediately with `SQLITE_BUSY`. WAL
+/// lets the reader and writer proceed concurrently, and the busy timeout
+/// bounds the residual contention instead of surfacing it as flaky errors.
+fn init_connection(conn: &mut Connection) -> std::result::Result<(), Error> {
+    conn.busy_timeout(std::time::Duration::from_secs(1))?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
 }
 
 fn max_migration_version<C: Deref<Target = Connection>>(conn: &C) -> Option<i64> {

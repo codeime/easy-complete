@@ -173,12 +173,22 @@ impl EngineClient {
                         },
                     };
                     let attempt_timeout = fixed_attempt_timeout.unwrap_or_else(engine_attempt_timeout);
+                    let attempt_context = attempt_log_context(&request);
                     match run_engine_attempt(current_engine, request, attempt_timeout) {
                         Ok((next_engine, result)) => {
                             engine = Some(next_engine);
                             let _ = reply.send(result);
                         },
                         Err(failure) => {
+                            // The default log filter is ERROR, so this is the
+                            // only durable evidence of a wedged or crashed
+                            // generator. Keep it at that level.
+                            tracing::error!(
+                                timeout_ms = attempt_timeout.as_millis() as u64,
+                                context = %attempt_context,
+                                failure = ?failure,
+                                "completion attempt abandoned; engine reset"
+                            );
                             let error = failure.error(attempt_timeout);
                             let _ = reply.send(Err(error));
                             // The timed-out/panicked attempt owns the old
@@ -298,6 +308,13 @@ where
     }
 }
 
+/// Root command plus cwd, enough to identify which spec's generator wedged
+/// without copying the whole edit buffer into the log.
+fn attempt_log_context(request: &CompleteRequest) -> String {
+    let root = request.buffer.split_whitespace().next().unwrap_or("");
+    format!("root_command={root:?} cwd={:?}", request.cwd)
+}
+
 fn record_acceptance(
     engine: &mut Option<Engine>,
     acceptance: &Arc<Mutex<AcceptanceIndex>>,
@@ -308,9 +325,18 @@ fn record_acceptance(
     if let Some(engine) = engine.as_mut() {
         engine.record_acceptance_at(root_command, accepted_name, timestamp);
     } else {
-        let mut index = acceptance.lock().unwrap_or_else(|err| err.into_inner());
-        if index.record_at(root_command, accepted_name, timestamp) {
-            index.persist();
+        // As in `Engine::record_acceptance_at`: persist a snapshot outside
+        // the lock so a slow SQLite write cannot stall threads cloning the
+        // index for ranking. This runs on the supervisor thread, where any
+        // stall also delays every queued completion.
+        let snapshot = {
+            let mut index = acceptance.lock().unwrap_or_else(|err| err.into_inner());
+            index
+                .record_at(root_command, accepted_name, timestamp)
+                .then(|| index.clone())
+        };
+        if let Some(snapshot) = snapshot {
+            snapshot.persist();
         }
     }
 }
