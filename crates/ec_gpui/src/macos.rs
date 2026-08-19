@@ -29,6 +29,11 @@ static OVERLAY_FRAME_EPOCH: AtomicU64 = AtomicU64::new(0);
 static OVERLAY_FRAME_DRAIN_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 const MAX_OVERLAY_FRAME_RETRIES: u8 = 4;
+const FRAME_EPS: f64 = 0.5;
+/// One display frame at 60Hz. Long enough for GPUI's foreground executor to
+/// apply `setContentSize`, short enough that a corrected frame is not visible.
+#[cfg(target_os = "macos")]
+const OVERLAY_FRAME_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(16);
 
 #[derive(Clone, Copy)]
 struct OverlayFrameRequest {
@@ -41,9 +46,75 @@ struct OverlayFrameRequest {
     retries: u8,
 }
 
-fn pending_overlay_frame() -> &'static Mutex<Option<OverlayFrameRequest>> {
-    static PENDING: OnceLock<Mutex<Option<OverlayFrameRequest>>> = OnceLock::new();
-    PENDING.get_or_init(|| Mutex::new(None))
+impl OverlayFrameRequest {
+    fn same_geometry(&self, other: &Self) -> bool {
+        overlay_geometry_close(
+            (self.window, self.x, self.y, self.width, self.height),
+            (other.window, other.x, other.y, other.width, other.height),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OverlayFrameSchedule {
+    /// Same caret frame as the request already in flight or just applied.
+    /// Must not bump [`OVERLAY_FRAME_EPOCH`]: size retries keep the original
+    /// epoch, and `overlay_frame_request_is_current` is an equality check.
+    IgnoreEcho,
+    /// A genuinely new placement. Caller bumps the epoch and enqueues.
+    Enqueue,
+}
+
+struct OverlayFrameQueue {
+    pending: Option<OverlayFrameRequest>,
+    applied: Option<OverlayFrameRequest>,
+}
+
+fn decide_overlay_frame_schedule(
+    next: &OverlayFrameRequest,
+    pending: Option<&OverlayFrameRequest>,
+    applied: Option<&OverlayFrameRequest>,
+) -> OverlayFrameSchedule {
+    if pending.is_some_and(|current| current.same_geometry(next)) {
+        return OverlayFrameSchedule::IgnoreEcho;
+    }
+    // `drain` publishes `applied` before `apply`. The AppKit write can echo
+    // through GPUI after a newer request has already bumped the epoch and
+    // taken `pending`. Matching `applied` — not its epoch — is what keeps
+    // that echo from overwriting the newer frame. Hide-then-reshow works
+    // because `invalidate_overlay_frame_requests` clears `applied`.
+    if applied.is_some_and(|current| current.same_geometry(next)) {
+        return OverlayFrameSchedule::IgnoreEcho;
+    }
+    OverlayFrameSchedule::Enqueue
+}
+
+fn retain_pending_after_apply(
+    applied: OverlayFrameRequest,
+    pending: Option<OverlayFrameRequest>,
+) -> Option<OverlayFrameRequest> {
+    match pending {
+        Some(next) if next.same_geometry(&applied) => None,
+        other => other,
+    }
+}
+
+fn overlay_geometry_close(left: (usize, f64, f64, f64, f64), right: (usize, f64, f64, f64, f64)) -> bool {
+    left.0 == right.0
+        && (left.1 - right.1).abs() < FRAME_EPS
+        && (left.2 - right.2).abs() < FRAME_EPS
+        && (left.3 - right.3).abs() < FRAME_EPS
+        && (left.4 - right.4).abs() < FRAME_EPS
+}
+
+fn overlay_frame_queue() -> &'static Mutex<OverlayFrameQueue> {
+    static QUEUE: OnceLock<Mutex<OverlayFrameQueue>> = OnceLock::new();
+    QUEUE.get_or_init(|| {
+        Mutex::new(OverlayFrameQueue {
+            pending: None,
+            applied: None,
+        })
+    })
 }
 
 fn begin_overlay_frame_request() -> u64 {
@@ -52,7 +123,9 @@ fn begin_overlay_frame_request() -> u64 {
 
 fn invalidate_overlay_frame_requests() {
     OVERLAY_FRAME_EPOCH.fetch_add(1, Ordering::SeqCst);
-    *pending_overlay_frame().lock().unwrap_or_else(|err| err.into_inner()) = None;
+    let mut queue = overlay_frame_queue().lock().unwrap_or_else(|err| err.into_inner());
+    queue.pending = None;
+    queue.applied = None;
 }
 
 fn overlay_frame_request_is_current(epoch: u64) -> bool {
@@ -225,25 +298,40 @@ fn order_overlay_out(window: id) {
 /// Content sizing is deliberately handled by `gpui::Window::resize`; changing it
 /// through AppKit here makes GPUI's synchronous resize callback re-borrow `App`,
 /// which can leave the renderer at a stale viewport and eventually starve events.
-fn schedule_overlay_frame(window: id, x: f64, y: f64, width: f64, height: f64, epoch: u64, retries: u8) {
+fn schedule_overlay_frame(window: id, x: f64, y: f64, width: f64, height: f64) {
     #[cfg(target_os = "macos")]
     {
-        *pending_overlay_frame().lock().unwrap_or_else(|err| err.into_inner()) = Some(OverlayFrameRequest {
+        let next = OverlayFrameRequest {
             window: window as usize,
             x,
             y,
             width,
             height,
-            epoch,
-            retries,
-        });
+            epoch: 0,
+            retries: 0,
+        };
+        let mut queue = overlay_frame_queue().lock().unwrap_or_else(|err| err.into_inner());
+        // `setFrameTopLeftPoint` emits move notifications. GPUI's handler can
+        // call back into `set_overlay_frame_handle` with the same caret frame.
+        // Bumping the epoch for that echo cancels `retry_overlay_frame_after`,
+        // which is the only thing that re-pins the caret edge after GPUI's
+        // deferred resize. Replacing it as a "newer" request also reset
+        // retries and immediately re-queued the drain — a main-queue livelock.
+        if decide_overlay_frame_schedule(&next, queue.pending.as_ref(), queue.applied.as_ref())
+            == OverlayFrameSchedule::IgnoreEcho
+        {
+            return;
+        }
+        let epoch = begin_overlay_frame_request();
+        queue.pending = Some(OverlayFrameRequest { epoch, ..next });
+        drop(queue);
         if !OVERLAY_FRAME_DRAIN_SCHEDULED.swap(true, Ordering::AcqRel) {
             queue_overlay_frame_drain();
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window, x, y, width, height, epoch, retries);
+        let _ = (window, x, y, width, height);
     }
 }
 
@@ -253,43 +341,58 @@ fn queue_overlay_frame_drain() {
 }
 
 #[cfg(target_os = "macos")]
+fn queue_overlay_frame_drain_later() {
+    dispatch::Queue::main().exec_after(OVERLAY_FRAME_RETRY_DELAY, drain_overlay_frame);
+}
+
+#[cfg(target_os = "macos")]
 fn drain_overlay_frame() {
-    let request = pending_overlay_frame()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .take();
-    if let Some(request) = request {
-        if overlay_frame_request_is_current(request.epoch) {
-            apply_overlay_frame(
-                request.window as id,
-                request.x,
-                request.y,
-                request.width,
-                request.height,
-                request.epoch,
-                request.retries,
-            );
+    // Publish `applied` in the same lock that clears `pending`. Otherwise an
+    // echo that arrives after `take` and before `apply` looks like a new
+    // request, bumps the epoch, and cancels the size-retry chain.
+    let request = {
+        let mut queue = overlay_frame_queue().lock().unwrap_or_else(|err| err.into_inner());
+        match queue.pending.take() {
+            Some(request) if overlay_frame_request_is_current(request.epoch) => {
+                queue.applied = Some(request);
+                Some(request)
+            },
+            _ => None,
         }
+    };
+    if let Some(request) = request {
+        apply_overlay_frame(
+            request.window as id,
+            request.x,
+            request.y,
+            request.width,
+            request.height,
+            request.epoch,
+            request.retries,
+        );
+        // A move notification during apply can write the same geometry
+        // back into `pending`. Drop it so we do not treat it as a new
+        // user request and spin the main queue.
+        let mut queue = overlay_frame_queue().lock().unwrap_or_else(|err| err.into_inner());
+        queue.pending = retain_pending_after_apply(request, queue.pending.take());
     }
 
     OVERLAY_FRAME_DRAIN_SCHEDULED.store(false, Ordering::Release);
-    let has_newer = pending_overlay_frame()
+    let has_newer = overlay_frame_queue()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
+        .pending
         .is_some();
     if has_newer
         && OVERLAY_FRAME_DRAIN_SCHEDULED
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     {
-        queue_overlay_frame_drain();
+        // Yield a frame. Immediate re-dispatch from inside the drain is what
+        // livelocked NSApplication when apply kept seeing a "newer" request.
+        queue_overlay_frame_drain_later();
     }
 }
-
-/// One display frame at 60Hz. Long enough for GPUI's foreground executor to
-/// apply `setContentSize`, short enough that a corrected frame is not visible.
-#[cfg(target_os = "macos")]
-const OVERLAY_FRAME_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(16);
 
 #[cfg(target_os = "macos")]
 fn retry_overlay_frame_after(window: id, x: f64, y: f64, width: f64, height: f64, epoch: u64, retries: u8) {
@@ -307,13 +410,19 @@ fn retry_overlay_frame_after(window: id, x: f64, y: f64, width: f64, height: f64
 }
 
 fn frame_top_left_close(frame: NSRect, x: f64, top_left_y: f64) -> bool {
-    const EPS: f64 = 0.5;
-    (frame.origin.x - x).abs() < EPS && (frame.origin.y + frame.size.height - top_left_y).abs() < EPS
+    (frame.origin.x - x).abs() < FRAME_EPS && (frame.origin.y + frame.size.height - top_left_y).abs() < FRAME_EPS
 }
 
 fn frame_size_close(frame: NSRect, width: f64, height: f64) -> bool {
-    const EPS: f64 = 0.5;
-    (frame.size.width - width).abs() < EPS && (frame.size.height - height).abs() < EPS
+    (frame.size.width - width).abs() < FRAME_EPS && (frame.size.height - height).abs() < FRAME_EPS
+}
+
+/// Only the caret edge needs an AppKit write. Size mismatch is GPUI's deferred
+/// `setContentSize` and is waited out by [`overlay_frame_should_retry`]. Writing
+/// `setFrameTopLeftPoint` for a size-only mismatch was the livelock trigger:
+/// the move notification asked us to place the same frame again.
+fn overlay_frame_needs_reposition(top_left_matches: bool) -> bool {
+    !top_left_matches
 }
 
 /// GPUI defers `setContentSize` onto the foreground executor. If we pin the
@@ -333,10 +442,11 @@ fn apply_overlay_frame(window: id, x: f64, y: f64, width: f64, height: f64, epoc
         let current: NSRect = msg_send![window, frame];
         let visible: bool = msg_send![window, isVisible];
         let size_matches = frame_size_close(current, width, height);
-        // Re-pin whenever the caret edge moved, or when GPUI's deferred
-        // resize has not landed yet. AppKit keeps the bottom-left origin, so
-        // a previously-correct top-left is stale after the list shrinks.
-        if !frame_top_left_close(current, x, top_left_y) || !size_matches {
+        // Re-pin only when the caret edge actually moved. After GPUI's
+        // deferred resize lands, the next retry sees a drifted top-left and
+        // pins then — AppKit keeps the bottom-left origin, so the caret
+        // edge is stale once the list shrinks.
+        if overlay_frame_needs_reposition(frame_top_left_close(current, x, top_left_y)) {
             let _: () = msg_send![window, setFrameTopLeftPoint: NSPoint::new(x, top_left_y)];
         }
         if !visible {
@@ -412,10 +522,13 @@ pub fn set_overlay_visible_handle(window: &gpui::Window, visible: bool) {
 }
 
 pub fn set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f64, height: f64) {
-    let epoch = begin_overlay_frame_request();
     if let Some(ns_window) = ns_window_from_gpui(window) {
-        schedule_overlay_frame(ns_window, x, y, width, height, epoch, 0);
+        // Epoch is assigned only if this geometry is actually enqueued.
+        // Echoes of the live frame must not bump it or in-flight size
+        // retries (`retry_overlay_frame_after`) fail the equality check.
+        schedule_overlay_frame(ns_window, x, y, width, height);
     } else {
+        let epoch = begin_overlay_frame_request();
         let title = OVERLAY_WINDOW_TITLE.to_string();
         #[cfg(target_os = "macos")]
         dispatch::Queue::main().exec_async(move || {
@@ -594,9 +707,10 @@ mod tests {
     use cocoa::foundation::{NSPoint, NSRect, NSSize};
 
     use super::{
-        begin_overlay_frame_request, cocoa_screen_to_quartz, frame_size_close, frame_top_left_close,
-        invalidate_overlay_frame_requests, overlay_frame_request_is_current, overlay_frame_should_retry,
-        quartz_y_to_cocoa_frame_y,
+        OverlayFrameRequest, OverlayFrameSchedule, begin_overlay_frame_request, cocoa_screen_to_quartz,
+        decide_overlay_frame_schedule, frame_size_close, frame_top_left_close, invalidate_overlay_frame_requests,
+        overlay_frame_needs_reposition, overlay_frame_request_is_current, overlay_frame_should_retry,
+        overlay_geometry_close, quartz_y_to_cocoa_frame_y, retain_pending_after_apply,
     };
 
     #[test]
@@ -682,5 +796,125 @@ mod tests {
         assert!(overlay_frame_should_retry(false, 3));
         assert!(!overlay_frame_should_retry(false, 4));
         assert!(!overlay_frame_should_retry(true, 0));
+    }
+
+    #[test]
+    fn size_only_mismatch_does_not_write_the_appkit_frame() {
+        // GPUI's deferred resize is waited out. Touching AppKit for a size-only
+        // mismatch is what fed the main-queue livelock.
+        assert!(!overlay_frame_needs_reposition(true));
+        assert!(overlay_frame_needs_reposition(false));
+    }
+
+    fn sample_request(x: f64, y: f64) -> OverlayFrameRequest {
+        OverlayFrameRequest {
+            window: 1,
+            x,
+            y,
+            width: 320.0,
+            height: 140.0,
+            epoch: 7,
+            retries: 0,
+        }
+    }
+
+    #[test]
+    fn identical_geometry_is_not_a_newer_frame_request() {
+        let applied = sample_request(10.0, 20.0);
+        let echo = OverlayFrameRequest {
+            epoch: 8,
+            retries: 0,
+            ..applied
+        };
+        assert!(applied.same_geometry(&echo));
+        assert!(retain_pending_after_apply(applied, Some(echo)).is_none());
+        assert!(overlay_geometry_close(
+            (1, 10.0, 20.0, 320.0, 140.0),
+            (1, 10.2, 20.4, 320.3, 139.8)
+        ));
+        assert!(!overlay_geometry_close(
+            (1, 10.0, 20.0, 320.0, 140.0),
+            (1, 40.0, 20.0, 320.0, 140.0)
+        ));
+    }
+
+    #[test]
+    fn a_moved_caret_still_replaces_the_pending_frame() {
+        let applied = sample_request(10.0, 20.0);
+        let moved = sample_request(10.0, 80.0);
+        assert_eq!(
+            retain_pending_after_apply(applied, Some(moved)).map(|r| r.y),
+            Some(80.0)
+        );
+    }
+
+    #[test]
+    fn echo_of_the_live_applied_frame_does_not_advance_epoch() {
+        // After drain takes `pending`, apply's AppKit write echoes the same
+        // caret frame. That echo must not look like a newer request: retries
+        // keep the applied epoch, and `overlay_frame_request_is_current` is
+        // an equality check.
+        let applied = sample_request(10.0, 20.0);
+        let echo = OverlayFrameRequest {
+            epoch: 0,
+            retries: 0,
+            ..applied
+        };
+        assert_eq!(
+            decide_overlay_frame_schedule(&echo, None, Some(&applied)),
+            OverlayFrameSchedule::IgnoreEcho
+        );
+    }
+
+    #[test]
+    fn echo_matching_pending_geometry_is_ignored() {
+        let pending = sample_request(10.0, 20.0);
+        let echo = OverlayFrameRequest {
+            epoch: pending.epoch + 1,
+            ..pending
+        };
+        assert_eq!(
+            decide_overlay_frame_schedule(&echo, Some(&pending), None),
+            OverlayFrameSchedule::IgnoreEcho
+        );
+    }
+
+    #[test]
+    fn hide_then_reshow_same_geometry_is_a_new_request() {
+        let applied = sample_request(10.0, 20.0);
+        let again = OverlayFrameRequest { epoch: 0, ..applied };
+        // `invalidate_overlay_frame_requests` clears `applied`. Same geometry
+        // is only an echo while that slot still holds the live frame.
+        assert_eq!(
+            decide_overlay_frame_schedule(&again, None, None),
+            OverlayFrameSchedule::Enqueue
+        );
+    }
+
+    #[test]
+    fn echo_of_applied_does_not_clobber_a_newer_pending_frame() {
+        let applied = sample_request(10.0, 20.0);
+        let newer = sample_request(10.0, 80.0);
+        let echo = OverlayFrameRequest { epoch: 0, ..applied };
+        // B already bumped the epoch. The in-flight apply of A can still echo;
+        // treating that as Enqueue would overwrite B, then retain would drop it.
+        assert_eq!(
+            decide_overlay_frame_schedule(&echo, Some(&newer), Some(&applied)),
+            OverlayFrameSchedule::IgnoreEcho
+        );
+        assert_eq!(
+            retain_pending_after_apply(applied, Some(newer)).map(|r| r.y),
+            Some(80.0)
+        );
+    }
+
+    #[test]
+    fn a_moved_caret_is_enqueued_even_while_a_retry_is_in_flight() {
+        let applied = sample_request(10.0, 20.0);
+        let moved = sample_request(10.0, 80.0);
+        assert_eq!(
+            decide_overlay_frame_schedule(&moved, None, Some(&applied)),
+            OverlayFrameSchedule::Enqueue
+        );
     }
 }

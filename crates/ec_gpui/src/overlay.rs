@@ -669,6 +669,16 @@ pub fn park_overlay_handle(handle: &OverlayHandle, cx: &mut App) -> anyhow::Resu
         .map(|_| ())
 }
 
+fn requested_frames_close(previous: Option<(f32, f32, f32, f32)>, next: (f32, f32, f32, f32)) -> bool {
+    const EPS: f32 = 0.5;
+    previous.is_some_and(|previous| {
+        (previous.0 - next.0).abs() < EPS
+            && (previous.1 - next.1).abs() < EPS
+            && (previous.2 - next.2).abs() < EPS
+            && (previous.3 - next.3).abs() < EPS
+    })
+}
+
 pub fn position_overlay(
     origin: Point<Pixels>,
     size: Size<Pixels>,
@@ -696,7 +706,7 @@ pub fn position_overlay(
                 f32::from(size.width),
                 f32::from(size.height),
             );
-            if list.last_requested_frame != Some(frame) {
+            if !requested_frames_close(list.last_requested_frame, frame) {
                 // Size is included so a shorter list still re-pins the caret
                 // edge after GPUI's deferred AppKit resize.
                 set_overlay_frame_handle(window, frame.0 as f64, frame.1 as f64, frame.2 as f64, frame.3 as f64);
