@@ -4,8 +4,8 @@
 use std::borrow::Cow;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::ptr;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use core_foundation::array::{CFArray, CFArrayRef};
@@ -17,11 +17,12 @@ use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::{CFURL, CFURLRef};
 use core_foundation::{declare_TCFType, impl_TCFType};
 use fig_settings::state;
-use fig_util::Terminal;
 use fig_util::consts::CLI_BINARY_NAME;
 use fig_util::directories::home_dir;
 use fig_util::macos::BUNDLE_CONTENTS_HELPERS_PATH;
 use macos_utils::applications;
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
 use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};
 use serde::{Deserialize, Serialize};
@@ -79,6 +80,65 @@ unsafe extern "C" {
 
 pub struct InputMethod {
     pub bundle_path: PathBuf,
+}
+
+/// SHA-256 of the IME executable we last launched. Compared with the on-disk
+/// binary to decide whether an already-running process must be replaced.
+const LAUNCHED_BINARY_HASH_KEY: &str = "input-method.launched-binary-sha256";
+
+fn sha256_hex(path: &Path) -> Option<String> {
+    use std::fmt::Write;
+
+    use sha2::{Digest, Sha256};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
+}
+
+/// `kill(pid, 0)`: liveness without touching AppKit, so a wait loop costs a
+/// syscall per process instead of a run through every running application.
+fn process_is_alive(pid: Pid) -> bool {
+    signal::kill(pid, None).is_ok()
+}
+
+/// True if every one of `pids` is gone before `timeout` elapses.
+fn wait_for_exit(pids: &[Pid], timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !pids.iter().copied().any(process_is_alive) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// `launched` is the hash we recorded when we last started the IME; `disk` is
+/// the hash of the bundle we want to run. Missing tracker state is *not* stale:
+/// killing on that would undo `install.sh` when it already decided the bytes
+/// match. The caller pins the hash instead. Sparkle after this tracker has
+/// been written still sees `Some(old) != Some(new)` and replaces.
+fn process_is_stale(launched: Option<&str>, disk: Option<&str>) -> bool {
+    match (launched, disk) {
+        (Some(a), Some(b)) => a != b,
+        _ => false,
+    }
 }
 
 use thiserror::Error;
@@ -352,23 +412,102 @@ impl InputMethod {
         Ok(bundle_identifier.to_string())
     }
 
+    /// Start the input method if it is down, or replace it when the bundle on
+    /// disk is no longer the binary we launched. A current helper is left alone:
+    /// open Otty / Ghostty / Kitty windows hold IMK connections to that process
+    /// and macOS never re-attaches them to a replacement.
     pub fn launch(&self) {
-        debug!("Launching input method...");
+        self.ensure_current_binary_running(&self.bundle_path);
+    }
 
-        if let Some(bundle_path) = self.bundle_path.to_str() {
-            applications::launch_application(bundle_path);
+    fn running_pids(&self) -> Vec<Pid> {
+        let Ok(bundle_id) = self.bundle_id() else {
+            return Vec::new();
+        };
+        applications::running_application_pids(&bundle_id)
+            .into_iter()
+            .map(Pid::from_raw)
+            .collect()
+    }
+
+    fn is_running(&self) -> bool {
+        !self.running_pids().is_empty()
+    }
+
+    fn executable_path(&self) -> PathBuf {
+        self.bundle_path.join("Contents/MacOS/fig_input_method")
+    }
+
+    fn on_disk_binary_hash(&self) -> Option<String> {
+        sha256_hex(&self.executable_path())
+    }
+
+    fn launched_binary_hash() -> Option<String> {
+        state::get_string(LAUNCHED_BINARY_HASH_KEY).ok().flatten()
+    }
+
+    fn record_launched_binary(&self) {
+        if let Some(hash) = self.on_disk_binary_hash() {
+            state::set_value(LAUNCHED_BINARY_HASH_KEY, hash).ok();
         }
     }
 
-    pub fn terminate(&self) -> Result<(), InputMethodError> {
-        debug!("Terminating input method...");
+    /// The process on the machine is from a different binary than the one in
+    /// this bundle. A missing tracker is not stale — see [`process_is_stale`].
+    fn running_process_is_stale(&self) -> bool {
+        process_is_stale(
+            Self::launched_binary_hash().as_deref(),
+            self.on_disk_binary_hash().as_deref(),
+        )
+    }
 
-        let bundle_id = self.bundle_id()?;
-        applications::running_applications_matching(&bundle_id)
-            .iter()
-            .for_each(|app| app.terminate());
+    /// SIGTERM these processes, then SIGKILL whatever is still alive. Returns
+    /// only once they are all gone, because `open` on a bundle whose process is
+    /// still up just activates that process — launching a replacement before
+    /// then would leave the stale helper serving every terminal while we record
+    /// the new binary's hash against it.
+    fn stop(pids: &[Pid]) {
+        for &pid in pids {
+            signal::kill(pid, Signal::SIGTERM).ok();
+        }
+        if wait_for_exit(pids, Duration::from_millis(800)) {
+            return;
+        }
 
-        Ok(())
+        info!("Input method ignored SIGTERM; sending SIGKILL");
+        for &pid in pids {
+            signal::kill(pid, Signal::SIGKILL).ok();
+        }
+        wait_for_exit(pids, Duration::from_millis(400));
+    }
+
+    /// Caller must have established that none of our processes are running, so
+    /// that whatever comes up is this binary. The hash is recorded here rather
+    /// than after waiting for the process to appear: a launch slower than the
+    /// wait would leave the old hash on record, and the next install would then
+    /// read a perfectly current helper as stale and kill it.
+    fn start_from(&self, bundle: &Path) {
+        debug!("Launching input method...");
+        if let Some(path) = bundle.to_str() {
+            applications::launch_application(path);
+        }
+        self.record_launched_binary();
+    }
+
+    fn ensure_current_binary_running(&self, launch_bundle: &Path) {
+        let running = self.running_pids();
+
+        if running.is_empty() {
+            self.start_from(launch_bundle);
+        } else if self.running_process_is_stale() {
+            info!("Input method binary changed; replacing the running process");
+            Self::stop(&running);
+            self.start_from(launch_bundle);
+        } else if Self::launched_binary_hash().is_none() {
+            // A helper that predates this tracker. Pin its hash so the next
+            // build is recognised as a change instead of staying invisible.
+            self.record_launched_binary();
+        }
     }
 }
 
@@ -411,8 +550,7 @@ impl Integration for InputMethod {
         }
 
         // check that the input method is running (NSRunning application)
-        let bundle_id = self.bundle_id()?;
-        if applications::running_applications_matching(bundle_id.as_str()).is_empty() {
+        if !self.is_running() {
             return Err(InputMethodError::NotRunning.into());
         }
 
@@ -438,14 +576,15 @@ impl Integration for InputMethod {
             let err = String::from_utf8_lossy(&out.stdout);
             let error = serde_json::from_str::<InputMethodError>(&err).unwrap_or(InputMethodError::UnknownError);
 
-            // TISEnableInputSource silently fails when called from a CLI process without an
-            // NSApplication run loop, so we fall back to patching HIToolbox directly in install().
-            // If TIS still reports not-enabled but our bundle ID is already in HIToolbox's
-            // AppleSelectedInputSources, treat the IME as enabled so Ghostty/Kitty/etc. work.
+            // TISEnableInputSource silently fails from a CLI process with no
+            // NSApplication, so install() writes HIToolbox. Selected-only is
+            // not enough: bounce left us in AppleSelectedInputSources and out
+            // of AppleEnabledInputSources, and new Otty windows then got no
+            // IMK connection.
             if matches!(error, InputMethodError::NotEnabled | InputMethodError::NotSelected) {
                 if let Ok(bundle_id) = self.bundle_id() {
-                    if is_bundle_in_hitoolbox_sources(&bundle_id) {
-                        info!("TIS reports not-enabled but bundle is in HIToolbox sources; treating as enabled");
+                    if is_bundle_in_hitoolbox_enabled(&bundle_id) {
+                        info!("TIS reports not-enabled but bundle is in AppleEnabledInputSources; treating as enabled");
                         self.set_is_enabled(true);
                         return Ok(());
                     }
@@ -485,32 +624,16 @@ impl Integration for InputMethod {
                 InputMethod::register(&destination)?;
             }
 
-            // Launch (or restart) the IME so it self-registers with TIS on startup.
-            // We always restart when the symlink changed. When the symlink was already
-            // correct we still need to restart if TIS doesn't recognise the bundle ID
-            // yet (e.g. after a rename where the bundle ID changed).
-            let bundle_id = self.bundle_id()?;
-            let ime_running = !applications::running_applications_matching(&bundle_id).is_empty();
-            let tis_recognises = run_on_main(|| self.input_source().map(|_| ())).is_ok();
+            // Restart only when the on-disk binary is not what we last launched.
+            // TIS recognition is not a reason to kill: a CLI process has no
+            // NSApplication, so that check is almost always false and used to
+            // pkill a healthy IME on every `ec integrations install`.
+            self.ensure_current_binary_running(&destination);
 
-            if !ime_running || needs_symlink || !tis_recognises {
-                debug!("Launching/restarting Input Method for TIS registration...");
-                // Kill any stale IME process first
-                Command::new("pkill")
-                    .args(["-f", "EasyCompleteInputMethod"])
-                    .output()
-                    .ok();
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                if let Some(dest) = destination.to_str() {
-                    Command::new("open").arg(dest).spawn().ok();
-                }
-                // Wait for the IME to start and self-register with TIS
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-
-            // Wait up to 10s for TIS to recognise the registered source.
+            // The IME self-registers ~500 ms after NSApplication starts. Poll
+            // briefly; do not sit for 13 s when the source is already there.
             let mut tis_ready = false;
-            for attempt in 0..10 {
+            for attempt in 0..8 {
                 let found = run_on_main(|| self.input_source().map(|_| ()));
                 match found {
                     Ok(()) => {
@@ -519,7 +642,7 @@ impl Integration for InputMethod {
                     },
                     Err(e) => {
                         debug!("Waiting for TIS, attempt {}: {}", attempt + 1, e);
-                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        tokio::time::sleep(Duration::from_millis(250)).await;
                     },
                 }
             }
@@ -534,20 +657,22 @@ impl Integration for InputMethod {
                     Ok(())
                 });
 
-                // If the TIS API didn't stick (common when called from a CLI process
-                // without an NSApplication run loop), fall back to directly writing
-                // the new bundle ID into HIToolbox's AppleSelectedInputSources list.
-                let still_disabled = run_on_main(|| {
-                    self.input_source()
-                        .map(|s| !s.is_enabled().unwrap_or(false))
-                        .unwrap_or(true)
-                });
-                if still_disabled {
-                    if let Ok(bundle_id) = self.bundle_id() {
-                        info!("TISEnableInputSource did not stick; patching HIToolbox directly for {bundle_id}");
+                // TIS from a CLI process often does not stick. Also patch when
+                // the palette is selected but missing from AppleEnabledInputSources
+                // — that is the bounce leftover that hid Otty's list.
+                if let Ok(bundle_id) = self.bundle_id() {
+                    let still_disabled = run_on_main(|| {
+                        self.input_source()
+                            .map(|s| !s.is_enabled().unwrap_or(false))
+                            .unwrap_or(true)
+                    });
+                    let missing_enabled = !is_bundle_in_hitoolbox_enabled(&bundle_id);
+                    if still_disabled || missing_enabled {
+                        info!(
+                            still_disabled,
+                            missing_enabled, "patching HIToolbox enabled+selected lists for {bundle_id}"
+                        );
                         force_enable_in_hitoolbox(&bundle_id);
-                        // Treat the HIToolbox patch as a successful enable so the desktop
-                        // app doesn't block autocomplete for terminals that need the IME.
                         self.set_is_enabled(true);
                     }
                 }
@@ -562,29 +687,12 @@ impl Integration for InputMethod {
                         },
                         Err(e) => {
                             debug!("select() attempt {}: {e}", attempt + 1);
-                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            tokio::time::sleep(Duration::from_millis(500)).await;
                         },
                     }
                 }
             } else {
                 info!("TIS did not recognise the input source yet; IME will register on next launch");
-            }
-        }
-
-        // Store PIDs of all relevant terminal emulators (input method will not work until these
-        // processes are restarted)
-        for app in applications::running_applications().iter() {
-            if let Some(bundle_id) = &app.bundle_identifier {
-                match Terminal::from_bundle_id(bundle_id) {
-                    Some(terminal) if terminal.supports_macos_input_method() => {
-                        state::set_value(
-                            self.terminal_instance_requires_restart_key(&terminal, app.process_identifier),
-                            true,
-                        )
-                        .ok();
-                    },
-                    _ => (),
-                }
             }
         }
 
@@ -636,25 +744,9 @@ impl Integration for InputMethod {
         "Input Method".into()
     }
 
-    async fn migrate(&self) -> Result<()> {
-        // Check the symlink, if it points at the wrong location update it
-        let destination = self.target_bundle_path()?;
-        let symlink = fs::read_link(&destination).await;
-
-        match symlink {
-            Ok(symlink) => {
-                // does it point to the correct location
-                if symlink != self.bundle_path {
-                    fs::remove_file(&destination).await?;
-                    fs::symlink(&self.bundle_path, destination).await?;
-                }
-            },
-            Err(err) if err.kind() == ErrorKind::NotFound => {},
-            Err(err) => return Err(err.into()),
-        }
-
-        Ok(())
-    }
+    // No `migrate`: `install` already repoints a stale symlink and re-registers
+    // it with TIS, and it runs in the same post-install pass. Doing both raced
+    // two tasks on the same path under ~/Library/Input Methods.
 }
 
 impl InputMethod {
@@ -681,29 +773,6 @@ impl InputMethod {
         Ok(())
     }
 
-    fn terminal_instance_requires_restart_key(&self, terminal: &Terminal, process_identifier: i32) -> String {
-        let input_method_bundle_id = self.bundle_id().ok().unwrap_or_else(|| "unknown-bundle-id".into());
-        format!(
-            "input-method={}.{}.process[{}]-requires-restart",
-            input_method_bundle_id,
-            terminal.internal_id(),
-            process_identifier
-        )
-    }
-
-    pub fn enabled_for_terminal_instance(&self, terminal: &Terminal, process_identifier: i32) -> bool {
-        let key = self.terminal_instance_requires_restart_key(terminal, process_identifier);
-        let requires_restart = state::get_bool_or(&key, false);
-
-        let enabled = !requires_restart;
-
-        if enabled {
-            state::remove_value(key).ok();
-        }
-
-        enabled
-    }
-
     fn input_method_is_enabled_key(&self) -> String {
         let input_method_bundle_id = self.bundle_id().ok().unwrap_or_else(|| "unknown-bundle-id".into());
         format!("input-method={input_method_bundle_id}.enabled")
@@ -720,68 +789,27 @@ impl InputMethod {
     }
 }
 
-/// Check whether `bundle_id` appears in HIToolbox's `AppleSelectedInputSources` plist.
-/// Used as a fallback when the TIS API reports not-enabled due to missing run loop.
-fn is_bundle_in_hitoolbox_sources(bundle_id: &str) -> bool {
-    let output = Command::new("defaults")
-        .args(["read", "com.apple.HIToolbox", "AppleSelectedInputSources"])
-        .output();
-    match output {
-        Ok(out) if out.status.success() => {
-            let text = String::from_utf8_lossy(&out.stdout);
-            text.contains(bundle_id)
-        },
-        _ => false,
-    }
+/// Whether `bundle_id` is in HIToolbox's `AppleEnabledInputSources`.
+/// Selected-only is not a substitute: bounce left the palette selected
+/// and disabled, and new IME terminals then attached to nothing.
+fn is_bundle_in_hitoolbox_enabled(bundle_id: &str) -> bool {
+    ec_hitoolbox::is_palette_enabled(bundle_id)
 }
 
-/// Directly patch `com.apple.HIToolbox`'s `AppleSelectedInputSources` to add
-/// `bundle_id` as a non-keyboard input method.  This is a fallback for when
-/// `TISEnableInputSource` silently fails because the calling process has no
-/// NSApplication run loop (e.g. the CLI installer).
+/// Writes `bundle_id` into both HIToolbox palette lists. `TISEnableInputSource`
+/// from a CLI process has no run loop and does not stick; writing only
+/// `AppleSelectedInputSources` is what left Otty without a caret after bounce.
+///
+/// Key-scoped, and shared with the IME through `ec_hitoolbox`. `install.sh`
+/// runs this and an IME launch in the same pass, and the whole-domain
+/// `defaults export`/`import` this replaced was a read-modify-write over every
+/// key in the domain: whichever of the two finished second dropped the other's
+/// entry.
 fn force_enable_in_hitoolbox(bundle_id: &str) {
-    // We use Python's plistlib so we don't need to link against any extra
-    // macOS frameworks.  The script is intentionally self-contained.
-    // Build the script with the bundle_id substituted as a plain string literal.
-    // Derive the vendor prefix so we can remove stale entries from past installs
-    // (e.g. "dev.emmmm.autocomplete-v5.inputmethod" when renaming to
-    // "dev.emmmm.easy-complete.inputmethod").  We extract everything up to the
-    // second-to-last dot-separated segment.
-    let prefix = bundle_id
-        .rsplit_once('.')
-        .map_or("", |(head, _)| head)
-        .rsplit_once('.')
-        .map_or("", |(head, _)| head);
-
-    let script = [
-        "import subprocess, plistlib, sys",
-        "domain = 'com.apple.HIToolbox'",
-        "key    = 'AppleSelectedInputSources'",
-        &format!("new_id = '{bundle_id}'"),
-        &format!("prefix = '{prefix}'"),
-        "kind   = 'Non Keyboard Input Method'",
-        "proc = subprocess.run(['defaults', 'export', domain, '-'], capture_output=True)",
-        "if proc.returncode != 0: sys.exit(0)",
-        "data = plistlib.loads(proc.stdout)",
-        "sources = data.get(key, [])",
-        // Remove any stale entry with the same vendor prefix (covers renames)
-        // and remove the exact new_id to avoid duplicates before re-adding.
-        "sources = [s for s in sources if not (s.get('Bundle ID', '').startswith(prefix) and s.get('InputSourceKind') == kind and s.get('Bundle ID') != new_id)]",
-        "sources = [s for s in sources if s.get('Bundle ID') != new_id]",
-        "sources.append({'Bundle ID': new_id, 'InputSourceKind': kind})",
-        "data[key] = sources",
-        "proc2 = subprocess.run(['defaults', 'import', domain, '-'], input=plistlib.dumps(data))",
-        "sys.exit(proc2.returncode)",
-    ]
-    .join("\n");
-
-    match Command::new("python3").arg("-c").arg(&script).output() {
-        Ok(out) if out.status.success() => info!("HIToolbox patched successfully for {bundle_id}"),
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            info!("HIToolbox patch failed: {stderr}");
-        },
-        Err(e) => info!("Could not run python3 for HIToolbox patch: {e}"),
+    if ec_hitoolbox::ensure_palette_enabled(bundle_id) {
+        info!("HIToolbox patched successfully for {bundle_id}");
+    } else {
+        info!("HIToolbox patch failed for {bundle_id}");
     }
 }
 
@@ -945,6 +973,51 @@ mod tests {
         for source in sources.iter() {
             println!("{source:?}");
         }
+    }
+
+    /// The palette write is shared with the IME (`ec_hitoolbox`) and goes
+    /// through CFPreferences. A `python3` spawn here would be both a dependency
+    /// on Command Line Tools and a whole-domain read-modify-write, which raced
+    /// the IME's own write during an install and dropped one of the two entries.
+    #[test]
+    fn the_hitoolbox_patch_is_shared_and_spawns_nothing() {
+        // Comments stripped: this is about the code, not about prose that names
+        // the interpreter being avoided.
+        let prod = include_str!("mod.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!prod.contains("python3"));
+        assert!(!prod.contains("plistlib"));
+        assert!(prod.contains("ec_hitoolbox::ensure_palette_enabled"));
+        // Reading the enabled list rather than the selected one is what stops a
+        // selected-and-disabled leftover from passing for installed.
+        assert!(prod.contains("ec_hitoolbox::is_palette_enabled"));
+    }
+
+    #[test]
+    fn process_is_stale_only_when_the_hash_changed() {
+        assert!(!process_is_stale(None, None));
+        assert!(!process_is_stale(Some("aaa"), None));
+        assert!(!process_is_stale(None, Some("aaa")));
+        assert!(!process_is_stale(Some("aaa"), Some("aaa")));
+        assert!(process_is_stale(Some("aaa"), Some("bbb")));
+    }
+
+    #[test]
+    fn sha256_hex_is_stable_for_the_same_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bin");
+        std::fs::write(&path, b"ime-binary").unwrap();
+        let first = sha256_hex(&path).unwrap();
+        let second = sha256_hex(&path).unwrap();
+        assert_eq!(first, second);
+        std::fs::write(&path, b"ime-binary-v2").unwrap();
+        assert_ne!(first, sha256_hex(&path).unwrap());
     }
 
     #[test]

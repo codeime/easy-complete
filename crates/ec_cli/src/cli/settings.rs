@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use anstream::println;
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use eyre::{Result, WrapErr, bail};
 use fig_ipc::local::open_ui_element;
 use fig_os_shim::Os;
@@ -14,24 +14,14 @@ use serde_json::json;
 use super::OutputFormat;
 use crate::cli::Cli;
 use crate::util::desktop::{LaunchArgs, launch_fig_desktop};
-use crate::util::{CliContext, app_not_running_message, qchat_path};
+use crate::util::{CliContext, app_not_running_message};
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum SettingsSubcommands {
     /// Open the settings file
     Open,
-    /// List settings
-    List {
-        /// Show all available settings
-        #[arg(long)]
-        all: bool,
-        /// Format of the output
-        #[arg(long, short, value_enum, default_value_t)]
-        format: OutputFormat,
-    },
     /// List configured settings
-    #[command(hide = true)]
-    All {
+    List {
         /// Format of the output
         #[arg(long, short, value_enum, default_value_t)]
         format: OutputFormat,
@@ -78,39 +68,24 @@ impl SettingsArgs {
                     bail!("The EDITOR environment variable is not set")
                 }
             },
-            Some(SettingsSubcommands::List { all, format }) => {
-                let mut args = vec!["settings".to_string(), "list".to_string()];
-                if all {
-                    args.push("--all".to_string());
+            Some(SettingsSubcommands::List { format }) => {
+                let settings = fig_settings::OldSettings::load()?;
+                let map = &*settings.map();
+                match format {
+                    OutputFormat::Plain => {
+                        for (key, value) in map {
+                            // A string setting prints bare, so the output can be
+                            // fed back to `ec settings <key> <value>` as-is.
+                            match value.as_str() {
+                                Some(value) => println!("{key} = {value}"),
+                                None => println!("{key} = {value}"),
+                            }
+                        }
+                    },
+                    OutputFormat::Json => println!("{}", serde_json::to_string(map)?),
+                    OutputFormat::JsonPretty => println!("{}", serde_json::to_string_pretty(map)?),
                 }
-                if format != OutputFormat::default() {
-                    args.push("--format".to_string());
-                    args.push(format.to_possible_value().unwrap().get_name().to_string());
-                }
-
-                let status = tokio::process::Command::new(qchat_path()?).args(&args).status().await?;
-
-                Ok(if status.success() {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::FAILURE
-                })
-            },
-            Some(SettingsSubcommands::All { format }) => {
-                let mut args = vec!["settings".to_string(), "list".to_string()];
-
-                if format != OutputFormat::default() {
-                    args.push("--format".to_string());
-                    args.push(format.to_possible_value().unwrap().get_name().to_string());
-                }
-
-                let status = tokio::process::Command::new(qchat_path()?).args(&args).status().await?;
-
-                Ok(if status.success() {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::FAILURE
-                })
+                Ok(ExitCode::SUCCESS)
             },
             None => match &self.key {
                 Some(key) => match (&self.value, self.delete) {

@@ -171,6 +171,16 @@ const THEMES: &[ThemeSwatch] = &[
         accent: 0x388bfd,
     },
     ThemeSwatch {
+        id: "claude-dark",
+        label_en: "Claude Dark",
+        label_zh: "Claude Dark",
+        appearance: ThemeAppearance::Dark,
+        bg: 0x262624,
+        text: 0xf0eee6,
+        selection: 0x3d3d3a,
+        accent: 0xcc785c,
+    },
+    ThemeSwatch {
         id: "nord",
         label_en: "Nord",
         label_zh: "Nord",
@@ -1999,7 +2009,36 @@ mod tests {
         );
         assert_eq!(
             ids(ThemeAppearance::Dark),
-            ["dark", "github-dark", "nord", "gruvbox-dark", "one-dark", "tokyo-night"]
+            [
+                "dark",
+                "github-dark",
+                "claude-dark",
+                "nord",
+                "gruvbox-dark",
+                "one-dark",
+                "tokyo-night"
+            ]
         );
+    }
+
+    /// A swatch whose id has no theme file falls back to [`OverlayTheme::dark`]
+    /// without a word (`load_named_theme` swallows the miss), so the picker would
+    /// silently offer the wrong colors.
+    #[test]
+    fn every_offered_theme_has_a_file_or_is_built_in() {
+        for theme in THEMES {
+            if matches!(theme.id, "system" | "light" | "dark") {
+                continue;
+            }
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../themes")
+                .join(format!("{}.json", theme.id));
+            assert!(
+                path.exists(),
+                "{} is offered but themes/{}.json is missing",
+                theme.id,
+                theme.id
+            );
+        }
     }
 }

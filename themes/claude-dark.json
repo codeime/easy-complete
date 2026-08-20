@@ -1,0 +1,29 @@
+{
+    "author": {
+        "name": "Claude Theme",
+        "github": "codeime"
+    },
+    "version": "1.0",
+    "theme": {
+        "backgroundColor": "#262624",
+        "textColor": "#f0eee6",
+        "matchBackgroundColor": "#4a3229",
+        "selection": {
+            "backgroundColor": "#3d3d3a",
+            "textColor": "#f0eee6",
+            "matchBackgroundColor": "#a85c40"
+        },
+        "description": {
+            "textColor": "#a3a099",
+            "borderColor": "#363633"
+        }
+    },
+    "accent0": "#e08c78",
+    "accent1": "#f0a184",
+    "accent2": "#d4a94f",
+    "accent3": "#6cbf8a",
+    "accent4": "#7aa8d9",
+    "accent5": "#6cb0f0",
+    "accent6": "#a99cf0",
+    "accent7": "#cc785c"
+}

@@ -1,0 +1,18 @@
+[package]
+name = "ec_hitoolbox"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+publish.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# Deliberately a leaf: `fig_input_method` links this and must not pull the
+# desktop stack (see AGENTS.md). Everything here is CoreFoundation, which that
+# process already links for TIS.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation.workspace = true
+core-foundation-sys.workspace = true

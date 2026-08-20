@@ -23,22 +23,40 @@ serde.workspace = true
 toml.workspace = true
 apple-bundle = "0.1.4"
 
+# Kept deliberately small. This process exists to answer one caret query per
+# keystroke and must stay resident for as long as a terminal holds an IMK
+# connection to it, so it links no part of the desktop stack: `fig_ipc`,
+# `fig_proto`, `fig_log`, `fig_util` and `macos-utils` between them pull tokio,
+# prost, tracing-subscriber, regex and sysinfo. The pieces actually needed —
+# the socket path, the caret frame, the terminal list and a log file — are
+# reimplemented here and pinned to their originals by tests in `dev-dependencies`.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = { workspace = true }
-fig_ipc.workspace = true
-fig_log.workspace = true
-fig_proto.workspace = true
-fig_util.workspace = true
-macos-utils = { path = "../macos-utils" }
+# A leaf crate over CoreFoundation, which this process already links for TIS.
+# Shared with `fig_integrations` so the HIToolbox palette write has one
+# implementation: an install runs both, and two whole-domain rewrites raced.
+ec_hitoolbox = { path = "../ec_hitoolbox" }
+libc.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "NSApplication",
     "NSResponder",
 ] }
-objc2-foundation = { workspace = true, features = ["NSThread"] }
+objc2-foundation = { workspace = true, features = [
+    "NSBundle",
+    "NSDistributedNotificationCenter",
+    "NSGeometry",
+    "NSNotification",
+    "NSObject",
+    "NSRange",
+    "NSString",
+    "NSThread",
+] }
 objc2-input-method-kit = { workspace = true, features = [
     "IMKServer",
     "IMKInputController",
 ] }
-tokio.workspace = true
-tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+fig_proto.workspace = true
+fig_util.workspace = true

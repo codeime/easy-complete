@@ -5,9 +5,7 @@ use fig_integrations::Integration;
 use fig_integrations::shell::ShellExt;
 use fig_integrations::ssh::SshIntegration;
 use fig_os_shim::{Context, Env};
-use fig_util::{
-    CHAT_BINARY_NAME, CLI_BINARY_NAME, OLD_CLI_BINARY_NAMES, OLD_PTY_BINARY_NAMES, PTY_BINARY_NAME, Shell, directories,
-};
+use fig_util::{CLI_BINARY_NAME, OLD_CLI_BINARY_NAMES, OLD_PTY_BINARY_NAMES, PTY_BINARY_NAME, Shell, directories};
 
 use crate::Error;
 
@@ -63,7 +61,7 @@ pub async fn uninstall(components: InstallComponents, ctx: Arc<Context>) -> Resu
         // let folders = [directories::home_local_bin()?, Path::new("/usr/local/bin").into()];
         let folders = [directories::home_local_bin()?];
 
-        let mut all_binary_names = vec![CLI_BINARY_NAME, CHAT_BINARY_NAME, PTY_BINARY_NAME];
+        let mut all_binary_names = vec![CLI_BINARY_NAME, PTY_BINARY_NAME];
         all_binary_names.extend(OLD_CLI_BINARY_NAMES);
         all_binary_names.extend(OLD_PTY_BINARY_NAMES);
 

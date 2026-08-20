@@ -17,6 +17,36 @@ info()  { echo -e "${GREEN}==>${NC} $*"; }
 warn()  { echo -e "${YELLOW}==>${NC} $*"; }
 error() { echo -e "${RED}==>${NC} $*" >&2; }
 
+file_sha() {
+  local f="$1"
+  if [ -f "$f" ]; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  fi
+}
+
+process_running() {
+  pgrep -x "$1" >/dev/null 2>&1
+}
+
+# SIGTERM and wait for the process to actually be gone, so the bundle is only
+# replaced (and `open` only called) once nothing is holding the old one.
+stop_process() {
+  local name="$1"
+  process_running "${name}" || return 0
+
+  pkill -x "${name}" 2>/dev/null || true
+  local waited=0
+  while [ "${waited}" -lt 20 ]; do
+    process_running "${name}" || return 0
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+
+  warn "${name} did not exit; forcing it."
+  pkill -9 -x "${name}" 2>/dev/null || true
+  sleep 0.2
+}
+
 # ── 1. Build & assemble the .app ──────────────────────────────────────────────
 # Shared with CI (see .github/workflows/release.yml) so the bundle is assembled
 # identically whether installed locally or packaged into a release DMG.
@@ -24,31 +54,71 @@ error() { echo -e "${RED}==>${NC} $*" >&2; }
 
 # ── 3. Install to /Applications ───────────────────────────────────────────────
 info "Installing to /Applications/..."
-# If already running, quit first
-pkill -x "${APP_NAME}" 2>/dev/null || true
-sleep 0.5
 
-rm -rf "$APP_BUNDLE"
+DESKTOP_BIN="Contents/MacOS/${APP_NAME}"
+IME_BIN="Contents/Helpers/EasyCompleteInputMethod.app/Contents/MacOS/fig_input_method"
+
+for required in "${DESKTOP_BIN}" "${IME_BIN}"; do
+  if [ ! -f "${STAGING_BUNDLE}/${required}" ]; then
+    error "Build produced no ${required}. Refusing to install over the current bundle."
+    exit 1
+  fi
+done
+
+desktop_changed=1
+if [ "$(file_sha "${APP_BUNDLE}/${DESKTOP_BIN}")" = "$(file_sha "${STAGING_BUNDLE}/${DESKTOP_BIN}")" ]; then
+  desktop_changed=0
+fi
+ime_changed=1
+if [ "$(file_sha "${APP_BUNDLE}/${IME_BIN}")" = "$(file_sha "${STAGING_BUNDLE}/${IME_BIN}")" ]; then
+  ime_changed=0
+fi
+
+# The desktop app always goes down, whether or not its binary changed: the
+# bundle below is wiped and re-dittoed, and Contents/Resources/specs-ir is read
+# lazily at completion time, so replacing it under a live process silently
+# breaks completions until the next restart. It has no clients to preserve and
+# is relaunched at the end of this script.
+stop_process "${APP_NAME}"
+
+# The IME is the one process worth keeping alive: open Otty / Ghostty / Kitty
+# windows hold IMK connections to it and macOS never re-attaches them to a
+# replacement. Same bytes → leave it running.
+keep_ime=0
+if [ "${ime_changed}" -eq 1 ]; then
+  stop_process fig_input_method
+elif process_running fig_input_method; then
+  keep_ime=1
+fi
+
 # Preserve framework symlinks and bundle metadata. On macOS, `cp -r` follows
 # symlinks while traversing and expands Sparkle.framework's versioned layout,
 # which makes the installed app fail `codesign --verify --deep --strict`.
-ditto "$STAGING_BUNDLE" "$APP_BUNDLE"
+# When the IME stays up, keep Contents/Helpers where it is — deleting that
+# bundle out from under the process drops its IMK clients. Everything else
+# still has to go, because `ditto` merges into the destination and would
+# otherwise leave files from the previous build behind.
+if [ "${keep_ime}" -eq 1 ] && [ -d "${APP_BUNDLE}/Contents" ]; then
+  find "${APP_BUNDLE}/Contents" -mindepth 1 -maxdepth 1 ! -name Helpers -print0 | xargs -0 rm -rf
+else
+  rm -rf "${APP_BUNDLE}"
+fi
+ditto "${STAGING_BUNDLE}" "${APP_BUNDLE}"
 
-# Reset the stale Accessibility grant. The rebuilt binary carries a new code
-# signature, so macOS invalidates the previous grant but leaves a dead entry that
-# still points at the old binary — re-ticking the box in System Settings then has
-# no effect. Clearing it forces the fresh prompt issued in step 8 to take hold.
-# Without Accessibility the app never receives window-focus events, so the
-# autocomplete popup can never position itself and simply never appears.
-info "Resetting stale Accessibility permission..."
-tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null || true
+# A new desktop binary carries a new ad-hoc signature, which invalidates the
+# previous Accessibility grant. Same binary → leave the grant alone.
+accessibility_reset=0
+if [ "${desktop_changed}" -eq 1 ]; then
+  info "Resetting stale Accessibility permission..."
+  tccutil reset Accessibility "${BUNDLE_ID}" 2>/dev/null || true
+  accessibility_reset=1
+fi
 
 # ── 4. Symlink CLI binaries to ~/.local/bin ───────────────────────────────────
 info "Linking binaries to ${LOCAL_BIN}..."
-mkdir -p "$LOCAL_BIN"
+mkdir -p "${LOCAL_BIN}"
 ln -sf "/Applications/${APP_DISPLAY}.app/Contents/MacOS/ec"     "${LOCAL_BIN}/ec"
 ln -sf "/Applications/${APP_DISPLAY}.app/Contents/MacOS/ecterm" "${LOCAL_BIN}/ecterm"
-
 
 # ── 6. Shell integration ───────────────────────────────────────────────────────
 info "Installing shell integration..."
@@ -60,35 +130,29 @@ ec integrations install --silent dotfiles 2>/dev/null || {
 
 # ── 7. Input Method ────────────────────────────────────────────────────────────
 info "Registering Input Method..."
-# Kill any stale IME process so the integration installer can launch it fresh
-# from the correct ~/Library/Input Methods/ symlink path (required for TIS registration).
-pkill -f "fig_input_method" 2>/dev/null || true
-pkill -f "EasyCompleteInputMethod" 2>/dev/null || true
-sleep 1
-
-ec integrations install input-method 2>/dev/null || {
+# `ec integrations install input-method` launches the IME when it is down, and
+# replaces it only when the on-disk helper is not the binary we last started.
+ec integrations install --silent input-method 2>/dev/null || {
   warn "Input method registration skipped (only needed for Kitty/Alacritty/Zed/Ghostty/WezTerm)"
 }
 
 # ── 8. Accessibility permission ─────────────────────────────────────────────────
-info "Requesting Accessibility permission..."
-# The autocomplete popup positions itself relative to the focused terminal window,
-# which requires Accessibility (AXIsProcessTrusted). After a reinstall the grant was
-# just reset in step 3, so trigger the system prompt now. `ec debug prompt-accessibility`
-# talks to the running desktop process over its local socket, so launch the app and
-# retry briefly while it finishes coming up.
-open "$APP_BUNDLE"
-prompted=false
-for _ in 1 2 3 4 5; do
-  if ec debug prompt-accessibility 2>/dev/null; then prompted=true; break; fi
-  sleep 1
-done
-if [ "$prompted" = true ]; then
-  warn "Grant '${APP_DISPLAY}' in System Settings → Privacy & Security → Accessibility,"
-  warn "then open a terminal and start typing — autocomplete will not appear until it is granted."
-else
-  warn "Could not reach the desktop app to prompt for Accessibility. Once it is running, run:"
-  warn "  ec debug prompt-accessibility"
+open "${APP_BUNDLE}"
+if [ "${accessibility_reset}" -eq 1 ]; then
+  info "Requesting Accessibility permission..."
+  # `ec debug prompt-accessibility` talks to the running desktop process over
+  # its local socket, so retry briefly while it finishes coming up.
+  prompted=false
+  for _ in 1 2 3 4 5; do
+    if ec debug prompt-accessibility 2>/dev/null; then prompted=true; break; fi
+    sleep 1
+  done
+  if [ "${prompted}" = true ]; then
+    warn "Grant '${APP_DISPLAY}' in System Settings → Privacy & Security → Accessibility."
+  else
+    warn "Could not reach the desktop app to prompt for Accessibility. Once it is running, run:"
+    warn "  ec debug prompt-accessibility"
+  fi
 fi
 
 # ── Done ───────────────────────────────────────────────────────────────────────
@@ -98,8 +162,7 @@ echo ""
 echo "  App:  /Applications/${APP_DISPLAY}.app"
 echo "  CLI:  ${LOCAL_BIN}/ec  ($(ec --version 2>/dev/null || echo 'restart shell to verify'))"
 echo ""
-echo "  Reload your shell to activate Easy Complete:"
-echo "    exec \$SHELL"
-echo ""
-echo "  If autocomplete does not appear, grant Accessibility to '${APP_DISPLAY}' in"
-echo "    System Settings → Privacy & Security → Accessibility  (re-run: ec debug prompt-accessibility)"
+if [ "${accessibility_reset}" -eq 1 ]; then
+  echo "  If autocomplete does not appear, grant Accessibility to '${APP_DISPLAY}' in"
+  echo "    System Settings → Privacy & Security → Accessibility"
+fi

@@ -40,4 +40,3 @@ accessibility = { path = "./accessibility-master/accessibility" }
 appkit-nsworkspace-bindings.workspace = true
 tracing.workspace = true
 tokio.workspace = true
-nix.workspace = true

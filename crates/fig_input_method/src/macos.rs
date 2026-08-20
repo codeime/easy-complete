@@ -6,14 +6,11 @@ use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::CFURL;
-use fig_log::{LogArgs, initialize_logging};
-use fig_util::directories;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::Bool;
 use objc2::{ClassType, msg_send};
 use objc2_app_kit::NSApp;
 use objc2_foundation::{MainThreadMarker, NSBundle, NSObject, ns_string};
-use tracing::info;
 
 use crate::imk;
 
@@ -40,6 +37,39 @@ unsafe extern "C" {
     fn CFArrayGetValueAtIndex(array: CFArrayRef, idx: isize) -> *const c_void;
 }
 
+fn with_self_input_source(input_source_id: &str, work: impl FnOnce(TISInputSourceRef)) -> bool {
+    let id_value = CFString::new(input_source_id);
+    let key = unsafe { CFString::wrap_under_get_rule(kTISPropertyInputSourceID) };
+    let dict = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), id_value.as_CFType())]);
+
+    // `include_all_installed = true` so we find the source even while it is still disabled.
+    let list = unsafe { TISCreateInputSourceList(dict.as_concrete_TypeRef(), true) };
+    if list.is_null() {
+        log_info!("with_self_input_source: TISCreateInputSourceList returned null (no NSApplication context?)");
+        return false;
+    }
+
+    let count = unsafe { CFArrayGetCount(list) };
+    if count <= 0 {
+        log_info!("with_self_input_source: no input source found for {input_source_id}");
+        unsafe { CFRelease(list.cast()) };
+        return false;
+    }
+
+    // Borrowed pointer into `list`; valid until we release the list below.
+    let src: TISInputSourceRef = unsafe { CFArrayGetValueAtIndex(list, 0) };
+    work(src);
+    unsafe { CFRelease(list.cast()) };
+    true
+}
+
+fn source_is_enabled(src: TISInputSourceRef) -> bool {
+    unsafe {
+        let value = TISGetInputSourceProperty(src, kTISPropertyInputSourceIsEnabled);
+        !value.is_null() && CFBoolean::wrap_under_get_rule(value.cast()).into()
+    }
+}
+
 /// Enable (and select) our own input source via the TIS API.
 ///
 /// The CLI installer (`ec integrations install input-method`) cannot do this: TIS
@@ -48,46 +78,53 @@ unsafe extern "C" {
 /// on startup. Without this, terminals that depend on the IME for cursor tracking
 /// (Ghostty, Kitty, WezTerm, Zed, Alacritty) get the autocomplete window stuck at a
 /// default position instead of following the caret.
-fn enable_self_in_tis(input_source_id: &str) {
-    let id_value = CFString::new(input_source_id);
-    let key = unsafe { CFString::wrap_under_get_rule(kTISPropertyInputSourceID) };
-    let dict = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), id_value.as_CFType())]);
+///
+/// Returns whether a freshly looked-up source reports enabled. Callers must not
+/// trust the property on a source they just mutated: TIS caches it on the
+/// pointer, and `TISEnableInputSource` returning 0 does not mean it stuck.
+fn enable_self_in_tis(input_source_id: &str) -> bool {
+    with_self_input_source(input_source_id, |src| {
+        if source_is_enabled(src) {
+            log_info!("enable_self_in_tis: input source already enabled");
+        } else {
+            let status = unsafe { TISEnableInputSource(src) };
+            log_info!("enable_self_in_tis: TISEnableInputSource status = {status}");
+        }
 
-    // `include_all_installed = true` so we find the source even while it is still disabled.
-    let list = unsafe { TISCreateInputSourceList(dict.as_concrete_TypeRef(), true) };
-    if list.is_null() {
-        info!("enable_self_in_tis: TISCreateInputSourceList returned null (no NSApplication context?)");
+        // Selecting a `palette` (non-keyboard) input method returns paramErr (-50); that is
+        // expected and harmless — enabling alone makes it active alongside the keyboard.
+        let select_status = unsafe { TISSelectInputSource(src) };
+        log_info!("enable_self_in_tis: TISSelectInputSource status = {select_status}");
+    });
+    source_is_enabled_fresh(input_source_id)
+}
+
+/// `TISEnableInputSource` does not reliably write `AppleEnabledInputSources`.
+/// After bounce we were selected-only; new Otty windows then got no IMK
+/// connection. Add ourselves to both palette lists. Never remove other sources
+/// except a stale vendor-prefix rename of this same palette.
+///
+/// In-process, not through `python3`: TIS launches this bundle with a bare
+/// `PATH`, where `python3` is the Command Line Tools stub and fails outright on
+/// a machine that never installed them. That failure costs the caret.
+fn persist_palette_in_hitoolbox(bundle_id: &str) {
+    if ec_hitoolbox::is_palette_enabled(bundle_id) {
         return;
     }
 
-    let count = unsafe { CFArrayGetCount(list) };
-    if count <= 0 {
-        info!("enable_self_in_tis: no input source found for {input_source_id}");
-        unsafe { CFRelease(list.cast()) };
-        return;
-    }
-
-    // Borrowed pointer into `list`; valid until we release the list below.
-    let src: TISInputSourceRef = unsafe { CFArrayGetValueAtIndex(list, 0) };
-
-    let already_enabled = unsafe {
-        let value = TISGetInputSourceProperty(src, kTISPropertyInputSourceIsEnabled);
-        !value.is_null() && CFBoolean::wrap_under_get_rule(value.cast()).into()
-    };
-
-    if already_enabled {
-        info!("enable_self_in_tis: input source already enabled");
+    if ec_hitoolbox::ensure_palette_enabled(bundle_id) {
+        log_info!("persist_palette_in_hitoolbox: wrote {bundle_id} into enabled+selected");
     } else {
-        let status = unsafe { TISEnableInputSource(src) };
-        info!("enable_self_in_tis: TISEnableInputSource status = {status}");
+        log_error!("persist_palette_in_hitoolbox: could not write the HIToolbox palette lists for {bundle_id}");
     }
+}
 
-    // Selecting a `palette` (non-keyboard) input method returns paramErr (-50); that is
-    // expected and harmless — enabling alone makes it active alongside the keyboard.
-    let select_status = unsafe { TISSelectInputSource(src) };
-    info!("enable_self_in_tis: TISSelectInputSource status = {select_status}");
-
-    unsafe { CFRelease(list.cast()) };
+fn source_is_enabled_fresh(input_source_id: &str) -> bool {
+    let mut enabled = false;
+    with_self_input_source(input_source_id, |src| {
+        enabled = source_is_enabled(src);
+    });
+    enabled
 }
 
 fn register_self_with_tis() {
@@ -97,22 +134,21 @@ fn register_self_with_tis() {
     let path_str = bundle_path.to_string();
     if let Some(url) = CFURL::from_path(&path_str, true) {
         let result = unsafe { TISRegisterInputSource(url.as_concrete_TypeRef()) };
-        info!("TISRegisterInputSource result: {result}");
+        log_info!("TISRegisterInputSource result: {result}");
     }
 }
 
-#[tokio::main]
-pub async fn main() {
-    let _log_guard = initialize_logging(LogArgs {
-        log_level: Some("trace".to_owned()),
-        log_to_stdout: true,
-        log_file_path: Some(directories::logs_dir().expect("home dir must be set").join("imk.log")),
-        delete_old_log_file: false,
-    });
+pub fn main() {
+    // Default is ERROR, same as the desktop app. The previous `trace` filter
+    // plus an INFO `respondsToSelector` probe wrote on every IMK query and
+    // kept a multi-thread tokio runtime alive for a process that only needs
+    // AppKit. `Q_LOG_LEVEL=debug` still raises this when diagnosing caret
+    // delivery.
+    crate::logging::init();
 
-    info!("Registering imk controller");
+    log_info!("Registering imk controller");
     imk::register_controller();
-    info!("Registered imk controller");
+    log_info!("Registered imk controller");
 
     let mtm = MainThreadMarker::new().expect("must be on the main thread");
 
@@ -127,22 +163,69 @@ pub async fn main() {
 
         register_self_with_tis();
 
-        info!("Attempting connection...");
+        log_info!("Attempting connection...");
         imk::connect_imkserver(k_connection_name, identifier.as_deref());
-        info!("Connected!");
+        log_info!("Connected!");
 
-        // Enable ourselves in TIS now that we have an NSApplication context. The input
-        // source ID matches the bundle identifier (see Info.plist TISInputSourceID).
+        // Enable ourselves. Do not disable first: a disable→enable cycle, even
+        // across later runloop turns, leaves a palette source disabled and
+        // strips the caret from every Otty / Ghostty / Kitty window.
+        // TISEnableInputSource can report success and still omit us from
+        // AppleEnabledInputSources; persist the plist ourselves so a new
+        // Otty window can attach.
         if let Some(id) = identifier.as_deref() {
-            enable_self_in_tis(&id.to_string());
+            let id = id.to_string();
+            if !enable_self_in_tis(&id) {
+                log_error!("enable_self_in_tis: {id} is still disabled; IME-only terminals will have no caret");
+            }
+            persist_palette_in_hitoolbox(&id);
         } else {
-            info!("Could not determine bundle identifier; skipping TIS self-enable");
+            log_info!("Could not determine bundle identifier; skipping TIS self-enable");
         }
 
         let app_id: &NSObject = app.as_ref();
         let loaded_nib: Bool = unsafe { msg_send![NSBundle::class(), loadNibNamed:nib_name owner:app_id] };
-        info!("RUNNING {loaded_nib:?}!");
+        log_info!("RUNNING {loaded_nib:?}!");
 
         unsafe { app.run() };
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// The production half of this file with comments stripped: these tests are
+    /// about what the code does, and must not trip over prose naming the very
+    /// thing being avoided.
+    fn production_code() -> String {
+        include_str!("macos.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn startup_never_disables_the_input_source() {
+        let prod = production_code();
+        assert!(
+            !prod.contains("TISDisableInputSource"),
+            "disable after enable is what took Otty down on install"
+        );
+        assert!(!prod.contains("schedule_reconnect"));
+        assert!(
+            prod.contains("ec_hitoolbox::ensure_palette_enabled"),
+            "TIS enable alone does not persist the palette"
+        );
+    }
+
+    /// TIS launches this bundle with a bare `PATH`. A palette write that shells
+    /// out is a write that fails on a machine without Command Line Tools, and a
+    /// failed palette write means no caret in Otty / Ghostty / Kitty.
+    #[test]
+    fn the_palette_write_spawns_nothing() {
+        assert!(!production_code().contains("Command::new"));
+    }
 }

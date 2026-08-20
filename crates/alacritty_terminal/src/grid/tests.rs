@@ -21,6 +21,38 @@ impl GridCell for usize {
     }
 }
 
+/// `ecterm` builds its `Term` with a single line of scrollback and stays
+/// resident for the life of a terminal tab. Scrolling used to allocate a
+/// thousand full-width rows it could never index and hold them for good:
+/// ~2.8 MB per tab at 120 columns, multiplied by every open tab.
+#[test]
+fn a_one_line_scrollback_allocates_one_line_of_scrollback() {
+    let mut grid = Grid::<usize>::new(24, 80, 1);
+
+    for _ in 0..64 {
+        grid.scroll_up::<usize>(&(Line(0)..Line(24)), 1);
+    }
+
+    assert_eq!(grid.history_size(), 1);
+    assert_eq!(grid.raw.allocated(), 25);
+}
+
+/// The cache still exists for grids that can use it, so a real scrollback does
+/// not pay a row allocation per scrolled line.
+#[test]
+fn a_deep_scrollback_still_gets_a_cache() {
+    let mut grid = Grid::<usize>::new(24, 80, 10_000);
+
+    grid.scroll_up::<usize>(&(Line(0)..Line(24)), 1);
+
+    assert_eq!(grid.history_size(), 1);
+    assert!(
+        grid.raw.allocated() > 25,
+        "expected spare rows, got {}",
+        grid.raw.allocated()
+    );
+}
+
 // Scroll up moves lines upward.
 #[test]
 fn scroll_up() {

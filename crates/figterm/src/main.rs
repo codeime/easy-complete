@@ -78,7 +78,24 @@ static USER_ENABLED_SHELLS: LazyLock<Vec<String>> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
-static HOSTNAME: LazyLock<Option<String>> = LazyLock::new(sysinfo::System::host_name);
+static HOSTNAME: LazyLock<Option<String>> = LazyLock::new(hostname);
+
+fn hostname() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 256];
+        let rc = unsafe { nix::libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+        if rc != 0 {
+            return None;
+        }
+        let nul = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        std::str::from_utf8(&buf[..nul]).ok().map(str::to_owned)
+    }
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME").ok()
+    }
+}
 
 pub enum MainLoopEvent {
     Insert {
@@ -428,10 +445,16 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
 
     let pty_name = pty.slave.get_name().unwrap_or_else(|| session_id.clone());
 
+    // A file appender starts a worker thread. Default filter is ERROR, so the
+    // per-tab log is empty unless someone raised `Q_LOG_LEVEL` — skip the file
+    // (and that thread) until they have.
+    let log_file_path = std::env::var_os(Q_LOG_LEVEL)
+        .map(|_| directories::logs_dir().map(|dir| dir.join(format!("{PTY_BINARY_NAME}{pty_name}.log"))))
+        .transpose()?;
     let _log_guard = match initialize_logging(LogArgs {
         log_level: None,
         log_to_stdout: false,
-        log_file_path: Some(directories::logs_dir()?.join(format!("{PTY_BINARY_NAME}{pty_name}.log"))),
+        log_file_path,
         delete_old_log_file: true,
     }) {
         Ok(logger_guard) => Some(logger_guard),
@@ -465,7 +488,12 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
     info!("Pid: {}", Pid::current());
     info!("Pty name: {pty_name}");
 
+    // Two workers is enough for this process: the main loop is one `block_on`,
+    // and the rest is I/O (stdin, the figterm listener, remote IPC, history).
+    // The default pool is one thread per core, and `ecterm` multiplies by tab,
+    // so that was paying for stacks the grid never used.
     let runtime = runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .thread_name_fn(|| {
             static ATOMIC_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -793,10 +821,6 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
                             stdout.write_all(&write_buffer[..size]).await?;
                             stdout.flush().await?;
 
-                            if write_buffer.capacity() == write_buffer.len() {
-                                write_buffer.reserve(write_buffer.len());
-                            }
-
                             if can_send_edit_buffer(&term) {
                                 let cursor_coordinates = get_cursor_coordinates(&terminal);
                                 if let Err(err) = send_edit_buffer(&term, &remote_sender, cursor_coordinates).await {
@@ -927,6 +951,11 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostname_does_not_need_sysinfo() {
+        assert!(hostname().is_some_and(|name| !name.is_empty()));
+    }
 
     #[test]
     fn autocomplete_enabled_test() {

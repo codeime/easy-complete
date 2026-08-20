@@ -130,7 +130,6 @@ fn integration_name(integration: Integration) -> &'static str {
 async fn install(integration: Integration, silent: bool) -> Result<()> {
     let mut installed = false;
     let mut errored = false;
-    let mut status: Option<&str> = None;
 
     let result = match integration {
         Integration::All => Ok(()),
@@ -189,7 +188,10 @@ async fn install(integration: Integration, silent: bool) -> Result<()> {
                     fig_settings::state::set_value("input-method.enabled", true).ok();
                     fig_integrations::input_method::InputMethod::default().install().await?;
                     installed = true;
-                    status = Some("You must restart your terminal to finish installing the input method.");
+                    // No restart prompt. An unchanged helper is never stopped, so
+                    // open terminals keep the IMK connection they already have.
+                    // A replacement cannot rebind those clients (a TIS disable
+                    // leaves the palette source dead), so it only enables itself.
                     Ok(())
                 } else {
                     errored = true;
@@ -221,10 +223,6 @@ async fn install(integration: Integration, silent: bool) -> Result<()> {
 
     if installed && result.is_ok() && !silent {
         println!("Installed!");
-
-        if let Some(status) = status {
-            println!("{status}");
-        }
     }
 
     if !errored && !installed && !silent {

@@ -18,6 +18,7 @@ mod update;
 mod utils;
 mod webview;
 
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -26,9 +27,13 @@ use clap::Parser;
 use event::Event;
 use fig_log::{LogArgs, initialize_logging};
 use fig_os_shim::Context;
-use fig_util::consts::{APP_PROCESS_NAME, PRODUCT_NAME};
+#[cfg(target_os = "linux")]
+use fig_util::consts::APP_PROCESS_NAME;
+use fig_util::consts::PRODUCT_NAME;
 use fig_util::{URL_SCHEMA, directories};
-use sysinfo::{ProcessRefreshKind, RefreshKind, System, get_current_pid};
+use sysinfo::get_current_pid;
+#[cfg(target_os = "linux")]
+use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tracing::{error, warn};
 use url::Url;
 use webview::WebviewManager;
@@ -310,6 +315,54 @@ async fn allow_multiple_running_check(
     None
 }
 
+/// True once every one of `pids` is gone, false if `timeout` runs out first.
+///
+/// `kill(pid, 0)` for liveness: these are other app instances, not children, so
+/// there is nothing to reap and no zombie to mistake for a live process.
+#[cfg(target_os = "macos")]
+async fn wait_for_exit(pids: &[i32], timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let alive = pids
+            .iter()
+            .any(|&pid| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok());
+        if !alive {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+/// SIGTERM the old instances and return only once they are actually gone,
+/// SIGKILL-ing whatever ignored the first signal.
+///
+/// `--kill-old` is immediately followed by this process binding the desktop
+/// socket, and the old instance holds it until it exits. Signalling without
+/// waiting reads as "it killed the old app but the new one never came up".
+#[cfg(target_os = "macos")]
+async fn stop_instances(pids: &[i32]) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    for &pid in pids {
+        kill(Pid::from_raw(pid), Signal::SIGTERM).ok();
+        eprintln!("Killing instance: pid={pid}");
+    }
+
+    if wait_for_exit(pids, std::time::Duration::from_secs(2)).await {
+        return;
+    }
+
+    eprintln!("Instance ignored SIGTERM; sending SIGKILL");
+    for &pid in pids {
+        kill(Pid::from_raw(pid), Signal::SIGKILL).ok();
+    }
+    wait_for_exit(pids, std::time::Duration::from_millis(500)).await;
+}
+
 #[cfg(target_os = "macos")]
 #[must_use]
 async fn allow_multiple_running_check(
@@ -317,63 +370,57 @@ async fn allow_multiple_running_check(
     kill_old: bool,
     page: Option<String>,
 ) -> Option<ExitCode> {
-    use std::ffi::OsString;
+    // AppKit already knows our bundle. Enumerating every process through
+    // sysinfo was loading a full process table on every launch.
+    let current = i32::try_from(current_pid.as_u32()).ok()?;
+    let others: Vec<i32> = macos_utils::applications::running_application_pids(fig_util::consts::APP_BUNDLE_ID)
+        .into_iter()
+        .filter(|&pid| pid != current && pid > 0)
+        .collect();
 
-    let app_process_name = OsString::from(APP_PROCESS_NAME);
-    let system = System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()));
-    let processes = system.processes_by_name(&app_process_name);
-    let current_uid = nix::unistd::getuid().as_raw();
-
-    for process in processes {
-        let pid = process.pid();
-        if current_pid != pid {
-            if kill_old {
-                process.kill();
-                let exe = process.exe().unwrap_or(Path::new("")).display();
-                eprintln!("Killing instance: {exe} ({pid})");
-            } else {
-                let page = page.clone();
-                let on_match = async {
-                    let exe = process.exe().unwrap_or(Path::new("")).display();
-
-                    let mut extra = vec![format!("pid={pid}")];
-
-                    if let Some(user_id) = process.user_id() {
-                        extra.push(format!("uid={}", **user_id));
-                    }
-
-                    if let Some(group_id) = process.group_id() {
-                        extra.push(format!("gid={}", *group_id));
-                    }
-
-                    eprintln!("{PRODUCT_NAME} is already running: {exe} ({})", extra.join(" "),);
-                    match &page {
-                        Some(page) => {
-                            eprintln!("Opening /{page}...");
-                            Some(page)
-                        },
-                        None => {
-                            eprintln!("Opening {PRODUCT_NAME} Window...");
-                            None
-                        },
-                    };
-
-                    if let Err(err) =
-                        fig_ipc::local::open_ui_element(fig_proto::local::UiElement::MissionControl, page).await
-                    {
-                        eprintln!("Failed to open Fig: {err}");
-                    }
-                };
-
-                match process.user_id().map(|uid| uid as &u32) {
-                    Some(&uid) if uid == current_uid => {
-                        on_match.await;
-                        return Some(ExitCode::SUCCESS);
-                    },
-                    _ => {},
-                }
-            }
-        }
+    if others.is_empty() {
+        return None;
     }
-    None
+
+    if kill_old {
+        stop_instances(&others).await;
+        return None;
+    }
+
+    let pid = others[0];
+    eprintln!("{PRODUCT_NAME} is already running: pid={pid}");
+    match &page {
+        Some(page) => eprintln!("Opening /{page}..."),
+        None => eprintln!("Opening {PRODUCT_NAME} Window..."),
+    }
+    if let Err(err) = fig_ipc::local::open_ui_element(fig_proto::local::UiElement::MissionControl, page).await {
+        eprintln!("Failed to open Fig: {err}");
+    }
+    Some(ExitCode::SUCCESS)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use std::time::Duration;
+
+    use super::wait_for_exit;
+
+    /// `--kill-old` binds the desktop socket as soon as this returns, so the
+    /// wait has to outlive the process and not merely the signal.
+    #[tokio::test]
+    async fn a_live_process_is_waited_for_and_a_reaped_one_is_not() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = i32::try_from(child.id()).expect("pid fits");
+
+        assert!(!wait_for_exit(&[pid], Duration::from_millis(50)).await);
+
+        child.kill().expect("kill");
+        // Reaped here only because this one *is* our child; a zombie answers
+        // `kill(pid, 0)` and would read as still running.
+        child.wait().expect("reap");
+        assert!(wait_for_exit(&[pid], Duration::from_millis(500)).await);
+    }
 }

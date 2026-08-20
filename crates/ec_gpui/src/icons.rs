@@ -1,7 +1,7 @@
 //! Named autocomplete icons — the same PNGs the WebView served as `fig://icon?type=…`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use gpui::{
     AnyElement, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, SharedString, Styled, StyledImage, div, img,
@@ -102,27 +102,25 @@ pub fn icon_for_kind(kind: &str) -> SharedString {
 }
 
 fn cached_image(name: &str) -> Option<Arc<Image>> {
-    static CACHE: OnceLock<HashMap<&'static str, Arc<Image>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| {
-        let mut map = HashMap::with_capacity(BUNDLED_ICONS.len() + 4);
-        for (key, bytes) in BUNDLED_ICONS {
-            map.insert(*key, Arc::new(Image::from_bytes(ImageFormat::Png, bytes.to_vec())));
-        }
-        for (key, bytes, format) in [
-            ("folder", FOLDER, ImageFormat::Png),
-            ("file", FILE, ImageFormat::Png),
-            ("symlink", SYMLINK, ImageFormat::Png),
-            ("history", HISTORY, ImageFormat::Svg),
-        ] {
-            map.insert(key, Arc::new(Image::from_bytes(format, bytes.to_vec())));
-        }
-        map
-    });
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, Arc<Image>>>> = OnceLock::new();
     let key = canonical_icon_name(name)?;
-    cache.get(key).cloned()
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().unwrap_or_else(|err| err.into_inner());
+    if let Some(image) = map.get(key) {
+        return Some(image.clone());
+    }
+    let bytes = named_bytes(key)?;
+    let format = if key == "history" {
+        ImageFormat::Svg
+    } else {
+        ImageFormat::Png
+    };
+    let image = Arc::new(Image::from_bytes(format, bytes.to_vec()));
+    map.insert(key, image.clone());
+    Some(image)
 }
 
-fn canonical_icon_name(name: &str) -> Option<&str> {
+fn canonical_icon_name(name: &str) -> Option<&'static str> {
     let canonical = match name {
         "cmd" | "subcommand" => "command",
         "dir" => "folder",
@@ -132,7 +130,15 @@ fn canonical_icon_name(name: &str) -> Option<&str> {
         "pnpm" => "package",
         other => other,
     };
-    named_bytes(canonical).is_some().then_some(canonical)
+    match canonical {
+        "folder" => Some("folder"),
+        "file" => Some("file"),
+        "symlink" => Some("symlink"),
+        "history" => Some("history"),
+        _ => BUNDLED_ICONS
+            .iter()
+            .find_map(|(icon_name, _)| (*icon_name == canonical).then_some(*icon_name)),
+    }
 }
 
 /// Resolve any bundled Fig `fig://icon?type=…` image. Unknown types

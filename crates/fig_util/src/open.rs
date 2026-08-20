@@ -1,5 +1,3 @@
-use cfg_if::cfg_if;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
@@ -8,82 +6,56 @@ pub enum Error {
     Failed,
 }
 
-#[cfg(target_os = "macos")]
-#[allow(unexpected_cfgs)]
-fn open_macos(url_str: impl AsRef<str>) -> Result<(), Error> {
-    use objc2::ClassType;
-    use objc2_foundation::{NSString, NSURL};
+/// Build the platform opener. This crate is linked into `ecterm`, which
+/// multiplies per tab, so the macOS path must stay a `/usr/bin/open` spawn.
+/// An in-process workspace call pulled AppKit + Metal into every PTY.
+fn open_command(url: impl AsRef<str>) -> std::process::Command {
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            let mut command = std::process::Command::new("/usr/bin/open");
+            command.arg(url.as_ref());
+            command
+        } else if #[cfg(target_os = "windows")] {
+            use std::os::windows::process::CommandExt;
 
-    let url_nsstring = NSString::from_str(url_str.as_ref());
-    let nsurl = unsafe { NSURL::initWithString(NSURL::alloc(), &url_nsstring) }.ok_or(Error::Failed)?;
-    let res = unsafe { objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(&nsurl) };
-    res.then_some(()).ok_or(Error::Failed)
+            let detached = 0x8;
+            let mut command = std::process::Command::new("cmd");
+            command.creation_flags(detached);
+            command.args(["/c", "start", url.as_ref()]);
+            command
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
+            let executable = if crate::system_info::in_wsl() {
+                "wslview"
+            } else {
+                "xdg-open"
+            };
+
+            let mut command = std::process::Command::new(executable);
+            command.arg(url.as_ref());
+            command
+        } else {
+            compile_error!("open_url is not implemented for this target");
+        }
+    }
 }
 
-#[cfg(target_os = "windows")]
-fn open_command(url: impl AsRef<str>) -> std::process::Command {
-    use std::os::windows::process::CommandExt;
-
-    let detached = 0x8;
-    let mut command = std::process::Command::new("cmd");
-    command.creation_flags(detached);
-    command.args(["/c", "start", url.as_ref()]);
-    command
-}
-
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn open_command(url: impl AsRef<str>) -> std::process::Command {
-    let executable = if crate::system_info::in_wsl() {
-        "wslview"
+fn status_from_output(output: std::process::Output) -> Result<(), Error> {
+    tracing::trace!(?output, "open_url output");
+    if output.status.success() {
+        Ok(())
     } else {
-        "xdg-open"
-    };
-
-    let mut command = std::process::Command::new(executable);
-    command.arg(url.as_ref());
-    command
+        Err(Error::Failed)
+    }
 }
 
 /// Returns bool indicating whether the URL was opened successfully
 pub fn open_url(url: impl AsRef<str>) -> Result<(), Error> {
-    cfg_if! {
-        if #[cfg(target_os = "macos")] {
-            open_macos(url)
-        } else {
-            match open_command(url).output() {
-                Ok(output) => {
-                    tracing::trace!(?output, "open_url output");
-                    if output.status.success() {
-                        Ok(())
-                    } else {
-                        Err(Error::Failed)
-                    }
-                },
-                Err(err) => Err(err.into()),
-            }
-        }
-    }
+    status_from_output(open_command(url).output()?)
 }
 
 /// Returns bool indicating whether the URL was opened successfully
 pub async fn open_url_async(url: impl AsRef<str>) -> Result<(), Error> {
-    cfg_if! {
-        if #[cfg(target_os = "macos")] {
-            open_macos(url)
-        } else {
-            match tokio::process::Command::from(open_command(url)).output().await {
-                Ok(output) => {
-                    tracing::trace!(?output, "open_url_async output");
-                    if output.status.success() {
-                        Ok(())
-                    } else {
-                        Err(Error::Failed)
-                    }
-                },
-                Err(err) => Err(err.into()),
-            }
-        }
-    }
+    status_from_output(tokio::process::Command::from(open_command(url)).output().await?)
 }
 
 #[cfg(test)]
@@ -94,5 +66,26 @@ mod tests {
     #[test]
     fn test_open_url() {
         open_url("https://easy-complete.emmmm.dev").unwrap();
+    }
+
+    #[test]
+    fn fig_util_manifest_has_no_appkit() {
+        let manifest = include_str!("../Cargo.toml");
+        assert!(
+            !manifest.contains("objc2-app-kit")
+                && !manifest.contains("macos-utils")
+                && !manifest.contains("appkit-nsworkspace"),
+            "AppKit on fig_util is linked into every ecterm tab"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_the_open_binary() {
+        let program = format!("{:?}", open_command("https://example.com"));
+        assert!(
+            program.contains("/usr/bin/open"),
+            "macOS opener must stay a process spawn: {program}"
+        );
     }
 }

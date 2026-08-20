@@ -162,4 +162,38 @@ mod tests {
         assert_eq!(theme.background, 0x0d1117);
         assert_eq!(theme.selected, 0x1f6feb);
     }
+
+    /// A file this returns `None` for is not an error anyone sees: the caller
+    /// falls back to [`OverlayTheme::dark`], so a typo in a shipped theme shows
+    /// up as "my theme does nothing" rather than as a failure.
+    #[test]
+    fn every_bundled_theme_file_parses() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).expect("themes dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read theme");
+            assert!(
+                theme_from_json(&text).is_some(),
+                "{} does not parse into a theme",
+                path.display()
+            );
+            seen += 1;
+        }
+        assert!(seen > 1, "expected to find bundled themes in {}", dir.display());
+    }
+
+    #[test]
+    fn claude_dark_keeps_the_warm_palette_and_clay_match() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../themes/claude-dark.json");
+        let text = std::fs::read_to_string(path).expect("bundled theme");
+        let theme = theme_from_json(&text).expect("parse");
+        assert_eq!(theme.background, 0x262624);
+        assert_eq!(theme.text, 0xf0eee6);
+        assert_eq!(theme.selected, 0x3d3d3a);
+        assert_eq!(theme.selected_match_bg, 0xa85c40);
+    }
 }

@@ -1,4 +1,4 @@
-use objc2_app_kit::NSWorkspace;
+use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 use objc2_foundation::{NSString, NSURL};
 
 #[derive(Debug)]
@@ -7,15 +7,6 @@ pub struct MacOSApplication {
     pub bundle_identifier: Option<String>,
     pub bundle_path: Option<String>,
     pub process_identifier: libc::pid_t,
-}
-
-impl MacOSApplication {
-    pub fn terminate(&self) {
-        use nix::sys::signal::{self, Signal};
-        use nix::unistd::Pid;
-
-        signal::kill(Pid::from_raw(self.process_identifier), Signal::SIGTERM).ok();
-    }
 }
 
 pub fn running_applications() -> Vec<MacOSApplication> {
@@ -40,11 +31,15 @@ pub fn running_applications() -> Vec<MacOSApplication> {
     }
 }
 
-pub fn running_applications_matching(bundle_identifier: &str) -> Vec<MacOSApplication> {
-    running_applications()
-        .into_iter()
-        .filter(|app| matches!(&app.bundle_identifier, Some(bundle_id) if bundle_id.as_str() == bundle_identifier))
-        .collect()
+/// PIDs of the running applications with this bundle identifier.
+///
+/// Asks AppKit for the match instead of enumerating every running application
+/// and allocating its name, bundle id and path the way [`running_applications`]
+/// does, which makes it cheap enough to poll in a wait loop.
+pub fn running_application_pids(bundle_identifier: &str) -> Vec<libc::pid_t> {
+    let identifier = NSString::from_str(bundle_identifier);
+    let apps = unsafe { NSRunningApplication::runningApplicationsWithBundleIdentifier(&identifier) };
+    apps.iter().map(|app| unsafe { app.processIdentifier() }).collect()
 }
 
 pub fn launch_application(bundle_path: &str) {
@@ -62,17 +57,30 @@ mod tests {
     #[test]
     fn test_running_applications() {
         let applications = running_applications();
-        println!("{:#?}", applications);
+        println!("{applications:#?}");
+    }
+
+    /// [`running_application_pids`] decides whether callers consider a helper to
+    /// be up, so it has to see everything the full enumeration sees.
+    #[test]
+    fn pid_query_agrees_with_the_full_enumeration() {
+        for app in running_applications() {
+            let Some(bundle_id) = app.bundle_identifier.as_deref() else {
+                continue;
+            };
+            if running_application_pids(bundle_id).contains(&app.process_identifier) {
+                continue;
+            }
+
+            // A process that exited between the two calls is not a mismatch.
+            let still_running = running_applications()
+                .iter()
+                .any(|other| other.process_identifier == app.process_identifier);
+            assert!(
+                !still_running,
+                "{bundle_id} (pid {}) is running but the bundle id query missed it",
+                app.process_identifier
+            );
+        }
     }
 }
-
-// launch_application("/Applications/Alacritty.app")
-
-// #[test]
-// fn test_terminate() {
-//     // let out = dbg!(running_applications());
-//     running_applications_matching("com.amazon.codewhisperercursor").into_iter().for_each(|app| {
-//         println!("Terminating {}", app.process_identifier);
-//         app.terminate()
-//     })
-// }

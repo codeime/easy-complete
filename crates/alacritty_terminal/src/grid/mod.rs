@@ -152,7 +152,8 @@ impl<T: GridCell + Default + PartialEq + Clone> Grid<T> {
     pub fn update_history(&mut self, history_size: usize) {
         let current_history_size = self.history_size();
         if current_history_size > history_size {
-            self.raw.shrink_lines(current_history_size - history_size);
+            self.raw
+                .shrink_lines(current_history_size - history_size, history_size + self.lines);
         }
         self.display_offset = min(self.display_offset, history_size);
         self.max_scroll_limit = history_size;
@@ -174,14 +175,15 @@ impl<T: GridCell + Default + PartialEq + Clone> Grid<T> {
     fn increase_scroll_limit(&mut self, count: usize) {
         let count = min(count, self.max_scroll_limit - self.history_size());
         if count != 0 {
-            self.raw.initialize(count, self.columns);
+            self.raw.initialize(count, self.columns, self.max_addressable_rows());
         }
     }
 
     fn decrease_scroll_limit(&mut self, count: usize) {
         let count = min(count, self.history_size());
         if count != 0 {
-            self.raw.shrink_lines(min(count, self.history_size()));
+            self.raw
+                .shrink_lines(min(count, self.history_size()), self.max_addressable_rows());
             self.display_offset = min(self.display_offset, self.history_size());
         }
     }
@@ -347,6 +349,13 @@ impl<T: GridCell + Default + PartialEq + Clone> Grid<T> {
 }
 
 impl<T> Grid<T> {
+    /// Highest line count this grid can ever index: scrollback plus viewport.
+    /// Rows past it are unreachable, so the storage must not cache them.
+    #[inline]
+    fn max_addressable_rows(&self) -> usize {
+        self.max_scroll_limit + self.lines
+    }
+
     /// Reset a visible region within the grid.
     pub fn reset_region<D, R: RangeBounds<Line>>(&mut self, bounds: R)
     where
@@ -376,7 +385,7 @@ impl<T> Grid<T> {
     #[inline]
     pub fn clear_history(&mut self) {
         // Explicitly purge all lines from history.
-        self.raw.shrink_lines(self.history_size());
+        self.raw.shrink_lines(self.history_size(), self.max_addressable_rows());
 
         // Reset display offset.
         self.display_offset = 0;
@@ -392,8 +401,11 @@ impl<T> Grid<T> {
         self.truncate();
 
         // Initialize everything with empty new lines.
-        self.raw
-            .initialize(self.max_scroll_limit - self.history_size(), self.columns);
+        self.raw.initialize(
+            self.max_scroll_limit - self.history_size(),
+            self.columns,
+            self.max_addressable_rows(),
+        );
     }
 
     /// This is used only for truncating before saving ref-tests.

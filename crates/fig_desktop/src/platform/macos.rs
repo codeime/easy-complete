@@ -39,6 +39,18 @@ use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID, EventLoopP
 
 pub const DEFAULT_CARET_WIDTH: f64 = 10.0;
 
+/// IME-only terminals (Otty, Ghostty, Kitty, …) report the caret through IMK,
+/// not AX, so an in-window focused-element change is noise we cannot follow
+/// rather than a pane switch we should park the list for. No built-in terminal
+/// is both IME and xterm; that guard is for a custom terminal declaring both,
+/// where the AX pane switch is the real signal.
+fn hide_overlay_on_element_change(bundle_id: &str) -> bool {
+    !matches!(
+        Terminal::from_bundle_id(bundle_id),
+        Some(terminal) if terminal.supports_macos_input_method() && !terminal.is_xterm()
+    )
+}
+
 // See for other window level keys
 // https://github.com/phracker/MacOSX-SDKs/blob/master/MacOSX10.8.sdk/System/Library/Frameworks/CoreGraphics.framework/Versions/A/Headers/CGWindowLevel.h
 #[allow(non_upper_case_globals)]
@@ -412,15 +424,14 @@ impl PlatformStateImpl {
                             )
                         });
 
+                        // Only the integration's own enabled flag gates here. A
+                        // per-process "needs restart" stamp used to gate it too,
+                        // which silently disabled autocomplete in every terminal
+                        // that was already open when the IME was installed.
                         let terminal_cursor_backing_installed = match current_terminal {
                             Some(terminal) => {
-                                if terminal.supports_macos_input_method() {
-                                    let input_method: InputMethod = Default::default();
-                                    input_method.is_enabled().unwrap_or(false)
-                                        && input_method.enabled_for_terminal_instance(&terminal, window.pid)
-                                } else {
-                                    true
-                                }
+                                !terminal.supports_macos_input_method()
+                                    || InputMethod::default().is_enabled().unwrap_or(false)
                             },
                             None => false,
                         };
@@ -589,14 +600,21 @@ impl PlatformStateImpl {
                 // terminal pane: the next keystroke re-shows the overlay against the new caret,
                 // whereas leaving it up would strand it over the pane the user just left.
                 focused_window.invalidate_x_term_cache();
-                debug!(?element, "Focused element changed, hiding autocomplete");
-
-                self.proxy
-                    .send_event(Event::WindowEvent {
-                        window_id: AUTOCOMPLETE_ID,
-                        window_event: WindowEvent::Hide,
-                    })
-                    .ok();
+                // Otty / Ghostty / Kitty do not expose an AX caret. Their IME
+                // controller also fires element-changed noise (palette switch,
+                // IMK activate/deactivate). Hiding here parks the list, and
+                // without a subsequent IME hook it never comes back.
+                if hide_overlay_on_element_change(&app.bundle_id) {
+                    debug!(?element, "Focused element changed, hiding autocomplete");
+                    self.proxy
+                        .send_event(Event::WindowEvent {
+                            window_id: AUTOCOMPLETE_ID,
+                            window_event: WindowEvent::Hide,
+                        })
+                        .ok();
+                } else {
+                    debug!(?element, "Focused element changed in IME terminal, keeping overlay");
+                }
 
                 Ok(())
             },
@@ -713,4 +731,23 @@ impl PlatformStateImpl {
 
 pub const fn autocomplete_active() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hide_overlay_on_element_change;
+
+    #[test]
+    fn ime_terminals_keep_the_overlay_on_element_change() {
+        assert!(!hide_overlay_on_element_change("io.appmakes.otty"));
+        assert!(!hide_overlay_on_element_change("com.mitchellh.ghostty"));
+        assert!(!hide_overlay_on_element_change("net.kovidgoyal.kitty"));
+    }
+
+    #[test]
+    fn ax_terminals_still_hide_on_element_change() {
+        assert!(hide_overlay_on_element_change("com.googlecode.iterm2"));
+        assert!(hide_overlay_on_element_change("com.apple.Terminal"));
+        assert!(hide_overlay_on_element_change("com.microsoft.VSCode"));
+    }
 }

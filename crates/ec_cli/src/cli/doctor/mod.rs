@@ -1549,10 +1549,9 @@ impl DoctorCheck<SupportedTerminalCheckContext> for ImeStatusCheck {
         }
     }
 
-    async fn check(&self, context: &SupportedTerminalCheckContext) -> Result<(), DoctorError> {
+    async fn check(&self, _context: &SupportedTerminalCheckContext) -> Result<(), DoctorError> {
         use fig_integrations::Integration;
         use fig_integrations::input_method::InputMethod;
-        use macos_utils::applications::running_applications;
 
         let input_method = InputMethod::default();
         if let Err(e) = input_method.is_installed().await {
@@ -1597,32 +1596,6 @@ impl DoctorCheck<SupportedTerminalCheckContext> for ImeStatusCheck {
                     });
                 },
             }
-        }
-
-        match &context.terminal {
-            Some(terminal) if terminal.supports_macos_input_method() => {
-                let app = running_applications()
-                    .into_iter()
-                    .find(|app| app.bundle_identifier.as_deref() == terminal.to_bundle_id().as_deref());
-
-                if let Some(app) = app {
-                    if !input_method.enabled_for_terminal_instance(terminal, app.process_identifier) {
-                        return Err(DoctorError::Error {
-                            reason: format!("Not enabled for {terminal}").into(),
-                            info: vec![
-                                format!(
-                                    "Restart {} [{}] to enable autocomplete in this terminal.",
-                                    terminal, app.process_identifier
-                                )
-                                .into(),
-                            ],
-                            fix: None,
-                            error: None,
-                        });
-                    }
-                }
-            },
-            _ => (),
         }
 
         Ok(())

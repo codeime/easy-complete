@@ -46,8 +46,9 @@ impl<T: GridCell + Default + PartialEq + Clone> Grid<T> {
     {
         let lines_added = target - self.lines;
 
-        // Need to resize before updating buffer.
-        self.raw.grow_visible_lines(target);
+        // Need to resize before updating buffer. `self.lines` is still the old
+        // count here, so the row ceiling is computed against the target.
+        self.raw.grow_visible_lines(target, self.max_scroll_limit + target);
         self.lines = target;
 
         let history_size = self.history_size();
@@ -92,7 +93,7 @@ impl<T: GridCell + Default + PartialEq + Clone> Grid<T> {
         self.saved_cursor.point.line = min(self.saved_cursor.point.line, Line(target as i32 - 1));
 
         self.raw.rotate((self.lines - target) as isize);
-        self.raw.shrink_visible_lines(target);
+        self.raw.shrink_visible_lines(target, self.max_scroll_limit + target);
         self.lines = target;
     }
 

@@ -1,4 +1,4 @@
-use std::cmp::{PartialEq, max};
+use std::cmp::{PartialEq, max, min};
 use std::mem;
 use std::ops::{Index, IndexMut};
 
@@ -79,7 +79,7 @@ impl<T> Storage<T> {
 
     /// Increase the number of lines in the buffer.
     #[inline]
-    pub fn grow_visible_lines(&mut self, next: usize)
+    pub fn grow_visible_lines(&mut self, next: usize, max_rows: usize)
     where
         T: Clone + Default,
     {
@@ -87,7 +87,7 @@ impl<T> Storage<T> {
         let growage = next - self.visible_lines;
 
         let columns = self[Line(0)].len();
-        self.initialize(growage, columns);
+        self.initialize(growage, columns, max_rows);
 
         // Update visible lines.
         self.visible_lines = next;
@@ -95,10 +95,10 @@ impl<T> Storage<T> {
 
     /// Decrease the number of lines in the buffer.
     #[inline]
-    pub fn shrink_visible_lines(&mut self, next: usize) {
+    pub fn shrink_visible_lines(&mut self, next: usize, max_rows: usize) {
         // Shrink the size without removing any lines.
         let shrinkage = self.visible_lines - next;
-        self.shrink_lines(shrinkage);
+        self.shrink_lines(shrinkage, max_rows);
 
         // Update visible lines.
         self.visible_lines = next;
@@ -106,11 +106,12 @@ impl<T> Storage<T> {
 
     /// Shrink the number of lines in the buffer.
     #[inline]
-    pub fn shrink_lines(&mut self, shrinkage: usize) {
+    pub fn shrink_lines(&mut self, shrinkage: usize, max_rows: usize) {
         self.len -= shrinkage;
 
-        // Free memory.
-        if self.inner.len() > self.len + MAX_CACHE_SIZE {
+        // Same ceiling as `initialize`: spare rows past the addressable
+        // height can never be indexed, so do not keep them after a shrink.
+        if self.inner.len() > max(self.len, max_rows) {
             self.truncate();
         }
     }
@@ -124,15 +125,26 @@ impl<T> Storage<T> {
     }
 
     /// Dynamically grow the storage buffer at runtime.
+    ///
+    /// `max_rows` is the highest line count this grid can ever address, i.e. its
+    /// scrollback limit plus its visible lines. Spare rows past that point can
+    /// never be reached, and the cache holds them for the life of the grid:
+    /// `ecterm` runs one `Term` per terminal tab with a single line of
+    /// scrollback, so the flat cache handed every one of those processes a
+    /// thousand full-width rows on its first scroll and kept them forever.
     #[inline]
-    pub fn initialize(&mut self, additional_rows: usize, columns: usize)
+    pub fn initialize(&mut self, additional_rows: usize, columns: usize, max_rows: usize)
     where
         T: Clone + Default,
     {
         if self.len + additional_rows > self.inner.len() {
             self.rezero();
 
-            let realloc_size = self.inner.len() + max(additional_rows, MAX_CACHE_SIZE);
+            // `max_rows` is the ceiling, but never below what this call needs:
+            // the buffer must stay long enough to index every active line.
+            let required = self.len + additional_rows;
+            let cached = self.inner.len() + max(additional_rows, MAX_CACHE_SIZE);
+            let realloc_size = min(cached, max(max_rows, required));
             self.inner.resize_with(realloc_size, || Row::new(columns));
         }
 
@@ -142,6 +154,13 @@ impl<T> Storage<T> {
     #[inline]
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// Rows the buffer has allocated, spare cache included. Only the first
+    /// [`Storage::len`] of them are reachable.
+    #[cfg(test)]
+    pub(crate) fn allocated(&self) -> usize {
+        self.inner.len()
     }
 
     /// Swap implementation for Row<T>.
@@ -339,7 +358,7 @@ mod tests {
         let mut storage = Storage::<char>::with_capacity(3, 1);
         storage.rotate(2);
         assert_eq!(storage.zero, 2);
-        storage.shrink_lines(2);
+        storage.shrink_lines(2, usize::MAX);
         assert_eq!(storage.len, 1);
         assert_eq!(storage.inner.len(), 3);
         assert_eq!(storage.zero, 2);
@@ -369,7 +388,7 @@ mod tests {
         };
 
         // Grow buffer.
-        storage.grow_visible_lines(4);
+        storage.grow_visible_lines(4, usize::MAX);
 
         // Make sure the result is correct.
         let mut expected = Storage {
@@ -410,7 +429,7 @@ mod tests {
         };
 
         // Grow buffer.
-        storage.grow_visible_lines(4);
+        storage.grow_visible_lines(4, usize::MAX);
 
         // Make sure the result is correct.
         let mut expected = Storage {
@@ -448,7 +467,7 @@ mod tests {
         };
 
         // Shrink buffer.
-        storage.shrink_visible_lines(2);
+        storage.shrink_visible_lines(2, usize::MAX);
 
         // Make sure the result is correct.
         let expected = Storage {
@@ -484,7 +503,7 @@ mod tests {
         };
 
         // Shrink buffer.
-        storage.shrink_visible_lines(2);
+        storage.shrink_visible_lines(2, usize::MAX);
 
         // Make sure the result is correct.
         let expected = Storage {
@@ -533,7 +552,7 @@ mod tests {
         };
 
         // Shrink buffer.
-        storage.shrink_visible_lines(2);
+        storage.shrink_visible_lines(2, usize::MAX);
 
         // Make sure the result is correct.
         let expected = Storage {
@@ -677,7 +696,7 @@ mod tests {
         };
 
         // Shrink buffer.
-        storage.shrink_lines(3);
+        storage.shrink_lines(3, usize::MAX);
 
         // Make sure the result after shrinking is correct.
         let shrinking_expected = Storage {
@@ -698,7 +717,7 @@ mod tests {
         assert_eq!(storage.len, shrinking_expected.len);
 
         // Grow buffer.
-        storage.initialize(1, 1);
+        storage.initialize(1, 1, usize::MAX);
 
         // Make sure the previously freed elements are reused.
         let growing_expected = Storage {
@@ -737,9 +756,10 @@ mod tests {
             len: 6,
         };
 
-        // Initialize additional lines.
+        // Initialize additional lines. A scrollback large enough to reach the
+        // cache still gets the full cache.
         let init_size = 3;
-        storage.initialize(init_size, 1);
+        storage.initialize(init_size, 1, usize::MAX);
 
         // Generate expected grid.
         let mut expected_inner = vec![
@@ -762,6 +782,63 @@ mod tests {
         assert_eq!(storage.len, expected_storage.len);
         assert_eq!(storage.zero, expected_storage.zero);
         assert_eq!(storage.inner, expected_storage.inner);
+    }
+
+    /// A grid that can only ever address `max_rows` lines must not be handed a
+    /// cache reaching past it, however small the growth.
+    #[test]
+    fn the_cache_stops_at_the_addressable_rows() {
+        let mut storage: Storage<char> = Storage {
+            inner: vec![filled_row('0'), filled_row('1')],
+            zero: 0,
+            visible_lines: 2,
+            len: 2,
+        };
+
+        // Two visible lines plus one line of scrollback: three rows, not 1002.
+        storage.initialize(1, 1, 3);
+
+        assert_eq!(storage.len, 3);
+        assert_eq!(storage.allocated(), 3);
+    }
+
+    /// The ceiling must never cost correctness: the buffer has to stay long
+    /// enough to index every active line even when the caller understates it.
+    #[test]
+    fn a_ceiling_below_the_active_lines_is_ignored() {
+        let mut storage: Storage<char> = Storage {
+            inner: vec![filled_row('0'), filled_row('1')],
+            zero: 0,
+            visible_lines: 2,
+            len: 2,
+        };
+
+        storage.initialize(3, 1, 1);
+
+        assert_eq!(storage.len, 5);
+        assert!(storage.allocated() >= 5, "active lines must stay indexable");
+    }
+
+    #[test]
+    fn shrink_drops_rows_past_the_addressable_ceiling() {
+        let mut storage: Storage<char> = Storage {
+            inner: vec![
+                filled_row('0'),
+                filled_row('1'),
+                filled_row('2'),
+                filled_row('3'),
+                filled_row('4'),
+                filled_row('5'),
+            ],
+            zero: 0,
+            visible_lines: 5,
+            len: 6,
+        };
+
+        storage.shrink_visible_lines(2, 3);
+
+        assert_eq!(storage.len, 3);
+        assert_eq!(storage.allocated(), 3);
     }
 
     #[test]

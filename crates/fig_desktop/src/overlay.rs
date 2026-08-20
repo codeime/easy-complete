@@ -1395,9 +1395,9 @@ fn layout_overlay(
             },
         }
     } else {
-        // A missing AX/IME caret is not a usable screen-space fallback. Keep the
-        // last valid position when available; before the first one, hide the
-        // panel instead of flashing it in the primary screen's top-left corner.
+        // A caret we never received is not a usable screen-space fallback: a
+        // window-relative guess lands the list away from the real cursor. Keep
+        // the last valid position when there is one, otherwise stay hidden.
         let _ = park_overlay_slot(window_slot, cx);
         false
     }

@@ -206,6 +206,16 @@ pub fn should_figterm_launch_exit_status(ctx: &Context, quiet: bool) -> u8 {
 
     let env = ctx.env();
 
+    // Recursion guard first. `Q_FORCE_FIGTERM_LAUNCH` is inherited by the
+    // child shell, so checking it before `PROCESS_LAUNCHED_BY_Q` makes every
+    // wrapped prompt spawn another `ecterm` until the machine falls over.
+    if env.get_os(PROCESS_LAUNCHED_BY_Q).is_some() {
+        if !quiet {
+            writeln!(stdout(), "❌ {PROCESS_LAUNCHED_BY_Q}").ok();
+        }
+        return 1;
+    }
+
     if env.get_os(Q_FORCE_FIGTERM_LAUNCH).is_some() {
         if !quiet {
             writeln!(stdout(), "✅ {Q_FORCE_FIGTERM_LAUNCH}").ok();
@@ -226,13 +236,6 @@ pub fn should_figterm_launch_exit_status(ctx: &Context, quiet: bool) -> u8 {
     if env.get_os(Q_TERM_DISABLED).is_some() {
         if !quiet {
             writeln!(stdout(), "❌ {Q_TERM_DISABLED}").ok();
-        }
-        return 1;
-    }
-
-    if env.get_os(PROCESS_LAUNCHED_BY_Q).is_some() {
-        if !quiet {
-            writeln!(stdout(), "❌ {PROCESS_LAUNCHED_BY_Q}").ok();
         }
         return 1;
     }
@@ -438,6 +441,11 @@ mod tests {
             test(Q_FORCE_FIGTERM_LAUNCH)
                 .env(&[(Q_FORCE_FIGTERM_LAUNCH, "1")])
                 .expect(0),
+            test(format!(
+                "{Q_FORCE_FIGTERM_LAUNCH} does not override {PROCESS_LAUNCHED_BY_Q}"
+            ))
+            .env(&[(Q_FORCE_FIGTERM_LAUNCH, "1"), (PROCESS_LAUNCHED_BY_Q, "1")])
+            .expect(1),
             test(Q_TERM_DISABLED).env(&[(Q_TERM_DISABLED, "1")]).expect(1),
             test(PROCESS_LAUNCHED_BY_Q)
                 .env(&[(PROCESS_LAUNCHED_BY_Q, "1")])
