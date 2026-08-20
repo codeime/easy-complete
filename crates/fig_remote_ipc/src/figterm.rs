@@ -178,6 +178,11 @@ pub struct FigtermSession {
     #[serde(skip)]
     pub last_receive: Instant,
     pub context: Option<ShellContext>,
+    /// Flattened once when context env actually changes. Edit-buffer hooks
+    /// omit env, so this Arc is cloned into completion requests instead of
+    /// rebuilding the pair list on every keystroke.
+    #[serde(skip)]
+    pub flattened_env: Arc<Vec<(String, String)>>,
     #[serde(skip)]
     pub terminal_cursor_coordinates: Option<TerminalCursorCoordinates>,
     pub current_session_metrics: Option<SessionMetrics>,
@@ -205,6 +210,68 @@ impl FigtermSession {
             context: self.context.clone(),
         }
     }
+
+    /// Merge session context. Edit-buffer frames send cwd / process / shell
+    /// path, and env/alias only after `UpdateShellContext`; a `None`
+    /// incoming hook is a no-op so a missing frame cannot wipe a prompt.
+    pub fn apply_context(&mut self, incoming: Option<ShellContext>) {
+        let Some(new) = incoming else {
+            return;
+        };
+        match self.context.as_mut() {
+            Some(existing) => {
+                if let Some(pid) = new.pid {
+                    existing.pid = Some(pid);
+                }
+                merge_if_some(&mut existing.ttys, new.ttys);
+                merge_if_some(&mut existing.process_name, new.process_name);
+                merge_if_some(&mut existing.current_working_directory, new.current_working_directory);
+                merge_if_some(&mut existing.session_id, new.session_id);
+                merge_if_some(&mut existing.terminal, new.terminal);
+                merge_if_some(&mut existing.hostname, new.hostname);
+                merge_if_some(&mut existing.shell_path, new.shell_path);
+                merge_if_some(&mut existing.wsl_distro, new.wsl_distro);
+                merge_if_some(&mut existing.qterm_version, new.qterm_version);
+                if let Some(preexec) = new.preexec {
+                    existing.preexec = Some(preexec);
+                }
+                if let Some(osc_lock) = new.osc_lock {
+                    existing.osc_lock = Some(osc_lock);
+                }
+                merge_if_some(&mut existing.alias, new.alias);
+                if !new.environment_variables.is_empty() {
+                    existing.environment_variables = new.environment_variables;
+                    self.flattened_env = flatten_shell_environment(self.context.as_ref());
+                }
+            },
+            None => {
+                self.context = Some(new);
+                self.flattened_env = flatten_shell_environment(self.context.as_ref());
+            },
+        }
+    }
+}
+
+fn merge_if_some<T>(existing: &mut Option<T>, incoming: Option<T>) {
+    if incoming.is_some() {
+        *existing = incoming;
+    }
+}
+
+fn flatten_shell_environment(context: Option<&ShellContext>) -> Arc<Vec<(String, String)>> {
+    let Some(context) = context else {
+        return Arc::new(Vec::new());
+    };
+    Arc::new(
+        context
+            .environment_variables
+            .iter()
+            .filter_map(|variable| {
+                let value = variable.value.clone()?;
+                (!variable.key.is_empty()).then(|| (variable.key.clone(), value))
+            })
+            .collect(),
+    )
 }
 
 #[allow(dead_code)]
@@ -259,4 +326,96 @@ impl FigtermCommand {
         env: Vec<EnvironmentVariable>,
         timeout: Option<Duration>,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fig_proto::local::EnvironmentVariable;
+
+    fn dummy_session() -> FigtermSession {
+        let (sender, _) = flume::unbounded();
+        let (on_close_tx, _) = broadcast::channel(1);
+        FigtermSession {
+            id: Uuid::nil(),
+            secret: String::new(),
+            sender,
+            writer: None,
+            dead_since: None,
+            edit_buffer: EditBuffer::default(),
+            last_receive: Instant::now(),
+            context: None,
+            flattened_env: Arc::new(Vec::new()),
+            terminal_cursor_coordinates: None,
+            current_session_metrics: None,
+            response_map: HashMap::new(),
+            nonce_counter: Arc::new(AtomicU64::new(0)),
+            on_close_tx,
+            intercept: InterceptMode::Unlocked,
+            intercept_global: InterceptMode::Unlocked,
+        }
+    }
+
+    fn context_with_env(key: &str, value: &str) -> ShellContext {
+        ShellContext {
+            environment_variables: vec![EnvironmentVariable {
+                key: key.into(),
+                value: Some(value.into()),
+            }],
+            alias: Some("ll='ls -l'".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_context_keeps_env_when_the_edit_buffer_omits_it() {
+        let mut session = dummy_session();
+        session.apply_context(Some(context_with_env("PATH", "/bin")));
+        assert_eq!(session.flattened_env.as_slice(), &[("PATH".into(), "/bin".into())]);
+
+        session.apply_context(Some(ShellContext {
+            process_name: Some("zsh".into()),
+            ..Default::default()
+        }));
+        assert_eq!(session.context.as_ref().unwrap().process_name.as_deref(), Some("zsh"));
+        assert_eq!(session.context.as_ref().unwrap().alias.as_deref(), Some("ll='ls -l'"));
+        assert_eq!(session.flattened_env.as_slice(), &[("PATH".into(), "/bin".into())]);
+    }
+
+    #[test]
+    fn apply_context_replaces_env_when_the_prompt_sends_a_new_one() {
+        let mut session = dummy_session();
+        session.apply_context(Some(context_with_env("PATH", "/bin")));
+        session.apply_context(Some(context_with_env("PATH", "/usr/bin")));
+        assert_eq!(session.flattened_env.as_slice(), &[("PATH".into(), "/usr/bin".into())]);
+    }
+
+    #[test]
+    fn apply_context_reuses_the_flattened_env_arc_when_env_is_omitted() {
+        let mut session = dummy_session();
+        session.apply_context(Some(context_with_env("PATH", "/bin")));
+        let first = Arc::as_ptr(&session.flattened_env);
+        session.apply_context(Some(ShellContext {
+            current_working_directory: Some("/tmp".into()),
+            ..Default::default()
+        }));
+        assert_eq!(
+            session
+                .context
+                .as_ref()
+                .and_then(|ctx| ctx.current_working_directory.as_deref()),
+            Some("/tmp")
+        );
+        assert_eq!(session.context.as_ref().unwrap().alias.as_deref(), Some("ll='ls -l'"));
+        assert!(std::ptr::eq(first, Arc::as_ptr(&session.flattened_env)));
+    }
+
+    #[test]
+    fn apply_context_none_does_not_wipe_the_session() {
+        let mut session = dummy_session();
+        session.apply_context(Some(context_with_env("PATH", "/bin")));
+        session.apply_context(None);
+        assert_eq!(session.flattened_env.as_slice(), &[("PATH".into(), "/bin".into())]);
+        assert!(session.context.is_some());
+    }
 }

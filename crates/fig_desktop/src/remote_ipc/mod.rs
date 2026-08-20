@@ -46,9 +46,9 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
             session
                 .terminal_cursor_coordinates
                 .clone_from(&hook.terminal_cursor_coordinates);
-            session.context.clone_from(&hook.context);
+            session.apply_context(hook.context.clone());
 
-            let received_at = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+            let received_at = OffsetDateTime::now_utc();
             let current_session_expired = session
                 .current_session_metrics
                 .as_ref()
@@ -66,46 +66,50 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
             }
         });
 
-        let utf16_cursor_position = hook
-            .text
-            .get(..hook.cursor as usize)
-            .map(|s| s.encode_utf16().count() as i32);
+        // GPUI never inserts here. Skip UTF-16 / protobuf / base64 unless a
+        // leftover WebView subscriber is actually listening.
+        if !self.notifications_state.subscriptions.is_empty() {
+            let utf16_cursor_position = hook
+                .text
+                .get(..hook.cursor as usize)
+                .map(|s| s.encode_utf16().count() as i32);
 
-        for sub in self.notifications_state.subscriptions.iter() {
-            let message_id = match sub.get(&NotificationType::NotifyOnEditbuffferChange) {
-                Some(id) => *id,
-                None => continue,
-            };
+            for sub in self.notifications_state.subscriptions.iter() {
+                let message_id = match sub.get(&NotificationType::NotifyOnEditbuffferChange) {
+                    Some(id) => *id,
+                    None => continue,
+                };
 
-            let hook = hook.clone();
-            let message = ServerOriginatedMessage {
-                id: Some(message_id),
-                submessage: Some(ServerOriginatedSubMessage::Notification(Notification {
-                    r#type: Some(fig_proto::fig::notification::Type::EditBufferNotification(
-                        EditBufferChangedNotification {
-                            context: hook.context,
-                            buffer: Some(hook.text),
-                            cursor: utf16_cursor_position,
-                            session_id: Some(session_id.into()),
+                let hook = hook.clone();
+                let message = ServerOriginatedMessage {
+                    id: Some(message_id),
+                    submessage: Some(ServerOriginatedSubMessage::Notification(Notification {
+                        r#type: Some(fig_proto::fig::notification::Type::EditBufferNotification(
+                            EditBufferChangedNotification {
+                                context: hook.context,
+                                buffer: Some(hook.text),
+                                cursor: utf16_cursor_position,
+                                session_id: Some(session_id.into()),
+                            },
+                        )),
+                    })),
+                };
+
+                let mut encoded = BytesMut::new();
+                message.encode(&mut encoded).unwrap();
+
+                debug!(%message_id, "Sending edit buffer change notification to webview");
+
+                self.proxy
+                    .send_event(Event::WindowEvent {
+                        window_id: sub.key().clone(),
+                        window_event: WindowEvent::Emit {
+                            event_name: EmitEventName::Notification,
+                            payload: BASE64_STANDARD.encode(encoded).into(),
                         },
-                    )),
-                })),
-            };
-
-            let mut encoded = BytesMut::new();
-            message.encode(&mut encoded).unwrap();
-
-            debug!(%message_id, "Sending edit buffer change notification to webview");
-
-            self.proxy
-                .send_event(Event::WindowEvent {
-                    window_id: sub.key().clone(),
-                    window_event: WindowEvent::Emit {
-                        event_name: EmitEventName::Notification,
-                        payload: BASE64_STANDARD.encode(encoded).into(),
-                    },
-                })
-                .unwrap();
+                    })
+                    .unwrap();
+            }
         }
 
         let empty_edit_buffer = hook.text.trim().is_empty();
@@ -115,13 +119,18 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
                 .send_event(Event::PlatformBoundEvent(PlatformBoundEvent::EditBufferChanged))?;
         }
 
+        let cwd = figterm_state
+            .with(&session_id, |session| {
+                session
+                    .context
+                    .as_ref()
+                    .and_then(|ctx| ctx.current_working_directory.clone())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
         self.proxy.send_event(Event::GpuiOverlayBuffer {
             buffer: hook.text.clone(),
-            cwd: hook
-                .context
-                .as_ref()
-                .and_then(|ctx| ctx.current_working_directory.clone())
-                .unwrap_or_default(),
+            cwd,
             cursor: hook.cursor.max(0) as u32,
             session_id,
         })?;
@@ -143,7 +152,7 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
                 new_cwd.clone_from(&new_context.current_working_directory);
             }
 
-            session.context.clone_from(&hook.context);
+            session.apply_context(hook.context.clone());
         });
 
         if cwd_changed {
@@ -203,7 +212,7 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
         figterm_state: &Arc<FigtermState>,
     ) -> Result<Option<clientbound::response::Response>> {
         figterm_state.with_update(session_id, |session| {
-            session.context.clone_from(&hook.context);
+            session.apply_context(hook.context.clone());
         });
 
         self.proxy.send_event(Event::WindowEvent {
@@ -242,7 +251,7 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
         figterm_state: &Arc<FigtermState>,
     ) -> Result<Option<clientbound::response::Response>> {
         figterm_state.with_update(session_id, |session| {
-            session.context.clone_from(&hook.context);
+            session.apply_context(hook.context.clone());
         });
 
         self.notifications_state

@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -19,6 +21,9 @@ const HEARTBEAT_INTERVAL_SECS: i64 = 24 * 60 * 60;
 static POSTHOG_ENDPOINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static POSTHOG_API_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static QUEUE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// High-frequency overlay counters. Kept off SQLite so a shown/accepted
+/// completion does not take a database write on the UI thread.
+static COUNTERS: LazyLock<Mutex<HashMap<String, i64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Call once at app startup.
 /// `endpoint` — Cloudflare Workers URL proxying to your PostHog instance,
@@ -50,7 +55,8 @@ fn is_enabled() -> bool {
     fig_settings::settings::get_bool_or(TELEMETRY_ENABLED_KEY, true)
 }
 
-fn is_configured() -> bool {
+/// True after [`init`] received a non-empty endpoint and API key.
+pub fn is_configured() -> bool {
     POSTHOG_ENDPOINT.get().is_some() && POSTHOG_API_KEY.get().is_some()
 }
 
@@ -248,16 +254,31 @@ pub async fn flush_queue() {
 }
 
 // ─── Local aggregation for high-frequency events ────────────────────────────
-// count() only bumps an integer in the local state db — no network. The
-// accumulated totals ride along with the next daily_heartbeat as properties,
-// so per-keystroke-scale events cost one request per day, not one each.
+// count() bumps an in-process integer — no SQLite and no network. Totals
+// ride along with the next daily_heartbeat as properties, so per-keystroke
+// events cost one request per day, not one each. They do not survive a
+// process restart.
 
-/// Increment a local counter for a high-frequency event. Cheap (one SQLite
-/// write, no network); reported in aggregate with the daily heartbeat.
+/// Increment a local counter for a high-frequency event.
+///
+/// In-process only — no SQLite and no network. Totals ride along with the
+/// next daily heartbeat. A no-op when telemetry is off so the overlay hot
+/// path does not take a database write on every shown row.
 pub fn count(event: &str) {
-    let key = format!("{COUNTER_KEY_PREFIX}{event}");
-    let current = fig_settings::state::get_int_or(&key, 0);
-    fig_settings::state::set_value(&key, current + 1).ok();
+    if !is_enabled() || !is_configured() {
+        return;
+    }
+    bump_counter(event);
+}
+
+fn bump_counter(event: &str) {
+    let mut counters = COUNTERS.lock().unwrap_or_else(|err| err.into_inner());
+    *counters.entry(event.to_string()).or_insert(0) += 1;
+}
+
+fn take_counters() -> HashMap<String, i64> {
+    let mut counters = COUNTERS.lock().unwrap_or_else(|err| err.into_inner());
+    std::mem::take(&mut *counters)
 }
 
 fn now_unix() -> i64 {
@@ -279,16 +300,20 @@ pub async fn maybe_send_daily_heartbeat() {
     }
 
     let mut props = serde_json::Map::new();
-    let counters: Vec<(String, i64)> = fig_settings::state::all()
-        .map(|map| {
-            map.iter()
-                .filter_map(|(k, v)| {
-                    let name = k.strip_prefix(COUNTER_KEY_PREFIX)?;
-                    Some((name.to_owned(), v.as_i64()?))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut counters = take_counters();
+    // Older builds wrote these to SQLite on every overlay show. Drain any
+    // leftovers once so a version bump does not drop a day's counts.
+    if let Ok(map) = fig_settings::state::all() {
+        for (key, value) in map {
+            let Some(name) = key.strip_prefix(COUNTER_KEY_PREFIX) else {
+                continue;
+            };
+            if let Some(value) = value.as_i64() {
+                *counters.entry(name.to_owned()).or_insert(0) += value;
+            }
+            fig_settings::state::remove_value(key).ok();
+        }
+    }
     for (name, value) in &counters {
         props.insert(format!("count_{name}"), json!(value));
     }
@@ -297,9 +322,39 @@ pub async fn maybe_send_daily_heartbeat() {
     // track_blocking, and double-counting from retries is worse than a
     // heartbeat riding the offline queue.
     fig_settings::state::set_value(LAST_HEARTBEAT_KEY, now).ok();
-    for (name, _) in &counters {
-        fig_settings::state::remove_value(format!("{COUNTER_KEY_PREFIX}{name}")).ok();
-    }
 
     track_blocking("daily_heartbeat", Value::Object(props)).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COUNTERS, bump_counter, count};
+
+    #[test]
+    fn count_is_a_noop_when_telemetry_was_never_configured() {
+        let before = COUNTERS
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get("autocomplete_shown")
+            .copied();
+        count("autocomplete_shown");
+        let after = COUNTERS
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get("autocomplete_shown")
+            .copied();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn in_memory_counters_accumulate() {
+        let shown = format!("shown-{:?}", std::thread::current().id());
+        let accepted = format!("accepted-{:?}", std::thread::current().id());
+        bump_counter(&shown);
+        bump_counter(&shown);
+        bump_counter(&accepted);
+        let counters = COUNTERS.lock().unwrap_or_else(|err| err.into_inner());
+        assert_eq!(counters.get(&shown).copied(), Some(2));
+        assert_eq!(counters.get(&accepted).copied(), Some(1));
+    }
 }

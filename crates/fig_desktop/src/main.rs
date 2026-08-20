@@ -6,7 +6,6 @@ mod overlay;
 mod permissions;
 mod settings_ui;
 // mod figterm;
-mod auth_watcher;
 mod file_watcher;
 mod install;
 mod local_ipc;
@@ -31,6 +30,7 @@ use fig_os_shim::Context;
 use fig_util::consts::APP_PROCESS_NAME;
 use fig_util::consts::PRODUCT_NAME;
 use fig_util::{URL_SCHEMA, directories};
+#[cfg(target_os = "linux")]
 use sysinfo::get_current_pid;
 #[cfg(target_os = "linux")]
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
@@ -44,8 +44,21 @@ pub use webview::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID};
 
 pub use event_loop::{EventLoopClosed, EventLoopProxy, EventLoopWindowTarget};
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // The desktop process is I/O bound: GPUI owns the UI thread, and the
+    // completion engine has its own worker. A worker per core just parks
+    // stacks — the same waste ecterm already stopped.
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(8)
+        .thread_name("ec-tokio")
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+        .block_on(async_main())
+}
+
+async fn async_main() -> ExitCode {
     #[cfg(target_os = "macos")]
     gpui_host::ensure_gpui_ns_application();
 
@@ -141,6 +154,11 @@ async fn main() -> ExitCode {
     };
 
     if !cli.allow_multiple {
+        #[cfg(target_os = "macos")]
+        if let Some(exit_code) = allow_multiple_running_check(std::process::id(), cli.kill_old, page.clone()).await {
+            return exit_code;
+        }
+        #[cfg(target_os = "linux")]
         match get_current_pid() {
             Ok(current_pid) => {
                 if let Some(exit_code) = allow_multiple_running_check(current_pid, cli.kill_old, page.clone()).await {
@@ -178,12 +196,15 @@ async fn main() -> ExitCode {
 
     // Daily active-device heartbeat; also flushes locally aggregated counters
     // (autocomplete_shown/accepted etc.) as properties of the heartbeat event.
-    tokio::spawn(async {
-        loop {
-            fig_telemetry::maybe_send_daily_heartbeat().await;
-            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
-        }
-    });
+    // Unconfigured builds never send, so do not keep an hourly sleeper around.
+    if fig_telemetry::is_configured() {
+        tokio::spawn(async {
+            loop {
+                fig_telemetry::maybe_send_daily_heartbeat().await;
+                tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+            }
+        });
+    }
 
     #[cfg(target_os = "linux")]
     {
@@ -365,14 +386,10 @@ async fn stop_instances(pids: &[i32]) {
 
 #[cfg(target_os = "macos")]
 #[must_use]
-async fn allow_multiple_running_check(
-    current_pid: sysinfo::Pid,
-    kill_old: bool,
-    page: Option<String>,
-) -> Option<ExitCode> {
+async fn allow_multiple_running_check(current_pid: u32, kill_old: bool, page: Option<String>) -> Option<ExitCode> {
     // AppKit already knows our bundle. Enumerating every process through
     // sysinfo was loading a full process table on every launch.
-    let current = i32::try_from(current_pid.as_u32()).ok()?;
+    let current = i32::try_from(current_pid).ok()?;
     let others: Vec<i32> = macos_utils::applications::running_application_pids(fig_util::consts::APP_BUNDLE_ID)
         .into_iter()
         .filter(|&pid| pid != current && pid > 0)
@@ -404,6 +421,23 @@ mod tests {
     use std::time::Duration;
 
     use super::wait_for_exit;
+
+    #[test]
+    fn macos_does_not_pull_sysinfo_just_to_read_our_pid() {
+        let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+        let macos = manifest
+            .split("[target.'cfg(target_os=\"macos\")'.dependencies]")
+            .nth(1)
+            .unwrap_or(manifest);
+        assert!(
+            !macos.contains("sysinfo"),
+            "sysinfo on macOS used to load a process table on every launch"
+        );
+        assert!(
+            manifest.contains("target_os = \"linux\"") && manifest.contains("sysinfo.workspace"),
+            "Linux still needs sysinfo to find the other desktop instance"
+        );
+    }
 
     /// `--kill-old` binds the desktop socket as soon as this returns, so the
     /// wait has to outlive the process and not merely the signal.

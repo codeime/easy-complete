@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,10 @@ pub struct Frecency {
     /// command or `cmd sub` prefix -> (count, last_seen_unix_secs)
     stats: HashMap<String, (u32, u64)>,
     commands: Vec<(String, u64)>,
+    /// `""` / `"git"` / `"git checkout"` → next-token occurrence counts.
+    /// Built once when history is loaded so ranking does not walk the list
+    /// on every keystroke.
+    next_word_counts: HashMap<String, HashMap<String, usize>>,
 }
 
 impl Frecency {
@@ -95,9 +100,11 @@ impl Frecency {
                 bump(&mut stats, &format!("{} {}", tokens[0], tokens[1]), ts);
             }
         }
+        let next_word_counts = next_word_counts(&stored);
         Self {
             stats,
             commands: stored,
+            next_word_counts,
         }
     }
 
@@ -114,7 +121,7 @@ impl Frecency {
         }
         // Count raw entries before query filtering or deduplication. Repeated
         // identical commands are what make the old history row more frequent.
-        let first_word_counts = self.history_first_word_counts("");
+        let first_word_counts = self.next_word_counts("");
         let mut seen = HashSet::new();
         self.commands
             .iter()
@@ -142,7 +149,7 @@ impl Frecency {
     /// row; the raw insert value is that same suffix, so accepting `git co`
     /// inserts `checkout ...`, never `git git ...`.
     pub(crate) fn history_suffix_suggestions(&self, prefix: &str, query: &str, fuzzy: bool) -> Vec<Suggestion> {
-        let first_word_counts = self.history_first_word_counts(prefix.trim_end());
+        let first_word_counts = self.next_word_counts(prefix.trim_end());
         let mut seen = HashSet::new();
 
         self.commands
@@ -172,23 +179,41 @@ impl Frecency {
             .collect()
     }
 
-    fn history_first_word_counts(&self, prefix: &str) -> HashMap<String, usize> {
-        let mut counts = HashMap::new();
-        let full_prefix = (!prefix.is_empty()).then(|| format!("{prefix} "));
-        for (command, _) in &self.commands {
-            let suffix = match full_prefix.as_deref() {
-                Some(prefix) => match command.strip_prefix(prefix) {
-                    Some(suffix) => suffix,
-                    None => continue,
-                },
-                None => command.as_str(),
-            };
-            let first_word = suffix.split_whitespace().next().unwrap_or_default();
-            if !first_word.is_empty() {
-                *counts.entry(first_word.to_string()).or_default() += 1;
-            }
+    fn next_word_counts(&self, prefix: &str) -> &HashMap<String, usize> {
+        self.next_word_counts.get(prefix).unwrap_or(empty_word_counts())
+    }
+}
+
+fn empty_word_counts() -> &'static HashMap<String, usize> {
+    static EMPTY: OnceLock<HashMap<String, usize>> = OnceLock::new();
+    EMPTY.get_or_init(HashMap::new)
+}
+
+/// Same keys the per-request walk used: `""` plus every `command[..space]`.
+fn next_word_counts(commands: &[(String, u64)]) -> HashMap<String, HashMap<String, usize>> {
+    let mut counts = HashMap::new();
+    for (command, _) in commands {
+        record_next_words(command, &mut counts);
+    }
+    counts
+}
+
+fn record_next_words(command: &str, counts: &mut HashMap<String, HashMap<String, usize>>) {
+    if let Some(word) = command.split_whitespace().next() {
+        *counts
+            .entry(String::new())
+            .or_default()
+            .entry(word.to_string())
+            .or_default() += 1;
+    }
+    let mut search_from = 0;
+    while let Some(rel) = command[search_from..].find(' ') {
+        let space_at = search_from + rel;
+        let prefix = command[..space_at].to_string();
+        if let Some(word) = command[space_at + 1..].split_whitespace().next() {
+            *counts.entry(prefix).or_default().entry(word.to_string()).or_default() += 1;
         }
-        counts
+        search_from = space_at + 1;
     }
 }
 
@@ -317,7 +342,7 @@ pub fn apply_with_acceptance(
 ) {
     let prefix = completion_prefix(tokens, matching_term(result));
     let query = matching_term(result).to_string();
-    let history_counts = frecency.history_first_word_counts(&prefix);
+    let history_counts = frecency.next_word_counts(&prefix);
     let root_command = if root_command.is_empty() {
         tokens.first().map(String::as_str).unwrap_or_default()
     } else {
@@ -327,7 +352,7 @@ pub fn apply_with_acceptance(
     if query.is_empty() {
         result.suggestions.sort_by(|a, b| {
             compare_auto_execute(a, b)
-                .then_with(|| compare_priority(b, a, &history_counts, acceptance, root_command, !alphabetical))
+                .then_with(|| compare_priority(b, a, history_counts, acceptance, root_command, !alphabetical))
         });
     } else {
         // `lookup` has already filtered rows with the request's fuzzy flag.
@@ -337,7 +362,7 @@ pub fn apply_with_acceptance(
         result.suggestions.sort_by(|a, b| {
             compare_auto_execute(a, b)
                 .then_with(|| compare_match(a, b, &query))
-                .then_with(|| compare_priority(b, a, &history_counts, acceptance, root_command, !alphabetical))
+                .then_with(|| compare_priority(b, a, history_counts, acceptance, root_command, !alphabetical))
         });
     }
 
@@ -1130,5 +1155,42 @@ mod tests {
         assert!(includes_database_shell(&unknown, HistoryShell::Zsh));
         assert!(includes_database_shell(&unknown, HistoryShell::Bash));
         assert!(includes_database_shell(&unknown, HistoryShell::Fish));
+    }
+
+    fn walk_next_word_counts(commands: &[(String, u64)], prefix: &str) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        let full_prefix = (!prefix.is_empty()).then(|| format!("{prefix} "));
+        for (command, _) in commands {
+            let suffix = match full_prefix.as_deref() {
+                Some(prefix) => match command.strip_prefix(prefix) {
+                    Some(suffix) => suffix,
+                    None => continue,
+                },
+                None => command.as_str(),
+            };
+            let first_word = suffix.split_whitespace().next().unwrap_or_default();
+            if !first_word.is_empty() {
+                *counts.entry(first_word.to_string()).or_default() += 1;
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn next_word_index_matches_the_per_request_walk() {
+        let commands = [
+            ("git checkout main".into(), 1_u64),
+            ("git status".into(), 2),
+            ("echo hi".into(), 3),
+            ("git  checkout".into(), 4),
+        ];
+        let frecency = Frecency::from_commands(commands.clone());
+        for prefix in ["", "git", "git checkout", "echo", "missing", "git "] {
+            assert_eq!(
+                frecency.next_word_counts(prefix),
+                &walk_next_word_counts(&commands, prefix),
+                "prefix {prefix:?}"
+            );
+        }
     }
 }

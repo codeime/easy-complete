@@ -9,7 +9,7 @@ use accessibility_sys::{
 use core_foundation::base::{CFRange, CFType, CFTypeRef, TCFType, TCFTypeRef};
 use core_foundation::string::CFString;
 use core_graphics::geometry::CGRect;
-use tracing::{debug, error};
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct CaretPosition {
@@ -34,10 +34,7 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
     let focused_element: AXUIElement = match system_wide_element.attribute(&AXAttribute::focused_ui()) {
         Ok(focused_element) => focused_element,
         Err(err) => {
-            match err {
-                accessibility::Error::Ax(-25212) => debug!(%err, "Selected range value did not exist"),
-                _ => error!(%err, "Couldn't get selected range value, error code"),
-            }
+            debug!(%err, "focused UI is not available for caret tracking");
 
             return INVALID_CARET_POSITION;
         },
@@ -47,10 +44,7 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
     let selected_range_value: CFType = match focused_element.attribute(&AXAttribute::selected_range()) {
         Ok(selected_range_value) => selected_range_value,
         Err(err) => {
-            match err {
-                accessibility::Error::Ax(-25212) => debug!(%err, "Selected range value did not exist"),
-                _ => error!(%err, "Couldn't get selected range value, error code"),
-            }
+            debug!(%err, "selected range is not available for caret tracking");
 
             return INVALID_CARET_POSITION;
         },
@@ -68,7 +62,7 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
     let selected_text_range: CFRange = match selected_range_result {
         Ok(selected_text_range) => selected_text_range,
         Err(err) => {
-            error!("Couldn't get selected text range, did types match {:?}", err);
+            debug!("Couldn't get selected text range, did types match {:?}", err);
             return INVALID_CARET_POSITION;
         },
     };
@@ -82,7 +76,7 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
 
     // https://linear.app/fig/issue/ENG-109/ - autocomplete-popup-shows-when-copying-and-pasting-in-terminal
     if selected_text_range.length > 1 {
-        error!("selectedRange length > 1");
+        debug!("selectedRange length > 1");
         return INVALID_CARET_POSITION;
     }
 
@@ -98,7 +92,7 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
     let select_bounds: AXValueRef = match select_bounds_result {
         Ok(select_bounds) => select_bounds as AXValueRef,
         Err(err) => {
-            error!("Selected bounds error, error code {:?}", err);
+            debug!("Selected bounds error, error code {:?}", err);
             return INVALID_CARET_POSITION;
         },
     };
@@ -109,13 +103,13 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
     let select_rect = match selected_rect_result {
         Ok(select_rect) => select_rect,
         Err(err) => {
-            error!("Couldn't get selected range, did types match {:?}", err);
+            debug!("Couldn't get selected range, did types match {:?}", err);
             return INVALID_CARET_POSITION;
         },
     };
     // Sanity check: prevents flashing autocomplete in bottom corner
     if select_rect.size.width == 0.0 && select_rect.size.height == 0.0 {
-        error!("Prevents flashing autocomplete in bottom corner");
+        debug!("Prevents flashing autocomplete in bottom corner");
         return INVALID_CARET_POSITION;
     }
 

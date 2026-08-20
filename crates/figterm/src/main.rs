@@ -15,14 +15,14 @@ pub mod update;
 use std::env;
 #[cfg(unix)]
 use std::ffi::{CString, OsStr};
-use std::sync::{LazyLock, Mutex, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::ansi::Processor;
 use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::{ShellState, SizeInfo, TextBuffer};
+use alacritty_terminal::term::{ShellState, SizeInfo};
 use anyhow::{Context as _, Result, anyhow};
 use bytes::BytesMut;
 use cfg_if::cfg_if;
@@ -34,10 +34,9 @@ use fig_proto::local::{self, EnvironmentVariable, TerminalCursorCoordinates};
 use fig_proto::remote::Hostbound;
 use fig_proto::remote_hooks::{hook_to_message, new_edit_buffer_hook};
 use fig_settings::state;
-use fig_util::consts::CLI_BINARY_NAME;
 use fig_util::env_var::{Q_LOG_LEVEL, Q_SHELL, Q_TERM, QTERM_SESSION_ID};
 use fig_util::process_info::{Pid, PidExt};
-use fig_util::{PRODUCT_NAME, PTY_BINARY_NAME, Terminal as FigTerminal, directories};
+use fig_util::{PRODUCT_NAME, PTY_BINARY_NAME, directories, terminal::current_terminal};
 use flume::{Receiver, Sender};
 #[cfg(unix)]
 use nix::unistd::execvp;
@@ -70,6 +69,15 @@ static EXPECTED_BUFFER: Mutex<String> = Mutex::new(String::new());
 
 static SHELL_ENVIRONMENT_VARIABLES: Mutex<Vec<EnvironmentVariable>> = Mutex::new(Vec::new());
 static SHELL_ALIAS: Mutex<Option<String>> = Mutex::new(None);
+/// Bumped by `UpdateShellContext` (`ec _ pre-cmd` at prompt). Edit-buffer
+/// frames send env/alias only when this changes, so the desktop session
+/// learns about a just-finished `export` without cloning env on every key.
+static SHELL_CONTEXT_EPOCH: AtomicU64 = AtomicU64::new(0);
+static LAST_SENT_SHELL_CONTEXT_EPOCH: AtomicU64 = AtomicU64::new(u64::MAX);
+
+pub(crate) fn note_shell_context_updated() {
+    SHELL_CONTEXT_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
 
 static USER_ENABLED_SHELLS: LazyLock<Vec<String>> = LazyLock::new(|| {
     fig_settings::state::get("user.enabled-shells")
@@ -114,9 +122,10 @@ pub enum MainLoopEvent {
     UnsetCsiU,
 }
 
+/// Prompt / preexec / postexec / intercepted-key frames carry the full
+/// context. Edit-buffer ticks use [`edit_buffer_context`] so they do not
+/// clone env, aliases, or the parent-terminal lookup on every keystroke.
 fn shell_state_to_context(shell_state: &ShellState) -> local::ShellContext {
-    let terminal = FigTerminal::parent_terminal(&Context::new()).map(|s| s.to_string());
-
     local::ShellContext {
         pid: shell_state.local_context.pid,
         ttys: shell_state.local_context.tty.clone(),
@@ -127,24 +136,72 @@ fn shell_state_to_context(shell_state: &ShellState) -> local::ShellContext {
             .clone()
             .map(|path| path.display().to_string()),
         wsl_distro: shell_state.local_context.wsl_distro.clone(),
-        current_working_directory: shell_state
-            .local_context
-            .current_working_directory
-            .clone()
-            .map(|cwd| cwd.display().to_string()),
+        current_working_directory: cwd_string(shell_state),
         session_id: shell_state.local_context.session_id.clone(),
-        terminal,
-        hostname: shell_state
-            .local_context
-            .username
-            .as_deref()
-            .and_then(|username| HOSTNAME.as_deref().map(|hostname| format!("{username}@{hostname}"))),
+        terminal: cached_parent_terminal(),
+        hostname: cached_host_label(shell_state.local_context.username.as_deref()),
         environment_variables: SHELL_ENVIRONMENT_VARIABLES.lock().unwrap().clone(),
         qterm_version: Some(env!("CARGO_PKG_VERSION").into()),
         preexec: Some(shell_state.preexec),
         osc_lock: Some(shell_state.osc_lock),
         alias: SHELL_ALIAS.lock().unwrap().clone(),
     }
+}
+
+/// OSC 7 can move cwd between prompts. Env/alias ride along only after
+/// `UpdateShellContext`; `process_name` / `shell_path` stay on every frame
+/// so a keystroke before the first Prompt still selects the right history.
+fn edit_buffer_context(shell_state: &ShellState, include_environment: bool) -> local::ShellContext {
+    local::ShellContext {
+        current_working_directory: cwd_string(shell_state),
+        process_name: shell_state.local_context.shell.clone(),
+        shell_path: shell_state
+            .local_context
+            .shell_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        environment_variables: if include_environment {
+            SHELL_ENVIRONMENT_VARIABLES.lock().unwrap().clone()
+        } else {
+            Vec::new()
+        },
+        alias: if include_environment {
+            SHELL_ALIAS.lock().unwrap().clone()
+        } else {
+            None
+        },
+        ..Default::default()
+    }
+}
+
+fn pending_shell_context_epoch() -> Option<u64> {
+    let epoch = SHELL_CONTEXT_EPOCH.load(Ordering::Relaxed);
+    (LAST_SENT_SHELL_CONTEXT_EPOCH.load(Ordering::Relaxed) != epoch).then_some(epoch)
+}
+
+fn mark_shell_context_sent(epoch: u64) {
+    LAST_SENT_SHELL_CONTEXT_EPOCH.store(epoch, Ordering::Relaxed);
+}
+
+fn cwd_string(shell_state: &ShellState) -> Option<String> {
+    shell_state
+        .local_context
+        .current_working_directory
+        .as_ref()
+        .map(|cwd| cwd.display().to_string())
+}
+
+fn cached_parent_terminal() -> Option<String> {
+    current_terminal().map(|terminal| terminal.to_string())
+}
+
+fn cached_host_label(username: Option<&str>) -> Option<String> {
+    static LABEL: OnceLock<String> = OnceLock::new();
+    if let Some(existing) = LABEL.get() {
+        return Some(existing.clone());
+    }
+    let label = username.and_then(|user| HOSTNAME.as_deref().map(|host| format!("{user}@{host}")))?;
+    Some(LABEL.get_or_init(|| label).clone())
 }
 
 #[allow(clippy::needless_return)]
@@ -311,7 +368,8 @@ where
                 trace!("buffer bytes: {:02X?}", edit_buffer.buffer.as_bytes());
                 trace!("buffer chars: {:?}", edit_buffer.buffer.chars().collect::<Vec<_>>());
 
-                let context = shell_state_to_context(term.shell_state());
+                let sent_epoch = pending_shell_context_epoch();
+                let context = edit_buffer_context(term.shell_state(), sent_epoch.is_some());
 
                 let edit_buffer_hook =
                     new_edit_buffer_hook(Some(context), edit_buffer.buffer, cursor_idx, 0, cursor_coordinates);
@@ -320,6 +378,9 @@ where
                 trace!("Sending: {message:?}");
 
                 sender.send_async(message).await?;
+                if let Some(epoch) = sent_epoch {
+                    mark_shell_context_sent(epoch);
+                }
             }
             Ok(())
         },
@@ -552,8 +613,6 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
             newline_mode: false,
         };
 
-        let ai_enabled = fig_settings::settings::get_bool_or("ai.terminal-hash-sub", true);
-
         if let Ok(shell) = get_parent_shell() {
             let path = std::path::Path::new(&shell);
             let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(shell.as_str());
@@ -675,31 +734,6 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
                                         let preexec = term.shell_state().preexec;
 
                                         debug!(?event, ?raw, %preexec,  "Got key event");
-
-                                        if !preexec && ai_enabled && event.key == KeyCode::Enter && event.modifiers == input::Modifiers::NONE {
-                                            if let Some(TextBuffer { buffer, cursor_idx }) = term.get_current_buffer() {
-                                                let buffer = buffer.trim();
-                                                if buffer.len() > 1 && buffer.starts_with('#') && term.columns() > buffer.len() {
-                                                    write_buffer.extend(
-                                                        &std::iter::repeat_n(b'\x08', buffer.len()
-                                                            .max(cursor_idx.unwrap_or(0)))
-                                                            .collect::<Vec<_>>()
-                                                    );
-                                                    write_buffer.extend(
-                                                        format!(
-                                                            "{} translate '{}'\r",
-                                                            CLI_BINARY_NAME,
-                                                            buffer
-                                                                .trim_start_matches('#')
-                                                                .trim()
-                                                                .replace('\'', "'\"'\"'")
-                                                            ).as_bytes()
-                                                    );
-                                                    master.write_all(&write_buffer).await?;
-                                                    continue 'select_loop;
-                                                }
-                                            }
-                                        }
 
                                         // if we are in CSI u mode we try to encode first, otherwise we try to send the raw bytes first
                                         let raw = if csi_u_set {
@@ -969,5 +1003,19 @@ mod tests {
             Q_DISABLE_AUTOCOMPLETE,
             "1"
         )])));
+    }
+
+    #[test]
+    fn edit_buffer_sends_env_only_after_shell_context_updates() {
+        note_shell_context_updated();
+        let epoch = pending_shell_context_epoch().expect("pending after update");
+        assert_eq!(pending_shell_context_epoch(), Some(epoch));
+        mark_shell_context_sent(epoch);
+        assert_eq!(pending_shell_context_epoch(), None);
+        note_shell_context_updated();
+        let next = pending_shell_context_epoch().expect("pending after a later update");
+        assert_ne!(next, epoch);
+        mark_shell_context_sent(next);
+        assert_eq!(pending_shell_context_epoch(), None);
     }
 }

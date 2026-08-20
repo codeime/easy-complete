@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
 use cfg_if::cfg_if;
 use fig_install::InstallComponents;
@@ -197,43 +198,53 @@ pub async fn build_tray(
 }
 
 pub fn get_icon(is_logged_in: bool) -> Icon {
-    let (icon_rgba, icon_width, icon_height) = {
-        let bytes = if is_logged_in {
-            cfg_if! {
-                if #[cfg(target_os = "linux")] {
-                    include_bytes!("../icons/icon-monochrome-light.png").to_vec()
-                } else {
-                    include_bytes!("../icons/icon-monochrome.png").to_vec()
-                }
-            }
-        } else {
-            cfg_if! {
-                if #[cfg(target_os = "linux")] {
-                    // This is intentionally the same as when logged in since Linux tray icons
-                    // don't really seem to work that well when multiple choices are available.
-                    include_bytes!("../icons/icon-monochrome-light.png").to_vec()
-                } else {
-                    include_bytes!("../icons/not-logged-in.png").to_vec()
-                }
-            }
-        };
-        let image = image::load_from_memory(&bytes)
+    fn decode(bytes: &[u8]) -> Icon {
+        let image = image::load_from_memory(bytes)
             .expect("Failed to open icon path")
             .into_rgba8();
         let (width, height) = image.dimensions();
-        let rgba = image.into_raw();
-        (rgba, width, height)
-    };
-    Icon::from_rgba(icon_rgba, icon_width, icon_height).expect("Failed to open icon")
+        Icon::from_rgba(image.into_raw(), width, height).expect("Failed to open icon")
+    }
+
+    if is_logged_in {
+        static SIGNED_IN: OnceLock<Icon> = OnceLock::new();
+        return SIGNED_IN
+            .get_or_init(|| {
+                cfg_if! {
+                    if #[cfg(target_os = "linux")] {
+                        decode(include_bytes!("../icons/icon-monochrome-light.png"))
+                    } else {
+                        decode(include_bytes!("../icons/icon-monochrome.png"))
+                    }
+                }
+            })
+            .clone();
+    }
+
+    static SIGNED_OUT: OnceLock<Icon> = OnceLock::new();
+    SIGNED_OUT
+        .get_or_init(|| {
+            cfg_if! {
+                if #[cfg(target_os = "linux")] {
+                    decode(include_bytes!("../icons/icon-monochrome-light.png"))
+                } else {
+                    decode(include_bytes!("../icons/not-logged-in.png"))
+                }
+            }
+        })
+        .clone()
 }
 
-fn get_image_rgba(image_bytes: &[u8]) -> (Vec<u8>, u32, u32) {
-    let image = image::load_from_memory(image_bytes)
-        .expect("Failed to open icon path")
-        .into_rgba8();
-    let (width, height) = image.dimensions();
-    let rgba = image.into_raw();
-    (rgba, width, height)
+fn warning_icon_rgba() -> (Vec<u8>, u32, u32) {
+    static RGBA: OnceLock<(Vec<u8>, u32, u32)> = OnceLock::new();
+    RGBA.get_or_init(|| {
+        let image = image::load_from_memory(include_bytes!("../icons/yellow-circle.png"))
+            .expect("Failed to open icon path")
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        (image.into_raw(), width, height)
+    })
+    .clone()
 }
 
 pub fn get_context_menu(is_logged_in: bool) -> Menu {
@@ -392,27 +403,31 @@ fn menu(is_logged_in: bool) -> Vec<MenuElement> {
     let settings = MenuElement::entry(None, None, "Settings", "settings").with_accelerator("super+Comma");
     let check_for_updates = MenuElement::entry(None, None, "Check for Updates…", "update");
 
-    let onboarded_completed = fig_settings::state::get_bool_or("desktop.completedOnboarding", false);
-    let yellow_circle_img = get_image_rgba(include_bytes!("../icons/yellow-circle.png"));
-    let mut menu = if !is_logged_in && !onboarded_completed {
-        vec![
-            MenuElement::info(
-                Some(yellow_circle_img),
-                format!("{PRODUCT_NAME} hasn't been set up yet..."),
-            ),
-            MenuElement::entry(None, None, "Get Started", LOGIN_MENU_ID),
-        ]
-    } else if !is_logged_in {
-        vec![
-            MenuElement::info(Some(yellow_circle_img), "Your session has expired"),
-            MenuElement::entry(None, None, "Log back in", LOGIN_MENU_ID),
-        ]
+    // Auth is gone, so the signed-out branches never run. Do not read
+    // `desktop.completedOnboarding` from SQLite on every tray rebuild.
+    let mut menu = if !is_logged_in {
+        let yellow_circle_img = warning_icon_rgba();
+        let onboarded_completed = fig_settings::state::get_bool_or("desktop.completedOnboarding", false);
+        if !onboarded_completed {
+            vec![
+                MenuElement::info(
+                    Some(yellow_circle_img),
+                    format!("{PRODUCT_NAME} hasn't been set up yet..."),
+                ),
+                MenuElement::entry(None, None, "Get Started", LOGIN_MENU_ID),
+            ]
+        } else {
+            vec![
+                MenuElement::info(Some(yellow_circle_img), "Your session has expired"),
+                MenuElement::entry(None, None, "Log back in", LOGIN_MENU_ID),
+            ]
+        }
     } else {
         vec![settings, check_for_updates]
     };
 
     if accessibility_is_missing() {
-        let warning_img = get_image_rgba(include_bytes!("../icons/yellow-circle.png"));
+        let warning_img = warning_icon_rgba();
         let mut warning = vec![
             MenuElement::info(Some(warning_img), "Accessibility permission is missing"),
             MenuElement::entry(None, None, "Enable Accessibility…", ACCESSIBILITY_MENU_ID),
@@ -425,4 +440,17 @@ fn menu(is_logged_in: bool) -> Vec<MenuElement> {
     menu.extend(vec![MenuElement::Separator, quit]);
 
     menu
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tray_icon_decode_is_cached() {
+        let first = super::get_icon(true);
+        let second = super::get_icon(true);
+        let _ = (first, second);
+        let warning = super::warning_icon_rgba();
+        assert!(!warning.0.is_empty());
+        assert_eq!(warning.0.len(), (warning.1 * warning.2 * 4) as usize);
+    }
 }

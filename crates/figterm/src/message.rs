@@ -234,11 +234,17 @@ pub async fn process_figterm_request(
         },
         FigtermRequest::SetBuffer(_) => Err(anyhow::anyhow!("SetBuffer is not supported in figterm")),
         FigtermRequest::UpdateShellContext(request) => {
+            let mut updated = false;
             if request.update_environment_variables {
                 *SHELL_ENVIRONMENT_VARIABLES.lock().unwrap() = request.environment_variables;
+                updated = true;
             }
             if request.update_alias {
                 *SHELL_ALIAS.lock().unwrap() = request.alias;
+                updated = true;
+            }
+            if updated {
+                crate::note_shell_context_updated();
             }
             Ok(None)
         },

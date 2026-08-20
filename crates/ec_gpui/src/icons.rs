@@ -8,6 +8,7 @@ use gpui::{
     px, rgb,
 };
 
+// Overlay tiles are 15px. These used to be 512² (~1 MB decoded RGBA each).
 const FOLDER: &[u8] = include_bytes!("../../fig_desktop/icons/autocomplete/folder.png");
 const FILE: &[u8] = include_bytes!("../../fig_desktop/icons/autocomplete/file.png");
 const SYMLINK: &[u8] = include_bytes!("../../fig_desktop/icons/autocomplete/symlink.png");
@@ -331,6 +332,20 @@ mod tests {
             None
         );
         assert!(cached_image("not-a-real-icon").is_none());
+    }
+
+    #[test]
+    fn overlay_file_icons_stay_small_enough_to_decode_cheaply() {
+        for name in ["folder", "file", "symlink"] {
+            let bytes = super::named_bytes(name).expect(name);
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{name}");
+            let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+            let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+            assert!(width <= 64 && height <= 64, "{name} is {width}x{height}");
+        }
+        for (name, bytes) in BUNDLED_ICONS {
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{name}");
+        }
     }
 
     #[test]

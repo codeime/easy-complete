@@ -7,8 +7,8 @@ set -euo pipefail
 # first). Produces a drag-to-install DMG with a custom background image.
 #
 # Background images (committed to the repo):
-#   bundle/dmg/background.png    — 660×400, 1×
-#   bundle/dmg/background@2x.png — 1320×800, 2× (Retina)
+#   bundle/dmg/background.png    — 1×
+#   bundle/dmg/background@2x.png — 2× (Retina)
 # To regenerate them: swift scripts/make-dmg-background.swift
 #
 # Usage: scripts/make-dmg.sh [output.dmg]

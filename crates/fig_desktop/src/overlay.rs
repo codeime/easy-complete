@@ -511,7 +511,7 @@ impl OverlayController {
             return;
         }
 
-        if fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false) {
+        if self.state.read(cx).only_show_on_tab {
             let new_token = buffer.chars().last().is_some_and(char::is_whitespace);
             let hidden = !self.state.read(cx).visible;
             if hidden || new_token {
@@ -523,14 +523,14 @@ impl OverlayController {
         let generation = self.bump_generation();
         self.take_loading_owner();
         self.clear_stale_loading(cx);
-        let history_setting = fig_settings::settings::get_string_or("beta.history.mode", "show".into());
-        let (fuzzy, history_only, include_history) = {
+        let (fuzzy, history_only, include_history, suggest_first_token) = {
             let overlay = self.state.read(cx);
-            let history_only = overlay.history_mode || history_setting == "history_only";
+            let history_only = overlay.history_mode || overlay.history_setting == "history_only";
             (
                 overlay.fuzzy_search,
                 history_only,
-                history_only || history_setting != "off",
+                history_only || overlay.history_setting != "off",
+                overlay.first_token_completion,
             )
         };
         let (current_shell, current_process, environment_variables) = figterm_state
@@ -539,10 +539,10 @@ impl OverlayController {
                 (
                     context.and_then(|context| context.shell_path.clone()),
                     context.and_then(|context| context.process_name.clone()),
-                    context.map_or_else(Vec::new, shell_environment),
+                    session.flattened_env.clone(),
                 )
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| (None, None, Arc::new(Vec::new())));
         let request = CompleteRequest {
             buffer,
             cwd: cwd.clone(),
@@ -550,7 +550,7 @@ impl OverlayController {
             fuzzy,
             history_only,
             include_history,
-            suggest_first_token: fig_settings::settings::get_bool_or("autocomplete.firstTokenCompletion", false),
+            suggest_first_token,
             current_shell,
             current_process,
             environment_variables,
@@ -875,7 +875,7 @@ impl OverlayController {
     }
 
     fn move_selection(&mut self, delta: i32, up_from_top: bool, figterm_state: &FigtermState, cx: &mut App) {
-        let wrap = fig_settings::settings::get_bool_or("autocomplete.scrollWrapAround", false);
+        let wrap = self.state.read(cx).scroll_wrap_around;
         let at_top = self.state.read(cx).selected == 0;
         let still_visible = self.state.update(cx, |overlay, cx| {
             let visible = overlay.move_selection_with_wrap(delta, wrap);
@@ -883,7 +883,7 @@ impl OverlayController {
             visible
         });
         if !still_visible {
-            if up_from_top && at_top && fig_settings::settings::get_bool_or("autocomplete.navigateToHistory", false) {
+            if up_from_top && at_top && self.state.read(cx).navigate_to_history {
                 self.state.update(cx, |overlay, cx| {
                     overlay.history_mode = !overlay.history_mode;
                     cx.notify();
@@ -971,7 +971,7 @@ impl OverlayController {
     fn insert_item(&mut self, item: ClickInsert, execute: bool, figterm_state: &FigtermState, cx: &mut App) {
         let input_before_accept = self.current_input_snapshot();
         let acceptance = accepted_suggestion_key(&item, input_before_accept.as_ref());
-        let add_space = fig_settings::settings::get_bool_or("autocomplete.insertSpaceAutomatically", true);
+        let add_space = self.state.read(cx).insert_space_automatically;
         let text = full_insertion_for_item(
             &item.name,
             item.insert_value.as_deref(),
@@ -1083,11 +1083,18 @@ fn apply_settings(overlay: &mut OverlayState) {
     overlay.row_height = metrics.row_height;
     let configured_width = fig_settings::settings::get_int("autocomplete.width").ok().flatten();
     let configured_history_mode = fig_settings::settings::get_string("beta.history.mode").ok().flatten();
+    overlay.history_setting = configured_history_mode.clone().unwrap_or_else(|| "show".into());
     overlay.list_width = legacy_list_width(configured_width, configured_history_mode.as_deref()).max(150) as f32;
     overlay.max_list_height =
         fig_settings::settings::get_int_or("autocomplete.height", DEFAULT_MAX_LIST_HEIGHT as i64).max(40) as f32;
     overlay.fuzzy_search = fig_settings::settings::get_bool_or("autocomplete.fuzzySearch", true);
     overlay.effective_fuzzy_search = overlay.fuzzy_search;
+    overlay.only_show_on_tab = fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false);
+    overlay.first_token_completion = fig_settings::settings::get_bool_or("autocomplete.firstTokenCompletion", false);
+    overlay.scroll_wrap_around = fig_settings::settings::get_bool_or("autocomplete.scrollWrapAround", false);
+    overlay.navigate_to_history = fig_settings::settings::get_bool_or("autocomplete.navigateToHistory", false);
+    overlay.insert_space_automatically =
+        fig_settings::settings::get_bool_or("autocomplete.insertSpaceAutomatically", true);
     let was_always_show = overlay.always_show_description;
     overlay.always_show_description = fig_settings::settings::get_bool_or("autocomplete.alwaysShowDescription", false);
     if overlay.always_show_description {
@@ -1650,20 +1657,6 @@ fn prefix_completes_row(shared: &str, item: &SuggestionItem) -> bool {
             false,
             false,
         )
-}
-
-/// Flatten the shell environment figterm collected at the last prompt. Unset
-/// values are dropped rather than sent as empty strings so a generator testing
-/// `context.environmentVariables.FOO` sees the same thing the shell does.
-fn shell_environment(context: &fig_proto::local::ShellContext) -> Vec<(String, String)> {
-    context
-        .environment_variables
-        .iter()
-        .filter_map(|variable| {
-            let value = variable.value.clone()?;
-            (!variable.key.is_empty()).then(|| (variable.key.clone(), value))
-        })
-        .collect()
 }
 
 fn full_insertion_for_item(

@@ -2276,7 +2276,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2301,7 +2301,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2325,7 +2325,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2348,7 +2348,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2371,7 +2371,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2394,7 +2394,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         assert!(result.suggestions.iter().any(|s| s.name == "status"));
@@ -2417,7 +2417,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2441,7 +2441,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2464,7 +2464,7 @@ mod tests {
                 suggest_first_token: false,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         assert!(result.suggestions.is_empty(), "{:?}", result.suggestions);
@@ -2497,7 +2497,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         assert!(
@@ -2523,7 +2523,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         assert!(
@@ -3231,7 +3231,7 @@ mod tests {
                 suggest_first_token: true,
                 current_shell: None,
                 current_process: None,
-                environment_variables: Vec::new(),
+                environment_variables: Default::default(),
             },
         );
         let checkout = result

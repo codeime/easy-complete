@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tao::dpi::{Position, Size};
+#[cfg(any(target_os = "linux", test))]
 use tao::window::Icon;
 
 /// Determines if the build is ran in debug mode
@@ -17,8 +18,7 @@ pub fn icon() -> Icon {
     .unwrap_or_else(load_from_memory)
 }
 
-#[cfg(not(target_os = "linux"))]
-#[allow(dead_code)]
+#[cfg(all(test, not(target_os = "linux")))]
 pub fn icon() -> Icon {
     load_from_memory()
 }
@@ -31,7 +31,7 @@ fn load_icon(path: impl AsRef<std::path::Path>) -> Option<Icon> {
     Icon::from_rgba(rgba, width, height).ok()
 }
 
-#[allow(dead_code)]
+#[cfg(any(target_os = "linux", test))]
 fn load_from_memory() -> Icon {
     let (icon_rgba, icon_width, icon_height) = {
         // TODO: Use different per platform icons

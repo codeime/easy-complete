@@ -35,6 +35,10 @@ impl WebviewNotificationsState {
         notification: Notification,
         proxy: &EventLoopProxy,
     ) -> Result<()> {
+        if self.subscriptions.is_empty() {
+            return Ok(());
+        }
+
         debug!(?notification_type, "Broadcasting webview notification");
 
         for sub in self.subscriptions.iter() {

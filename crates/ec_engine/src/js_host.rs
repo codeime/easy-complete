@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rquickjs::{Context, Ctx, Function, Object, Runtime, Value as JsValue};
@@ -50,16 +50,16 @@ struct Active {
 /// The subset of `Fig.ShellContext` that generators actually read. The WebView
 /// received it from figterm on every keystroke; here it rides along with the
 /// completion request and is bound for the duration of one attempt.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ShellContext {
     pub current_process: String,
-    pub environment_variables: Vec<(String, String)>,
+    pub environment_variables: Arc<Vec<(String, String)>>,
 }
 
-static EMPTY_SHELL_CONTEXT: ShellContext = ShellContext {
-    current_process: String::new(),
-    environment_variables: Vec::new(),
-};
+fn empty_shell_context() -> &'static ShellContext {
+    static EMPTY: OnceLock<ShellContext> = OnceLock::new();
+    EMPTY.get_or_init(ShellContext::default)
+}
 
 pub struct JsHost {
     hooks_dir: PathBuf,
@@ -104,7 +104,7 @@ impl JsHost {
     /// lookup helper.
     #[cfg(test)]
     pub fn enter<R>(&self, cwd: &str, f: impl FnOnce() -> R) -> R {
-        self.enter_with_context(cwd, &EMPTY_SHELL_CONTEXT, f)
+        self.enter_with_context(cwd, empty_shell_context(), f)
     }
 
     /// Same as [`JsHost::enter`], plus the shell facts that `custom` generators
@@ -308,7 +308,7 @@ pub fn current_shell() -> &'static ShellContext {
     ACTIVE.with(|cell| {
         // SAFETY: as in `current`, the pointer only lives for the `enter` frame.
         cell.get()
-            .map_or(&EMPTY_SHELL_CONTEXT, |active| unsafe { &*active.shell })
+            .map_or(empty_shell_context(), |active| unsafe { &*active.shell })
     })
 }
 
@@ -532,7 +532,7 @@ fn custom_context<'js>(
     object.set("searchTerm", search_term)?;
     object.set("isDangerous", is_dangerous)?;
     let env = Object::new(ctx.clone())?;
-    for (key, value) in &shell.environment_variables {
+    for (key, value) in shell.environment_variables.iter() {
         env.set(key.as_str(), value.as_str())?;
     }
     object.set("environmentVariables", env)?;
@@ -1143,7 +1143,7 @@ mod tests {
         let host = JsHost::new(dir.path().to_path_buf());
         let shell = ShellContext {
             current_process: "/bin/zsh".into(),
-            environment_variables: vec![("EC_TEST".into(), "on".into())],
+            environment_variables: Arc::new(vec![("EC_TEST".into(), "on".into())]),
         };
         let rows = host
             .enter_with_context("/", &shell, || {

@@ -21,7 +21,7 @@ use crate::platform::{PlatformBoundEvent, PlatformState};
 use crate::remote_ipc::RemoteHook;
 use crate::tray::build_tray;
 pub use crate::webview::window_id::{AUTOCOMPLETE_ID, DASHBOARD_ID, WindowId};
-use crate::{EventLoopProxy, EventLoopWindowTarget, auth_watcher, file_watcher, local_ipc};
+use crate::{EventLoopProxy, EventLoopWindowTarget, file_watcher, local_ipc};
 
 pub const DASHBOARD_SIZE: LogicalSize<f64> = LogicalSize::new(820.0, 640.0);
 
@@ -128,7 +128,6 @@ impl WebviewManager {
         let (api_handler_tx, _api_handler_rx) = tokio::sync::mpsc::unbounded_channel::<(WindowId, String)>();
 
         file_watcher::setup_listeners(self.notifications_state.clone(), self.proxy.clone()).await;
-        auth_watcher::spawn_auth_watcher();
 
         init_webview_notification_listeners(self.proxy.clone()).await;
 

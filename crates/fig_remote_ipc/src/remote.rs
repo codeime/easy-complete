@@ -132,6 +132,7 @@ pub async fn handle_remote_ipc(
                                         cursor: 0,
                                     },
                                     context: None,
+                                    flattened_env: Arc::new(Vec::new()),
                                     terminal_cursor_coordinates: None,
                                     current_session_metrics: None,
                                     response_map: HashMap::new(),

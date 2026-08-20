@@ -15,6 +15,7 @@ use crate::error::DbOpenError;
 
 const STATE_TABLE_NAME: &str = "state";
 const AUTH_TABLE_NAME: &str = "auth_kv";
+const POOL_MAX_SIZE: u32 = 4;
 
 pub static DATABASE: LazyLock<Result<Db, DbOpenError>> = LazyLock::new(|| {
     let db = Db::new().map_err(|e| DbOpenError(e.to_string()))?;
@@ -85,7 +86,11 @@ impl Db {
         // generator threads are sitting on connections, a 30s wait there
         // freezes every completion in the queue. Fail fast instead — callers
         // already treat database errors as best-effort.
+        //
+        // Default max_size is 15. This process is one writer plus a couple of
+        // readers; fifteen idle SQLite connections are just page-cache.
         let pool = Pool::builder()
+            .max_size(POOL_MAX_SIZE)
             .connection_timeout(std::time::Duration::from_secs(3))
             .build(conn)?;
 
@@ -343,6 +348,13 @@ mod tests {
         let db = Db::mock();
         db.migrate().unwrap();
         db
+    }
+
+    #[test]
+    fn the_pool_does_not_keep_fifteen_idle_connections() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let db = Db::open(&tempdir.path().join("data.sqlite3")).unwrap();
+        assert_eq!(db.pool.max_size(), POOL_MAX_SIZE);
     }
 
     #[test]

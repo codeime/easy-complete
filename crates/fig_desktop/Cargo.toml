@@ -61,7 +61,7 @@ flume.workspace = true
 fnv = "1.0.7"
 futures.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
-image = "0.25.6"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
 muda = { version = "0.19.3", default-features = false }
 notify = "8.0.0"
 parking_lot = { workspace = true, features = ["serde"] }
@@ -70,9 +70,7 @@ rfd = "0.17.2"
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sysinfo.workspace = true
 tao = { version = "0.36.0", features = ["serde"] }
-tempfile.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -81,6 +79,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
@@ -103,6 +102,9 @@ features = [
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sysinfo.workspace = true
 
 
 [target.'cfg(target_os="macos")'.dependencies]
@@ -127,7 +129,3 @@ objc2-app-kit = { workspace = true, features = [
     "NSWindow",
 ] }
 objc2-foundation = { workspace = true, features = ["NSUserDefaults"] }
-system-configuration = "0.7.0"
-
-[build-dependencies]
-image = "0.25.6"

@@ -54,8 +54,15 @@ pub struct CompleteRequest {
     pub current_process: Option<String>,
     /// Shell environment reported by the terminal integration. Fig `custom`
     /// generators read it through `context.environmentVariables`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub environment_variables: Vec<(String, String)>,
+    ///
+    /// Shared across the overlay request and the JS host so a keystroke does
+    /// not clone every `KEY=value` pair.
+    #[serde(default, skip_serializing_if = "empty_env")]
+    pub environment_variables: Arc<Vec<(String, String)>>,
+}
+
+fn empty_env(value: &Arc<Vec<(String, String)>>) -> bool {
+    value.is_empty()
 }
 
 impl Default for CompleteRequest {
@@ -70,7 +77,7 @@ impl Default for CompleteRequest {
             suggest_first_token: false,
             current_shell: None,
             current_process: None,
-            environment_variables: Vec::new(),
+            environment_variables: Arc::new(Vec::new()),
         }
     }
 }
@@ -495,28 +502,31 @@ impl Engine {
         }
         let alphabetical =
             fig_settings::settings::get_string_or("autocomplete.sortMethod", "default".into()) == "alphabetical";
-        let acceptance = self.acceptance.lock().unwrap_or_else(|err| err.into_inner()).clone();
-        if history_disabled {
-            // A setting can change while the engine stays alive. Do not let
-            // frecency loaded by an earlier request influence ranking after
-            // history loading has been disabled.
-            rank::apply_with_acceptance(
-                &mut result,
-                &tokens,
-                &Frecency::default(),
-                &acceptance,
-                &ranking_root_command(&request.buffer, request.cursor),
-                alphabetical,
-            );
-        } else {
-            rank::apply_with_acceptance(
-                &mut result,
-                &tokens,
-                &self.frecency,
-                &acceptance,
-                &ranking_root_command(&request.buffer, request.cursor),
-                alphabetical,
-            );
+        let root_command = ranking_root_command(&request.buffer, request.cursor);
+        {
+            let acceptance = self.acceptance.lock().unwrap_or_else(|err| err.into_inner());
+            if history_disabled {
+                // A setting can change while the engine stays alive. Do not let
+                // frecency loaded by an earlier request influence ranking after
+                // history loading has been disabled.
+                rank::apply_with_acceptance(
+                    &mut result,
+                    &tokens,
+                    &Frecency::default(),
+                    &acceptance,
+                    &root_command,
+                    alphabetical,
+                );
+            } else {
+                rank::apply_with_acceptance(
+                    &mut result,
+                    &tokens,
+                    &self.frecency,
+                    &acceptance,
+                    &root_command,
+                    alphabetical,
+                );
+            }
         }
         Ok(result)
     }
