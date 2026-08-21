@@ -375,8 +375,6 @@ pub async fn initialize_fig_dir(env: &fig_os_shim::Env) -> anyhow::Result<()> {
 
 #[cfg(target_os = "linux")]
 async fn run_linux_install(ctx: Arc<Context>, settings: Arc<fig_settings::Settings>, state: Arc<fig_settings::State>) {
-    use dbus::gnome_shell::ShellExtensions;
-    use fig_settings::State;
     use fig_util::system_info::linux::get_display_server;
 
     // install binaries under home local bin
@@ -390,8 +388,7 @@ async fn run_linux_install(ctx: Arc<Context>, settings: Arc<fig_settings::Settin
         });
     }
 
-    // Important we log an error if we cannot detect the display server in use.
-    // If this isn't wayland or x11, the user will probably just see a blank screen.
+    // Overlay caret on Linux needs x11 or wayland. Unknown sessions are logged.
     match get_display_server(&ctx) {
         Ok(_) => (),
         Err(fig_util::Error::UnknownDisplayServer(server)) => {
@@ -408,21 +405,6 @@ async fn run_linux_install(ctx: Arc<Context>, settings: Arc<fig_settings::Settin
         },
     }
 
-    // GNOME Shell Extension
-    {
-        let ctx_clone = Arc::clone(&ctx);
-        tokio::spawn(async move {
-            let ctx = ctx_clone;
-            let shell_extensions = ShellExtensions::new(Arc::downgrade(&ctx));
-            let state = State::new();
-            install_gnome_shell_extension(&ctx, &shell_extensions, &state)
-                .await
-                .map_err(|err| error!(?err, "Unable to install the GNOME Shell extension"))
-                .ok();
-        });
-    }
-
-    // Desktop entry
     {
         let ctx_clone = Arc::clone(&ctx);
         let settings_clone = Arc::clone(&settings);
@@ -438,100 +420,6 @@ async fn run_linux_install(ctx: Arc<Context>, settings: Arc<fig_settings::Settin
                 .ok();
         });
     }
-
-    // TODO: is this correct?
-    // launch_ibus().await;
-}
-
-/// Installs the correct version of the GNOME Shell extension, if required.
-#[cfg(target_os = "linux")]
-async fn install_gnome_shell_extension<Ctx, ExtensionsCtx>(
-    ctx: &Ctx,
-    shell_extensions: &dbus::gnome_shell::ShellExtensions<ExtensionsCtx>,
-    state: &fig_settings::State,
-) -> anyhow::Result<()>
-where
-    Ctx: fig_os_shim::ContextProvider,
-    ExtensionsCtx: fig_os_shim::ContextProvider,
-{
-    use dbus::gnome_shell::{ExtensionInstallationStatus, get_extension_status};
-    use fig_os_shim::FsProvider;
-    use fig_util::directories::{bundled_gnome_extension_version_path, bundled_gnome_extension_zip_path};
-    use fig_util::system_info::linux::{DisplayServer, get_display_server};
-    use tracing::debug;
-
-    let display_server = get_display_server(ctx)?;
-    if display_server != DisplayServer::Wayland {
-        debug!(
-            "Detected non-Wayland display server: `{:?}`. Not installing the extension.",
-            display_server
-        );
-        return Ok(());
-    }
-
-    if !state.get_bool_or("desktop.gnomeExtensionInstallationPermissionGranted", false) {
-        debug!("Permission is not granted to install GNOME extension, doing nothing.");
-        return Ok(());
-    }
-
-    let fs = ctx.fs();
-    let extension_uuid = shell_extensions.extension_uuid().await?;
-    let bundled_version: u32 = fs
-        .read_to_string(bundled_gnome_extension_version_path(ctx, &extension_uuid)?)
-        .await?
-        .parse()?;
-    let bundled_path = bundled_gnome_extension_zip_path(ctx, &extension_uuid)?;
-
-    match get_extension_status(ctx, shell_extensions, Some(bundled_version)).await? {
-        ExtensionInstallationStatus::GnomeShellNotRunning => {
-            info!("GNOME Shell is not running, not installing the extension.");
-        },
-        ExtensionInstallationStatus::NotInstalled => {
-            info!("Extension {} not installed, installing now.", extension_uuid);
-            shell_extensions.install_bundled_extension(bundled_path).await?;
-        },
-        ExtensionInstallationStatus::Errored => {
-            error!(
-                "Extension {} is in an errored state. It must be manually uninstalled, and the current desktop session must be restarted.",
-                extension_uuid
-            );
-        },
-        ExtensionInstallationStatus::RequiresReboot => {
-            info!(
-                "Extension {} already installed but not loaded. User must reboot their machine.",
-                extension_uuid
-            );
-        },
-        ExtensionInstallationStatus::UnexpectedVersion { installed_version } => {
-            info!(
-                "Installed extension {} has version {} but the bundled extension has version {}. Installing now.",
-                extension_uuid, installed_version, bundled_version
-            );
-            shell_extensions.install_bundled_extension(bundled_path).await?;
-        },
-        ExtensionInstallationStatus::NotEnabled => {
-            info!(
-                "Extension {} is installed but not enabled. Enabling now.",
-                extension_uuid
-            );
-            match shell_extensions.enable_extension().await {
-                Ok(true) => {
-                    info!("Extension enabled.");
-                },
-                Ok(false) => {
-                    error!("Something went wrong trying to enable the extension.");
-                },
-                Err(err) => {
-                    error!("Error occurred enabling the extension: {:?}", err);
-                },
-            }
-        },
-        ExtensionInstallationStatus::Enabled => {
-            info!("Extension {} is already installed and enabled.", extension_uuid);
-        },
-    }
-
-    Ok(())
 }
 
 /// Installs the desktop entry if required.
@@ -560,14 +448,9 @@ async fn install_autostart_entry(
     settings: &fig_settings::Settings,
     state: &fig_settings::State,
 ) -> anyhow::Result<()> {
-    use fig_integrations::desktop_entry::{AutostartIntegration, should_install_autostart_entry};
+    use fig_integrations::desktop_entry::should_install_autostart_entry;
 
-    if !should_install_autostart_entry(ctx, settings, state) {
-        return Ok(());
-    }
-
-    AutostartIntegration::new(ctx)?.install().await?;
-
+    fig_integrations::launch_at_login::set_enabled(should_install_autostart_entry(ctx, settings, state)).await?;
     Ok(())
 }
 
@@ -659,91 +542,6 @@ fn parse_version(output: &str) -> String {
         .collect::<String>()
         .trim()
         .to_string()
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-enum SystemdUserService {
-    IBusGeneric,
-    IBusGnome,
-}
-
-#[cfg(target_os = "linux")]
-impl SystemdUserService {
-    fn service_name(&self) -> &'static str {
-        match self {
-            SystemdUserService::IBusGeneric => "org.freedesktop.IBus.session.generic.service",
-            SystemdUserService::IBusGnome => "org.freedesktop.IBus.session.GNOME.service",
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl std::fmt::Display for SystemdUserService {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.service_name())
-    }
-}
-
-#[cfg(target_os = "linux")]
-async fn launch_systemd_user_service(service: SystemdUserService) -> anyhow::Result<()> {
-    use tokio::process::Command;
-    let output = Command::new("systemctl")
-        .args(["--user", "restart", service.service_name()])
-        .output()
-        .await?;
-    if !output.status.success() {
-        anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr))
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-async fn launch_ibus(ctx: &Context) {
-    use std::ffi::OsString;
-
-    use sysinfo::{ProcessRefreshKind, RefreshKind, System};
-    use tokio::process::Command;
-
-    let system = tokio::task::block_in_place(|| {
-        System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()))
-    });
-    let ibus_daemon = OsString::from("ibus-daemon");
-    if system.processes_by_name(&ibus_daemon).next().is_none() {
-        info!("Launching ibus via systemd");
-
-        match Command::new("systemctl")
-            .args(["--user", "is-active", "gnome-session-initialized.target"])
-            .output()
-            .await
-        {
-            Ok(gnome_session_output) => match std::str::from_utf8(&gnome_session_output.stdout).map(|s| s.trim()) {
-                Ok("active") => match launch_systemd_user_service(SystemdUserService::IBusGnome).await {
-                    Ok(_) => info!("Launched '{}", SystemdUserService::IBusGnome),
-                    Err(err) => error!(%err, "Failed to launch '{}'", SystemdUserService::IBusGnome),
-                },
-                Ok("inactive") => match launch_systemd_user_service(SystemdUserService::IBusGeneric).await {
-                    Ok(_) => info!("Launched '{}'", SystemdUserService::IBusGeneric),
-                    Err(err) => error!(%err, "Failed to launch '{}'", SystemdUserService::IBusGeneric),
-                },
-                result => error!(
-                    ?result,
-                    "Failed to determine if gnome-session-initialized.target is running"
-                ),
-            },
-            Err(err) => error!(%err, "Failed to run 'systemctl --user is-active gnome-session-initialized.target'"),
-        }
-    }
-
-    // Wait up to 2 sec for ibus activation
-    for _ in 0..10 {
-        if dbus::ibus::connect_to_ibus_daemon(ctx).await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-    error!("Timed out after 2 sec waiting for ibus activation");
 }
 
 #[cfg(target_os = "macos")]
@@ -924,125 +722,6 @@ echo "{binary_name} {version}"
 
             // Then
             assert_binaries_installed(&ctx, &current_version).await;
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    mod linux_gnome_shell_extension_tests {
-        use dbus::gnome_shell::{
-            ExtensionInstallationStatus, GNOME_SHELL_PROCESS_NAME, ShellExtensions, get_extension_status,
-        };
-        use fig_os_shim::Os;
-        use fig_settings::State;
-        use fig_util::directories::{bundled_gnome_extension_version_path, bundled_gnome_extension_zip_path};
-
-        use super::*;
-
-        /// Helper function that writes test files to [bundled_gnome_extension_zip_path] and
-        /// [bundled_extension_version_path].
-        async fn write_extension_bundle(ctx: &Context, uuid: &str, version: u32) {
-            let zip_path = bundled_gnome_extension_zip_path(ctx, uuid).unwrap();
-            let version_path = bundled_gnome_extension_version_path(ctx, uuid).unwrap();
-            ctx.fs().create_dir_all(zip_path.parent().unwrap()).await.unwrap();
-            ctx.fs().write(&zip_path, version.to_string()).await.unwrap();
-            ctx.fs().write(&version_path, version.to_string()).await.unwrap();
-        }
-
-        #[tokio::test]
-        async fn test_extension_is_installed_for_new_user() {
-            let ctx = Context::builder()
-                .with_test_home()
-                .await
-                .unwrap()
-                .with_env_var("APPIMAGE", "1")
-                .with_env_var("XDG_SESSION_TYPE", "wayland")
-                .with_os(Os::Linux)
-                .with_running_processes(&[GNOME_SHELL_PROCESS_NAME])
-                .build_fake();
-            let shell_extensions = ShellExtensions::new_fake(Arc::downgrade(&ctx));
-            let extension_version = 1;
-            write_extension_bundle(
-                &ctx,
-                &shell_extensions.extension_uuid().await.unwrap(),
-                extension_version,
-            )
-            .await;
-            let state = State::from_slice(&[("desktop.gnomeExtensionInstallationPermissionGranted", true.into())]);
-
-            // When
-            install_gnome_shell_extension(&ctx, &shell_extensions, &state)
-                .await
-                .unwrap();
-
-            // Then
-            let status = get_extension_status(&ctx, &shell_extensions, Some(extension_version))
-                .await
-                .unwrap();
-            assert!(matches!(status, ExtensionInstallationStatus::RequiresReboot));
-        }
-
-        #[tokio::test]
-        async fn test_extension_not_installed_if_permission_not_granted() {
-            let ctx = Context::builder()
-                .with_test_home()
-                .await
-                .unwrap()
-                .with_env_var("APPIMAGE", "1")
-                .with_os(Os::Linux)
-                .with_running_processes(&[GNOME_SHELL_PROCESS_NAME])
-                .build_fake();
-            let shell_extensions = ShellExtensions::new_fake(Arc::downgrade(&ctx));
-            let extension_version = 1;
-            write_extension_bundle(
-                &ctx,
-                &shell_extensions.extension_uuid().await.unwrap(),
-                extension_version,
-            )
-            .await;
-            let state = State::new_fake();
-
-            // When
-            install_gnome_shell_extension(&ctx, &shell_extensions, &state)
-                .await
-                .unwrap();
-
-            // Then
-            let status = get_extension_status(&ctx, &shell_extensions, Some(extension_version))
-                .await
-                .unwrap();
-            assert!(matches!(status, ExtensionInstallationStatus::NotInstalled));
-        }
-
-        #[tokio::test]
-        async fn test_extension_not_installed_if_not_wayland() {
-            let ctx = Context::builder()
-                .with_test_home()
-                .await
-                .unwrap()
-                .with_env_var("APPIMAGE", "1")
-                .with_os(Os::Linux)
-                .with_running_processes(&[GNOME_SHELL_PROCESS_NAME])
-                .build_fake();
-            let shell_extensions = ShellExtensions::new_fake(Arc::downgrade(&ctx));
-            let extension_version = 1;
-            write_extension_bundle(
-                &ctx,
-                &shell_extensions.extension_uuid().await.unwrap(),
-                extension_version,
-            )
-            .await;
-            let state = State::from_slice(&[("desktop.gnomeExtensionInstallationPermissionGranted", true.into())]);
-
-            // When
-            install_gnome_shell_extension(&ctx, &shell_extensions, &state)
-                .await
-                .unwrap();
-
-            // Then
-            let status = get_extension_status(&ctx, &shell_extensions, Some(extension_version))
-                .await
-                .unwrap();
-            assert!(matches!(status, ExtensionInstallationStatus::NotInstalled));
         }
     }
 

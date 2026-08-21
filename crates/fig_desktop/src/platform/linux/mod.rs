@@ -1,3 +1,5 @@
+//! Not compiled. Live Linux caret is `platform/linux_caret/`.
+
 pub mod ibus;
 pub mod integrations;
 mod sway;

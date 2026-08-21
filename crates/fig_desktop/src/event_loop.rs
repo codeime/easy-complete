@@ -1,12 +1,10 @@
 //! Event-loop types used by `fig_desktop` after the process host moved from tao to GPUI.
 //!
 //! Background tasks (IPC, accessibility, tray) still post [`crate::event::Event`]s. The GPUI
-//! application drains them on the AppKit main thread. This replaces `tao::event_loop::EventLoopProxy`
+//! application drains them on its UI thread. This replaces `tao::event_loop::EventLoopProxy`
 //! so the rest of the crate can keep calling `send_event`.
 
 use std::fmt;
-
-use tao::platform::macos::ActivationPolicy;
 
 use crate::event::Event;
 
@@ -47,12 +45,9 @@ pub struct EventLoopWindowTarget;
 impl EventLoopWindowTarget {
     /// Apply an `NSApplicationActivationPolicy` at runtime.
     #[cfg(target_os = "macos")]
-    pub fn set_activation_policy_at_runtime(&self, policy: ActivationPolicy) {
+    pub fn set_activation_policy_at_runtime(&self, policy: tao::platform::macos::ActivationPolicy) {
         crate::platform::set_activation_policy(policy);
     }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn set_activation_policy_at_runtime(&self, _policy: ActivationPolicy) {}
 }
 
 pub(crate) fn channel() -> (EventLoopProxy, flume::Receiver<Event>) {

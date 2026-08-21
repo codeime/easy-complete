@@ -252,26 +252,12 @@ pub fn dump_state(
 }
 
 #[allow(unused_variables)]
-pub async fn connect_to_ibus(proxy: EventLoopProxy, platform_state: &PlatformState) -> LocalResult {
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
-            use crate::platform::ibus::launch_ibus_connection;
-            match launch_ibus_connection(proxy, platform_state.inner()).await {
-                Ok(_) => Ok(LocalResponse::Success(None)),
-                Err(err) => {
-                    Err(LocalResponse::Error {
-                        code: None,
-                        message: Some(format!("Failed connecting to ibus: {:?}", err)),
-                    })
-                },
-            }
-        } else {
-            Err(LocalResponse::Error {
-                code: None,
-                message: Some("Connecting to IBus is only supported on Linux".to_owned()),
-            })
-        }
-    }
+#[allow(clippy::unused_async)]
+pub async fn connect_to_ibus(_proxy: EventLoopProxy, _platform_state: &PlatformState) -> LocalResult {
+    Err(LocalResponse::Error {
+        code: None,
+        message: Some("IBus is connected by the desktop host, not this IPC command".to_owned()),
+    })
 }
 
 pub async fn bundle_metadata(ctx: &Context) -> LocalResult {

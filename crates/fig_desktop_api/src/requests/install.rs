@@ -141,7 +141,7 @@ where
                         })),
                     })
                 } else {
-                    integration_result(Err("Accessibility permissions cannot be queried"))
+                    integration_unsupported()
                 }
             }
         },
@@ -260,67 +260,40 @@ where
                         InstallAction::Uninstall => integration_result(integration.uninstall().await),
                         InstallAction::Status => integration_status(integration).await,
                     }
+                } else if #[cfg(windows)] {
+                    match action {
+                        InstallAction::Install => {
+                            integration_result(fig_integrations::launch_at_login::set_enabled(true).await)
+                        },
+                        InstallAction::Uninstall => {
+                            integration_result(fig_integrations::launch_at_login::set_enabled(false).await)
+                        },
+                        InstallAction::Status => {
+                            match fig_integrations::launch_at_login::is_enabled().await {
+                                Ok(true) => ServerOriginatedSubMessage::InstallResponse(InstallResponse {
+                                    response: Some(Response::InstallationStatus(InstallationStatus::Installed.into())),
+                                }),
+                                Ok(false) => ServerOriginatedSubMessage::InstallResponse(InstallResponse {
+                                    response: Some(Response::InstallationStatus(
+                                        InstallationStatus::NotInstalled.into(),
+                                    )),
+                                }),
+                                Err(err) => integration_result(Err(err)),
+                            }
+                        },
+                    }
                 } else {
                     let _ = action;
-                    integration_result(Err("Autostart entry is only supported on Linux"))
+                    integration_result(Err("Autostart entry is only supported on Linux and Windows"))
                 }
             }
         },
-        #[allow(unused_variables)]
-        (InstallComponent::GnomeExtension, action) => {
-            cfg_if::cfg_if! {
-                if #[cfg(target_os = "linux")] {
-                    use std::sync::Arc;
-                    let shell_extensions = dbus::gnome_shell::ShellExtensions::new(Arc::downgrade(&ctx.context_arc()));
-                    install_gnome_extension(action, ctx, &shell_extensions).await.map_err(super::Error::Std)?
-                }
-                else {
-                    integration_result(Err("Not supported on platforms other than Linux."))
-                }
-            }
+        (InstallComponent::GnomeExtension, _action) => {
+            integration_result(Err("The GNOME Shell extension is not supported yet"))
         },
     };
 
     RequestResult::Ok(Box::new(response))
-}
-
-#[cfg(target_os = "linux")]
-async fn install_gnome_extension<'a, Ctx, ExtensionsCtx>(
-    action: InstallAction,
-    ctx: &'a Ctx,
-    shell_extensions: &'a dbus::gnome_shell::ShellExtensions<ExtensionsCtx>,
-) -> Result<super::ServerOriginatedSubMessage, Box<dyn std::error::Error + Send + Sync>>
-where
-    Ctx: SettingsProvider + StateProvider + ContextProvider + Sync,
-    ExtensionsCtx: ContextProvider + Send + Sync,
-{
-    use fig_integrations::gnome_extension::GnomeExtensionIntegration;
-    use fig_util::directories::{bundled_gnome_extension_version_path, bundled_gnome_extension_zip_path};
-
-    let extension_uuid = shell_extensions.extension_uuid().await?;
-    let bundled_version: u32 = ctx
-        .context()
-        .fs()
-        .read_to_string(bundled_gnome_extension_version_path(ctx, &extension_uuid)?)
-        .await?
-        .parse()?;
-    let bundle_path = bundled_gnome_extension_zip_path(ctx, &extension_uuid)?;
-    let gnome_integration =
-        GnomeExtensionIntegration::new(ctx, shell_extensions, Some(bundle_path), Some(bundled_version));
-    ctx.state()
-        .set_value("desktop.gnomeExtensionInstallationPermissionGranted", true)
-        .map_err(|err| {
-            error!(
-                ?err,
-                "unable to set `desktop.gnomeExtensionInstallationPermissionGranted`"
-            );
-        })
-        .ok();
-    match action {
-        InstallAction::Install => Ok(integration_result(gnome_integration.install().await)),
-        InstallAction::Uninstall => Ok(integration_result(gnome_integration.uninstall().await)),
-        InstallAction::Status => Ok(integration_status(gnome_integration).await),
-    }
 }
 
 #[cfg(test)]
@@ -470,94 +443,6 @@ mod tests {
         assert!(
             AutostartIntegration::to_global(&ctx).is_installed().await.is_err(),
             "Autostart entry should have been uninstalled."
-        );
-    }
-
-    /// Helper function that writes test files to [bundled_extension_zip_path] and
-    /// [bundled_extension_version_path].
-    #[cfg(target_os = "linux")]
-    async fn write_extension_bundle(ctx: &Context, uuid: &str, version: u32) {
-        use fig_util::directories::{bundled_gnome_extension_version_path, bundled_gnome_extension_zip_path};
-
-        let zip_path = bundled_gnome_extension_zip_path(ctx, uuid).unwrap();
-        let version_path = bundled_gnome_extension_version_path(ctx, uuid).unwrap();
-        ctx.fs().create_dir_all(zip_path.parent().unwrap()).await.unwrap();
-        ctx.fs().write(&zip_path, version.to_string()).await.unwrap();
-        ctx.fs().write(&version_path, version.to_string()).await.unwrap();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn test_gnome_extension_installation_and_uninstallation() {
-        use dbus::gnome_shell::{GNOME_SHELL_PROCESS_NAME, ShellExtensions};
-        use fig_os_shim::Os;
-
-        let ctx = Context::builder()
-            .with_test_home()
-            .await
-            .unwrap()
-            .with_env_var("APPIMAGE", "/test.appimage")
-            .with_os(Os::Linux)
-            .with_running_processes(&[GNOME_SHELL_PROCESS_NAME])
-            .build_fake();
-        let settings = Settings::new_fake();
-        let test_ctx = TestContext {
-            ctx: Arc::clone(&ctx),
-            settings,
-            state: State::new_fake(),
-        };
-        let shell_extensions = ShellExtensions::new_fake(Arc::downgrade(&ctx));
-        write_extension_bundle(&ctx, &shell_extensions.extension_uuid().await.unwrap(), 1).await;
-
-        // Not installed by default
-        let response = install_gnome_extension(InstallAction::Status, &test_ctx, &shell_extensions)
-            .await
-            .unwrap();
-        assert_submessage_status(
-            response,
-            InstallationStatus::NotInstalled,
-            "Should not be installed by default",
-        );
-
-        // Test installation
-        install_gnome_extension(InstallAction::Install, &test_ctx, &shell_extensions)
-            .await
-            .unwrap();
-        let response = install_gnome_extension(InstallAction::Status, &test_ctx, &shell_extensions)
-            .await
-            .unwrap();
-        assert_submessage_status(
-            response,
-            InstallationStatus::Installed,
-            "Should be installed after install action",
-        );
-        assert_eq!(
-            test_ctx
-                .state
-                .get_bool("desktop.gnomeExtensionInstallationPermissionGranted")
-                .unwrap(),
-            Some(true)
-        );
-
-        // Test uninstallation
-        install_gnome_extension(InstallAction::Uninstall, &test_ctx, &shell_extensions)
-            .await
-            .unwrap();
-        let response = install_gnome_extension(InstallAction::Status, &test_ctx, &shell_extensions)
-            .await
-            .unwrap();
-        assert_submessage_status(
-            response,
-            InstallationStatus::NotInstalled,
-            "Should be uninstalled after uninstall action",
-        );
-        assert_eq!(
-            test_ctx
-                .state
-                .get_bool("desktop.gnomeExtensionInstallationPermissionGranted")
-                .unwrap(),
-            Some(true),
-            "Should not be unset on uninstall"
         );
     }
 }

@@ -19,6 +19,7 @@ use crate::event::{Event, WindowEvent};
 use crate::notification_bus::{JsonNotification, NOTIFICATION_BUS};
 use crate::platform::{PlatformBoundEvent, PlatformState};
 use crate::remote_ipc::RemoteHook;
+#[cfg(not(target_os = "linux"))]
 use crate::tray::build_tray;
 pub use crate::webview::window_id::{AUTOCOMPLETE_ID, DASHBOARD_ID, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget, file_watcher, local_ipc};
@@ -158,10 +159,26 @@ impl WebviewManager {
             .ok();
 
         let tray_visible = !fig_settings::settings::get_bool_or("app.hideMenubarIcon", false);
-        let tray = build_tray(&window_target, &self.figterm_state).await.unwrap();
-        if let Err(err) = tray.set_visible(tray_visible) {
-            error!(%err, "Failed to set tray visible");
+        #[cfg(target_os = "linux")]
+        {
+            crate::linux_tray::spawn();
+            crate::linux_tray::set_visible(tray_visible);
         }
+        #[cfg(not(target_os = "linux"))]
+        let tray = match build_tray(&window_target, &self.figterm_state).await {
+            Ok(tray) => {
+                if let Err(err) = tray.set_visible(tray_visible) {
+                    error!(%err, "Failed to set tray visible");
+                }
+                Some(tray)
+            },
+            Err(err) => {
+                error!(%err, "Failed to create tray icon; continuing without a tray");
+                None
+            },
+        };
+        #[cfg(target_os = "linux")]
+        let tray = None;
 
         #[allow(unused_variables)]
         let menu_bar = menu_bar();

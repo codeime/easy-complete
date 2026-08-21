@@ -3,8 +3,8 @@ pub mod backup;
 pub mod desktop_entry;
 pub mod error;
 pub mod file;
-#[cfg(target_os = "linux")]
-pub mod gnome_extension;
+pub mod launch_at_login;
+// GNOME Shell extension is not compiled.
 #[cfg(target_os = "macos")]
 pub mod input_method;
 #[cfg(target_os = "macos")]

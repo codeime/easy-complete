@@ -585,6 +585,19 @@ impl Terminal {
         }
     }
 
+    /// Match an AT-SPI application name or Wayland `app_id` against a Linux terminal.
+    pub fn from_linux_identity(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let tail = raw.rsplit('.').next().unwrap_or(raw);
+        LINUX_TERMINALS
+            .iter()
+            .find(|terminal| linux_identity_matches(terminal, raw, tail))
+            .cloned()
+    }
+
     pub fn is_jetbrains_terminal() -> bool {
         // Handles all official JetBrain IDEs + Android Studio
         match std::env::var("TERMINAL_EMULATOR") {
@@ -629,6 +642,13 @@ impl Terminal {
             _ => None,
         }
     }
+}
+
+fn linux_identity_matches(terminal: &Terminal, raw: &str, tail: &str) -> bool {
+    let eq = |candidate: &str| candidate.eq_ignore_ascii_case(raw) || candidate.eq_ignore_ascii_case(tail);
+    terminal.wm_class().is_some_and(eq)
+        || terminal.wm_class_instance().is_some_and(eq)
+        || terminal.executable_names().iter().copied().any(eq)
 }
 
 #[derive(Debug)]
@@ -887,6 +907,21 @@ mod tests {
         assert!(Terminal::Otty.supports_macos_input_method());
         assert!(Terminal::Otty.executable_names().contains(&"Otty"));
         assert!(MACOS_TERMINALS.contains(&Terminal::Otty));
+    }
+
+    #[test]
+    fn linux_identity_matches_wm_class_app_id_and_executable() {
+        assert_eq!(Terminal::from_linux_identity("kitty"), Some(Terminal::Kitty));
+        assert_eq!(
+            Terminal::from_linux_identity("org.gnome.Console"),
+            Some(Terminal::GnomeConsole)
+        );
+        assert_eq!(
+            Terminal::from_linux_identity("gnome-terminal-server"),
+            Some(Terminal::GnomeTerminal)
+        );
+        assert_eq!(Terminal::from_linux_identity("Firefox"), None);
+        assert_eq!(Terminal::from_linux_identity(""), None);
     }
 
     #[test]

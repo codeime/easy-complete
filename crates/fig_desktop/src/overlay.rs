@@ -277,6 +277,14 @@ impl OverlayController {
     }
 
     pub fn apply_position(&mut self, position: WindowPosition, platform_state: &PlatformState, cx: &mut App) {
+        #[cfg(not(target_os = "macos"))]
+        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens_quartz().is_empty() {
+            debug!("no screen list; refusing caret placement");
+            *self.last_position.lock().unwrap_or_else(|err| err.into_inner()) = None;
+            self.park_window(cx);
+            self.sync_own_intercept(cx);
+            return;
+        }
         *self.last_position.lock().unwrap_or_else(|err| err.into_inner()) = Some(position);
         let needs_window = {
             let overlay = self.state.read(cx);
@@ -1382,6 +1390,11 @@ fn layout_overlay(
         return false;
     }
     if let Some(position) = *last_position.lock().unwrap_or_else(|err| err.into_inner()) {
+        #[cfg(not(target_os = "macos"))]
+        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens_quartz().is_empty() {
+            let _ = park_overlay_slot(window_slot, cx);
+            return false;
+        }
         let (origin, size, on_left, is_above) =
             overlay_bounds(position, overlay_size, platform_state, popout, flip_height);
         state.update(cx, |overlay, cx| {
@@ -1396,8 +1409,9 @@ fn layout_overlay(
         match position_overlay(origin, size, &handle, cx) {
             Ok(()) => true,
             Err(err) => {
-                warn!(%err, "overlay window update failed while positioning; clearing stale handle");
-                clear_overlay_handle_if(window_slot, handle);
+                warn!(%err, "native overlay frame was not applied; retry next layout");
+                let _ = park_overlay_handle(&handle, cx);
+                ec_gpui::invalidate_cached_overlay_x_window();
                 false
             },
         }
@@ -1954,28 +1968,20 @@ fn overlay_bounds(
             let screens = screens_quartz();
             caret.y = caret_y_in_quartz_space(caret.y, caret_size.height, origin, screens.first().copied());
             let mut edges = screen_edges_containing(&screens, caret.x, caret.y);
-            // The WebView clamped the window to the *monitor* and only consulted the
-            // terminal window when deciding whether to flip above the caret. Keeping
-            // these separate matters: a caret near the bottom of a short terminal must
-            // not drag the overlay upwards while there is still screen below it.
             let mut flip_bottom = edges.map(|(_, _, _, bottom)| bottom);
-            if let Some(active) = platform_state.get_active_window() {
-                let (_, _, _, window_bottom) = window_edges(&active.rect);
-                flip_bottom = Some(match flip_bottom {
-                    Some(bottom) => bottom.min(window_bottom),
-                    None => window_bottom,
-                });
-                if edges.is_none() {
-                    edges = Some(window_edges(&active.rect));
-                }
-            }
+            let window_bottom = platform_state
+                .get_active_window()
+                .map(|active| window_edges(&active.rect).3);
+            (edges, flip_bottom) = tighten_flip_bottom_with_terminal(edges, flip_bottom, window_bottom);
+            let (place_width, place_height, place_flip) =
+                overlay_size_in_screen_space(overlay_size.width, overlay_size.height, flip_height);
             let (x, y, on_left, is_above) = place_overlay_at_caret(
                 caret.x,
                 caret.y,
                 caret_size.height,
-                overlay_size.width,
-                overlay_size.height,
-                flip_height,
+                place_width,
+                place_height,
+                place_flip,
                 edges,
                 flip_bottom,
                 popout,
@@ -1988,6 +1994,15 @@ fn overlay_bounds(
             )
         },
     }
+}
+
+fn overlay_size_in_screen_space(width: f64, height: f64, flip_height: f64) -> (f64, f64, f64) {
+    let scale = overlay_placement_scale_or_one(ec_gpui::overlay_placement_scale());
+    (width * scale, height * scale, flip_height * scale)
+}
+
+fn overlay_placement_scale_or_one(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
 }
 
 /// Place the overlay below the caret, flipping the description to the left or the
@@ -2014,7 +2029,7 @@ fn place_overlay_at_caret(
     let constrained_to_screen = edges.is_some();
     if let Some((left, top, right, bottom)) = edges {
         if popout && x + overlay_width > right {
-            let shift = ec_gpui::POPOUT_WIDTH as f64;
+            let shift = (ec_gpui::POPOUT_WIDTH as f64) * ec_gpui::overlay_placement_scale();
             x = (caret_x - shift).max(left);
             on_left = true;
         }
@@ -2071,6 +2086,18 @@ fn window_edges(rect: &crate::utils::Rect) -> (f64, f64, f64, f64) {
         },
     };
     (pos.0, pos.1, pos.0 + size.0, pos.1 + size.1)
+}
+
+#[allow(clippy::type_complexity)]
+fn tighten_flip_bottom_with_terminal(
+    edges: Option<(f64, f64, f64, f64)>,
+    flip_bottom: Option<f64>,
+    window_bottom: Option<f64>,
+) -> (Option<(f64, f64, f64, f64)>, Option<f64>) {
+    match (edges, flip_bottom, window_bottom) {
+        (Some(edges), Some(bottom), Some(window_bottom)) => (Some(edges), Some(bottom.min(window_bottom))),
+        (edges, flip_bottom, _) => (edges, flip_bottom),
+    }
 }
 
 fn screen_edges_containing(screens: &[(f64, f64, f64, f64)], x: f64, y: f64) -> Option<(f64, f64, f64, f64)> {
@@ -2375,6 +2402,36 @@ mod tests {
     }
 
     #[test]
+    fn a_terminal_window_does_not_stand_in_for_missing_screens() {
+        let edges = None;
+        let flip = None;
+        assert_eq!(
+            tighten_flip_bottom_with_terminal(edges, flip, Some(400.0)),
+            (None, None)
+        );
+        assert_eq!(
+            tighten_flip_bottom_with_terminal(Some((0.0, 0.0, 100.0, 800.0)), Some(800.0), Some(400.0)),
+            (Some((0.0, 0.0, 100.0, 800.0)), Some(400.0))
+        );
+    }
+
+    #[test]
+    fn bottom_left_caret_needs_screens_top_left_does_not() {
+        use crate::platform::caret::caret_origin_needs_screens;
+        assert!(caret_origin_needs_screens(Origin::BottomLeft));
+        assert!(!caret_origin_needs_screens(Origin::TopLeft));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn stub_screens_are_empty_so_a_caret_cannot_be_placed() {
+        assert!(
+            screens_quartz().is_empty(),
+            "platform_stub must not invent a screen list; overlay placement parks instead"
+        );
+    }
+
+    #[test]
     fn native_intercept_never_swallows_keys_without_a_usable_caret() {
         let inputs = |overlay_visible, positioned, has_last_position| InterceptInputs {
             overlay_visible,
@@ -2652,6 +2709,26 @@ mod tests {
         assert_eq!(x, 2000.0);
         assert_eq!(y, -182.0);
         assert!(!is_above);
+    }
+
+    #[test]
+    fn a_2x_screen_flips_as_an_800px_window() {
+        let scale = overlay_placement_scale_or_one(2.0);
+        let (width, height, flip) = (400.0 * scale, 400.0 * scale, 140.0 * scale);
+        assert_eq!((width, height, flip), (800.0, 800.0, 280.0));
+        let (_, y, _, is_above) = place_overlay_at_caret(
+            100.0,
+            1000.0,
+            16.0,
+            width,
+            height,
+            flip,
+            Some((0.0, 0.0, 1920.0, 1080.0)),
+            None,
+            false,
+        );
+        assert!(is_above);
+        assert_eq!(y, 1000.0 - 800.0 - 2.0);
     }
 
     #[test]

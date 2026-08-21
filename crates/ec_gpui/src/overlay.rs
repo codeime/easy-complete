@@ -8,9 +8,7 @@ use gpui::{
 
 use crate::list::{DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_ROW_HEIGHT, DEFAULT_WIDTH, SuggestionList};
 
-use crate::macos::{
-    OVERLAY_WINDOW_TITLE, harden_overlay_window_handle, park_overlay_window_handle, set_overlay_frame_handle,
-};
+use crate::{OVERLAY_WINDOW_TITLE, harden_overlay_window_handle, park_overlay_window_handle, set_overlay_frame_handle};
 
 /// Shared overlay entity: visibility, selection, and the suggestion rows.
 pub struct OverlayState {
@@ -632,6 +630,7 @@ pub fn overlay_window_options(bounds: Bounds<Pixels>, show: bool) -> WindowOptio
         is_minimizable: false,
         window_background: gpui::WindowBackgroundAppearance::Transparent,
         window_min_size: Some(size(px(1.), px(1.))),
+        app_id: Some("easy-complete".into()),
         ..Default::default()
     }
 }
@@ -698,33 +697,35 @@ pub fn position_overlay(
     handle: &OverlayHandle,
     cx: &mut App,
 ) -> anyhow::Result<()> {
-    handle
-        .update(cx, |list, window, _cx| {
-            // Let GPUI resize its own render surface. Its macOS backend already defers
-            // `setContentSize` onto the foreground executor, so the resize callback can
-            // update `viewport_size` without re-borrowing `App` from inside our dispatch.
-            // Only the position/show part still needs the AppKit bridge below.
-            let requested = (f32::from(size.width), f32::from(size.height));
-            // A native resize callback can be rejected while GPUI's AppCell is
-            // already borrowed. Do not let our request cache turn that one
-            // missed callback into a permanently stale renderer: an unchanged
-            // requested size is retried whenever the live viewport disagrees.
-            if list.last_requested_size != Some(requested) || window.viewport_size() != size {
-                window.resize(size);
-            }
-            list.last_requested_size = Some(requested);
-            let frame = (
-                f32::from(origin.x),
-                f32::from(origin.y),
-                f32::from(size.width),
-                f32::from(size.height),
-            );
-            if !requested_frames_close(list.last_requested_frame, frame) {
-                // Size is included so a shorter list still re-pins the caret
-                // edge after GPUI's deferred AppKit resize.
-                set_overlay_frame_handle(window, frame.0 as f64, frame.1 as f64, frame.2 as f64, frame.3 as f64);
+    let applied = handle.update(cx, |list, window, _cx| {
+        // GPUI owns native resize (including DPI). We only pin origin/show below.
+        let requested = (f32::from(size.width), f32::from(size.height));
+        // A native resize callback can be rejected while GPUI's AppCell is
+        // already borrowed. Do not let our request cache turn that one
+        // missed callback into a permanently stale renderer: an unchanged
+        // requested size is retried whenever the live viewport disagrees.
+        if list.last_requested_size != Some(requested) || window.viewport_size() != size {
+            window.resize(size);
+        }
+        list.last_requested_size = Some(requested);
+        let frame = (
+            f32::from(origin.x),
+            f32::from(origin.y),
+            f32::from(size.width),
+            f32::from(size.height),
+        );
+        if !requested_frames_close(list.last_requested_frame, frame) {
+            let ok = set_overlay_frame_handle(window, frame.0 as f64, frame.1 as f64, frame.2 as f64, frame.3 as f64);
+            if ok {
                 list.last_requested_frame = Some(frame);
             }
-        })
-        .map(|_| ())
+            ok
+        } else {
+            true
+        }
+    })?;
+    if !applied {
+        anyhow::bail!("native overlay frame was not applied");
+    }
+    Ok(())
 }

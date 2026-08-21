@@ -54,15 +54,16 @@ impl RecvError {
         if let RecvError::Io(io) = self {
             #[cfg(windows)]
             {
-                // Windows error code
-                let wsaeconnreset = 10054;
                 if let Some(err) = io.raw_os_error() {
-                    if err == wsaeconnreset {
+                    if matches!(err, 10054 | 109 | 232) {
                         return true;
                     }
                 }
             }
-            matches!(io.kind(), std::io::ErrorKind::ConnectionAborted)
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe
+            )
         } else {
             false
         }

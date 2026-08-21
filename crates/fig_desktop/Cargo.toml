@@ -105,6 +105,13 @@ nix.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 sysinfo.workspace = true
+# tray-icon's Linux backend is GTK + libappindicator. Enable it only on Linux
+# so macOS does not grow a GTK compile graph. Do not add WebKit.
+muda = { version = "0.19.3", default-features = false, features = ["gtk"] }
+tray-icon = { version = "0.24.2", default-features = false, features = ["gtk"] }
+x11rb = "0.13"
+zbus = "5"
+gtk = "0.18"
 
 
 [target.'cfg(target_os="macos")'.dependencies]

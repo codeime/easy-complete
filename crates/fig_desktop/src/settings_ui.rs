@@ -969,10 +969,12 @@ fn behavior_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> im
                     false,
                     e(&entity),
                     |this, value, cx| {
-                        if let Err(err) = fig_integrations::login_item::set_enabled(value) {
-                            error!(%err, "Failed to update login item");
-                        }
                         this.set_bool("app.launchOnStartup", value, cx);
+                        tokio::spawn(async move {
+                            if let Err(err) = fig_integrations::launch_at_login::set_enabled(value).await {
+                                error!(%err, "Failed to update launch at login");
+                            }
+                        });
                     },
                 ))
                 .child(bool_row(
@@ -1466,11 +1468,14 @@ fn permission_gate_page(
     repairing: Option<PermId>,
     entity: Entity<SettingsWindow>,
 ) -> impl IntoElement {
+    #[cfg(target_os = "macos")]
     let rows = [
         (PermId::Accessibility, gate.accessibility),
         (PermId::Shell, gate.shell),
         (PermId::InputMethod, gate.input_method),
     ];
+    #[cfg(not(target_os = "macos"))]
+    let rows = [(PermId::Shell, gate.shell)];
     let checking = gate.still_checking();
     let busy = repairing.is_some() || checking;
     let ax_ready = gate.accessibility == PermReady::Ready;
@@ -1991,6 +1996,18 @@ mod tests {
             PermReady::Ready,
             PermReady::Ready
         )));
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(
+                !shows_permission_gate(&snapshot(PermReady::Error, PermReady::Ready, PermReady::Missing)),
+                "Linux/Windows must not trap settings behind macOS Accessibility/IME"
+            );
+            assert!(shows_permission_gate(&snapshot(
+                PermReady::Ready,
+                PermReady::Missing,
+                PermReady::Ready
+            )));
+        }
     }
 
     #[test]

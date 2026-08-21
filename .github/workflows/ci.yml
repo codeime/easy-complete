@@ -87,3 +87,74 @@ jobs:
       # rather than only surfacing during a release. Mirrors scripts/build-app.sh.
       - name: Build release binaries (dist profile)
         run: cargo build --locked --profile dist -p fig_desktop -p figterm -p ec_cli -p fig_input_method
+
+  # Native Linux compile of the completion stack plus the GPUI desktop host.
+  # Overlay caret is X11 + IBus. Do not install WebKit — the UI is GPUI.
+  rust-linux:
+    name: Rust (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      XDG_RUNTIME_DIR: /tmp/ec-runtime
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            clang libclang-dev \
+            protobuf-compiler \
+            zsh fish \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
+            libx11-xcb-dev libxcb-xfixes0-dev libxcb-xkb-dev \
+            libvulkan-dev libfreetype6-dev libfontconfig1-dev \
+            libgtk-3-dev libayatana-appindicator3-dev
+          mkdir -p "$XDG_RUNTIME_DIR"
+
+      - name: Set up Rust
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-linux
+
+      - name: Clippy (headless crates)
+        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
+
+      - name: Test (headless crates)
+        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
+
+      - name: Headless engine complete
+        run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"
+
+      - name: Clippy (desktop host)
+        run: cargo clippy --locked -p ec_gpui -p fig_desktop --color always -- -D warnings
+
+  rust-windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Rust
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-windows
+
+      - name: Clippy (headless crates)
+        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
+
+      - name: Test (headless crates)
+        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
+
+      - name: Headless engine complete
+        run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"
+
+      - name: Clippy (desktop host)
+        run: cargo clippy --locked -p ec_gpui -p fig_desktop --color always -- -D warnings

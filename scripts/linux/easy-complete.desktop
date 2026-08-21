@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Easy Complete
+Comment=IDE-style autocomplete for the terminal
+Exec=easy-complete
+TryExec=easy-complete
+Icon=easy-complete
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=easy-complete
+StartupNotify=false

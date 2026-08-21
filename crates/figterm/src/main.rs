@@ -62,6 +62,8 @@ use crate::term::{SystemTerminal, Terminal};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const BUFFER_SIZE: usize = 16384;
+/// Must stay 1. See the comment at the `Term::new` call in `figterm_main`.
+const TERM_SCROLLBACK_LINES: usize = 1;
 
 static INSERT_ON_NEW_CMD: Mutex<Option<(String, bool, bool)>> = Mutex::new(None);
 static INSERTION_LOCKED_AT: RwLock<Option<SystemTime>> = RwLock::new(None);
@@ -588,7 +590,11 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
         let mut processor = Processor::new();
         let size = SizeInfo::new(pty_size.rows as usize, pty_size.cols as usize);
         let event_sender = EventHandler::new(remote_sender.clone(), history_sender.clone(), main_loop_tx.clone());
-        let mut term = alacritty_terminal::Term::new(size, event_sender, 1, session_id.clone());
+        // One line of history is load-bearing. `get_current_buffer` bails when
+        // `topmost_line() > cmd_cursor.line`, and `topmost_line()` is
+        // `Line(-history_size)`. Zero would drop a prompt that just scrolled
+        // off the viewport and lose the edit buffer for the rest of the command.
+        let mut term = alacritty_terminal::Term::new(size, event_sender, TERM_SCROLLBACK_LINES, session_id.clone());
 
         #[cfg(target_os = "windows")]
         term.set_windows_delay_end_prompt(true);
@@ -989,6 +995,11 @@ mod tests {
     #[test]
     fn hostname_does_not_need_sysinfo() {
         assert!(hostname().is_some_and(|name| !name.is_empty()));
+    }
+
+    #[test]
+    fn term_keeps_one_line_of_scrollback() {
+        assert_eq!(TERM_SCROLLBACK_LINES, 1);
     }
 
     #[test]

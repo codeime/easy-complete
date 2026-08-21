@@ -8,6 +8,8 @@ mod settings_ui;
 // mod figterm;
 mod file_watcher;
 mod install;
+#[cfg(target_os = "linux")]
+mod linux_tray;
 mod local_ipc;
 mod notification_bus;
 mod platform;
@@ -45,6 +47,9 @@ pub use webview::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID};
 pub use event_loop::{EventLoopClosed, EventLoopProxy, EventLoopWindowTarget};
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    prefer_x11_overlay_backend();
+
     // The desktop process is I/O bound: GPUI owns the UI thread, and the
     // completion engine has its own worker. A worker per core just parks
     // stacks — the same waste ecterm already stopped.
@@ -64,9 +69,8 @@ async fn async_main() -> ExitCode {
 
     let cli = cli::Cli::parse();
 
-    #[cfg(target_os = "macos")]
     if cli.unregister_login_item {
-        return match fig_integrations::login_item::set_enabled(false) {
+        return match fig_integrations::launch_at_login::set_enabled(false).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("Failed to unregister launch at login: {err}");
@@ -144,6 +148,11 @@ async fn async_main() -> ExitCode {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
+    if let Err(err) = fig_integrations::launch_at_login::set_enabled(launch_on_startup).await {
+        warn!(%err, "failed to reconcile launch at login");
+    }
+
     if cli.is_startup && !launch_on_startup {
         return ExitCode::SUCCESS;
     }
@@ -206,18 +215,6 @@ async fn async_main() -> ExitCode {
         });
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        match fig_os_shim::Env::new().q_backend().ok().as_deref() {
-            Some("default") => {},
-            // SAFETY: we are calling set_var in a single-threaded context.
-            Some(backend) => unsafe { std::env::set_var("GDK_BACKEND", backend) },
-            None => unsafe { std::env::set_var("GDK_BACKEND", "x11") },
-        }
-
-        platform::gtk::init().expect("Failed initializing GTK");
-    }
-
     // A deep link names the page to open, so it outranks the setting.
     let silent_launch = page.is_none() && fig_settings::settings::get_bool_or("app.silentLaunch", false);
 
@@ -245,6 +242,22 @@ async fn async_main() -> ExitCode {
     }
     webview_manager.run().await.unwrap();
     ExitCode::SUCCESS
+}
+
+/// Overlay placement is X11-only. Unset Wayland when DISPLAY is set unless
+/// `EC_GPUI_BACKEND=wayland`.
+#[cfg(target_os = "linux")]
+fn prefer_x11_overlay_backend() {
+    if std::env::var("EC_GPUI_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("wayland")) {
+        return;
+    }
+    let has_x11 = std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty());
+    if has_x11 {
+        // SAFETY: single-threaded, before the tokio runtime is built.
+        unsafe {
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+    }
 }
 
 fn parse_url_page(url: Option<&str>) -> Result<Option<String>, ExitCode> {

@@ -1,3 +1,5 @@
+//! Not compiled. Live backend is `platform/windows_caret.rs`.
+
 use std::borrow::Cow;
 use std::ffi::CStr;
 use std::mem::ManuallyDrop;

@@ -1,7 +1,7 @@
 pub const APP_BUNDLE_ID: &str = "dev.emmmm.easy-complete";
 pub const APP_BUNDLE_NAME: &str = "Easy Complete.app";
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub const APP_PROCESS_NAME: &str = "easy-complete";
 
 #[cfg(windows)]
@@ -72,6 +72,22 @@ pub mod macos {
     pub const BUNDLE_CONTENTS_RESOURCE_PATH: &str = "Contents/Resources";
     pub const BUNDLE_CONTENTS_HELPERS_PATH: &str = "Contents/Helpers";
     pub const BUNDLE_CONTENTS_INFO_PLIST_PATH: &str = "Contents/Info.plist";
+}
+
+/// Linux desktop / packaging constants.
+///
+/// Always compiled (same as [`macos`]) so macOS tests and Linux-gated
+/// integration code can name the layout without a `cfg` on the import.
+pub mod linux {
+    /// Installed `.desktop` filename under `applications/` and `autostart/`.
+    pub const DESKTOP_ENTRY_NAME: &str = "easy-complete.desktop";
+
+    /// Debian/RPM package name and `/usr/share/{PACKAGE_NAME}` prefix.
+    /// Must stay equal to [`super::DATA_DIR_NAME`].
+    pub const PACKAGE_NAME: &str = "easy-complete";
+
+    /// X11 `WM_CLASS` for application windows. Matches the desktop binary name.
+    pub const DESKTOP_APP_WM_CLASS: &str = "easy-complete";
 }
 
 pub mod env_var {
@@ -153,5 +169,17 @@ mod tests {
             println!("build_datetime: {build_datetime}");
             println!("{}", OffsetDateTime::parse(build_datetime, &Rfc3339).unwrap());
         }
+    }
+
+    #[test]
+    fn linux_package_layout_names() {
+        assert_eq!(linux::PACKAGE_NAME, DATA_DIR_NAME);
+        assert_eq!(linux::PACKAGE_NAME, "easy-complete");
+        assert_eq!(linux::DESKTOP_APP_WM_CLASS, "easy-complete");
+        assert_eq!(linux::DESKTOP_ENTRY_NAME, "easy-complete.desktop");
+        #[cfg(unix)]
+        assert_eq!(APP_PROCESS_NAME, "easy-complete");
+        #[cfg(windows)]
+        assert_eq!(APP_PROCESS_NAME, "easy-complete.exe");
     }
 }

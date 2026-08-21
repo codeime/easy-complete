@@ -189,6 +189,10 @@ pub async fn build_tray(
     _event_loop_window_target: &EventLoopWindowTarget,
     _figterm_state: &FigtermState,
 ) -> tray_icon::Result<TrayIcon> {
+    build_tray_icon()
+}
+
+pub(crate) fn build_tray_icon() -> tray_icon::Result<TrayIcon> {
     let is_logged_in = true; // fig_auth removed
     TrayIconBuilder::new()
         .with_icon(get_icon(is_logged_in))

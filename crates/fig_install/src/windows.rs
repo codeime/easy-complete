@@ -1,33 +1,25 @@
-use std::os::windows::process::CommandExt;
-
+use fig_os_shim::Context;
 use tokio::sync::mpsc::Sender;
 
 use crate::index::UpdatePackage;
 use crate::{Error, UpdateStatus};
 
-pub async fn update(
-    package: UpdatePackage,
+#[allow(dead_code)]
+pub(crate) async fn update(
+    _package: UpdatePackage,
     _tx: Sender<UpdateStatus>,
     _interactive: bool,
     _relaunch_dashboard: bool,
 ) -> Result<(), Error> {
-    let installer_path = fig_util::directories::fig_data_dir().unwrap().join("fig_installer.exe");
+    Err(Error::UpdateFailed(
+        "Windows updater is not restored; zip/MSI needs a later packaging PR".into(),
+    ))
+}
 
-    if installer_path.exists() {
-        std::fs::remove_file(&installer_path)?;
+pub(crate) async fn uninstall_desktop(_ctx: &Context) -> Result<(), Error> {
+    let _ = fig_integrations::launch_at_login::set_enabled(false).await;
+    if let Ok(dir) = fig_util::directories::fig_data_dir() {
+        let _ = tokio::fs::remove_dir_all(dir).await;
     }
-
-    let detached = 0x8;
-    std::process::Command::new("curl")
-        .creation_flags(detached)
-        .args(["-L", "-s", "-o"])
-        .arg(&installer_path)
-        .arg(&package.download)
-        .status()?;
-
-    std::process::Command::new(installer_path)
-        .args(["/upgrade", "/quiet", "/norestart"])
-        .spawn()?;
-
     Ok(())
 }

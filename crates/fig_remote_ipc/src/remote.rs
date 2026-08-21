@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use fig_ipc::{BufferedReader, RecvMessage, SendMessage};
+use fig_ipc::{BufferedReader, LocalListener, RecvMessage, SendMessage};
 use fig_proto::figterm::{InsertTextRequest, InterceptRequest, SetBufferRequest, intercept_request};
 use fig_proto::local::ShellContext;
 use fig_proto::remote::clientbound::request::Request;
@@ -12,7 +12,6 @@ use fig_proto::remote::clientbound::{self, HandshakeResponse};
 use fig_proto::remote::{Clientbound, Hostbound, RunProcessRequest, hostbound};
 use fig_util::PTY_BINARY_NAME;
 use time::OffsetDateTime;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
@@ -40,22 +39,23 @@ pub async fn start_remote_ipc(
         }
     }
 
-    tokio::fs::remove_file(&socket_path).await.ok();
+    let mut listener = LocalListener::bind(&socket_path).await?;
 
-    let listener = UnixListener::bind(socket_path)?;
-
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(handle_remote_ipc(stream, figterm_state.clone(), hook.clone()));
+    while let Ok(stream) = listener.accept().await {
+        tokio::spawn(handle_remote_ipc(
+            stream.into_inner(),
+            figterm_state.clone(),
+            hook.clone(),
+        ));
     }
 
     Ok(())
 }
 
-pub async fn handle_remote_ipc(
-    stream: UnixStream,
-    figterm_state: Arc<FigtermState>,
-    mut hook: impl RemoteHookHandler + Send,
-) {
+pub async fn handle_remote_ipc<S>(stream: S, figterm_state: Arc<FigtermState>, mut hook: impl RemoteHookHandler + Send)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let (reader, writer) = tokio::io::split(stream);
     let (clientbound_tx, clientbound_rx) = flume::unbounded();
 
@@ -306,7 +306,7 @@ pub async fn handle_remote_ipc(
 }
 
 async fn handle_outgoing(
-    mut writer: tokio::io::WriteHalf<UnixStream>,
+    mut writer: impl tokio::io::AsyncWrite + Unpin + SendMessage,
     outgoing: flume::Receiver<Clientbound>,
     bad_connection: Arc<Notify>,
     mut on_close_rx: tokio::sync::broadcast::Receiver<()>,

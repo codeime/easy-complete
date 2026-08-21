@@ -521,7 +521,13 @@ pub fn set_overlay_visible_handle(window: &gpui::Window, visible: bool) {
     }
 }
 
-pub fn set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f64, height: f64) {
+pub fn invalidate_cached_overlay_x_window() {}
+
+pub fn overlay_placement_scale() -> f64 {
+    1.0
+}
+
+pub fn set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f64, height: f64) -> bool {
     if let Some(ns_window) = ns_window_from_gpui(window) {
         // Epoch is assigned only if this geometry is actually enqueued.
         // Echoes of the live frame must not bump it or in-flight size
@@ -541,6 +547,7 @@ pub fn set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f6
             let _ = (title, x, y, width, height, epoch);
         }
     }
+    true
 }
 
 /// Hide the overlay the way the WebView host did: `orderOut`, keep the last size.

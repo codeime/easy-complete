@@ -1,5 +1,5 @@
-//! GPUI process host. Replaces tao's `EventLoop::run` so overlay and dashboard share one
-//! `NSApplication`.
+//! GPUI process host. Overlay and settings share one `Application::run`.
+//! On macOS that process-wide instance is `GPUIApplication` (`NSApplication`).
 
 use std::sync::Arc;
 
@@ -13,7 +13,9 @@ use tray_icon::TrayIcon;
 use crate::event::{Event, ShowMessageNotification, WindowEvent};
 use crate::overlay::OverlayController;
 use crate::platform::PlatformState;
-use crate::tray::{self, get_context_menu, get_icon};
+use crate::tray;
+#[cfg(not(target_os = "linux"))]
+use crate::tray::{get_context_menu, get_icon};
 use crate::webview::notification::WebviewNotificationsState;
 use crate::webview::{DASHBOARD_ID, FigIdMap, WindowId, WryIdMap};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
@@ -37,7 +39,7 @@ pub struct DesktopHost {
     pub api_handler_tx: UnboundedSender<(WindowId, String)>,
     pub overlay: OverlayController,
     pub settings: Option<crate::settings_ui::SettingsHandle>,
-    pub tray: TrayIcon,
+    pub tray: Option<TrayIcon>,
 }
 
 impl DesktopHost {
@@ -55,12 +57,16 @@ impl DesktopHost {
             Event::ControlFlow(ControlFlow::Exit) => cx.quit(),
             Event::ControlFlow(_) => {},
             Event::ReloadTray { is_logged_in } => {
-                self.tray
-                    .set_icon(Some(get_icon(is_logged_in)))
-                    .map_err(|err| error!(?err))
-                    .ok();
-                self.tray.set_icon_as_template(true);
-                self.tray.set_menu(Some(Box::new(get_context_menu(is_logged_in))));
+                #[cfg(target_os = "linux")]
+                crate::linux_tray::reload(is_logged_in);
+                #[cfg(not(target_os = "linux"))]
+                if let Some(tray) = &mut self.tray {
+                    tray.set_icon(Some(get_icon(is_logged_in)))
+                        .map_err(|err| error!(?err))
+                        .ok();
+                    tray.set_icon_as_template(true);
+                    tray.set_menu(Some(Box::new(get_context_menu(is_logged_in))));
+                }
             },
             Event::ReloadCredentials => {
                 let autocomplete_enabled = autocomplete_should_run();
@@ -71,7 +77,12 @@ impl DesktopHost {
                 }
             },
             Event::ReloadAccessibility => {
-                self.tray.set_menu(Some(Box::new(get_context_menu(true))));
+                #[cfg(target_os = "linux")]
+                crate::linux_tray::reload(true);
+                #[cfg(not(target_os = "linux"))]
+                if let Some(tray) = &mut self.tray {
+                    tray.set_menu(Some(Box::new(get_context_menu(true))));
+                }
                 let autocomplete_enabled = autocomplete_should_run();
                 self.overlay.apply_theme(cx);
                 self.overlay.set_enabled(autocomplete_enabled, cx);
@@ -89,8 +100,13 @@ impl DesktopHost {
                 }
             },
             Event::SetTrayVisible(visible) => {
-                if let Err(err) = self.tray.set_visible(visible) {
-                    error!(%err, "Failed to set tray visible");
+                #[cfg(target_os = "linux")]
+                crate::linux_tray::set_visible(visible);
+                #[cfg(not(target_os = "linux"))]
+                if let Some(tray) = &mut self.tray {
+                    if let Err(err) = tray.set_visible(visible) {
+                        error!(%err, "Failed to set tray visible");
+                    }
                 }
             },
             Event::PlatformBoundEvent(native_event) => {
@@ -296,6 +312,15 @@ pub fn start_application(
                             })
                             .ok();
                     }
+                }
+                #[cfg(not(target_os = "macos"))]
+                if host.show_dashboard_after_normal_launch {
+                    host.proxy
+                        .send_event(Event::WindowEvent {
+                            window_id: DASHBOARD_ID,
+                            window_event: WindowEvent::Show,
+                        })
+                        .ok();
                 }
             });
         },

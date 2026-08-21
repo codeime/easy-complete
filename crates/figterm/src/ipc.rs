@@ -27,7 +27,7 @@ use crate::MainLoopEvent;
 #[allow(dead_code)]
 #[pin_project(project = MessageSourceProj)]
 enum MessageSource {
-    UnixStream(#[pin] tokio::io::ReadHalf<tokio::net::UnixStream>),
+    IpcStream(#[pin] tokio::io::ReadHalf<fig_ipc::IpcStream>),
     ChildStdout(#[pin] ChildStdout),
 }
 
@@ -38,7 +38,7 @@ impl AsyncRead for MessageSource {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
         match self.project() {
-            MessageSourceProj::UnixStream(stream) => stream.poll_read(cx, buf),
+            MessageSourceProj::IpcStream(stream) => stream.poll_read(cx, buf),
             MessageSourceProj::ChildStdout(stdout) => stdout.poll_read(cx, buf),
         }
     }
@@ -47,28 +47,28 @@ impl AsyncRead for MessageSource {
 #[allow(dead_code)]
 #[pin_project(project = MessageSinkProj)]
 enum MessageSink {
-    UnixStream(#[pin] tokio::io::WriteHalf<tokio::net::UnixStream>),
+    IpcStream(#[pin] tokio::io::WriteHalf<fig_ipc::IpcStream>),
     ChildStdin(#[pin] ChildStdin),
 }
 
 impl AsyncWrite for MessageSink {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
         match self.project() {
-            MessageSinkProj::UnixStream(stream) => stream.poll_write(cx, buf),
+            MessageSinkProj::IpcStream(stream) => stream.poll_write(cx, buf),
             MessageSinkProj::ChildStdin(stdin) => stdin.poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         match self.project() {
-            MessageSinkProj::UnixStream(stream) => stream.poll_flush(cx),
+            MessageSinkProj::IpcStream(stream) => stream.poll_flush(cx),
             MessageSinkProj::ChildStdin(stdin) => stdin.poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         match self.project() {
-            MessageSinkProj::UnixStream(stream) => stream.poll_shutdown(cx),
+            MessageSinkProj::IpcStream(stream) => stream.poll_shutdown(cx),
             MessageSinkProj::ChildStdin(stdin) => stdin.poll_shutdown(cx),
         }
     }
@@ -81,12 +81,22 @@ async fn get_forwarded_stream() -> Result<(MessageSource, MessageSink, Option<Jo
 
         use anyhow::Context as AnyhowContext;
 
-        let mut child = tokio::process::Command::new("fig.exe")
+        let host_cli = format!("{}.exe", fig_util::CLI_BINARY_NAME);
+        let mut child = match tokio::process::Command::new(&host_cli)
             .args(["_", "stream-from-socket"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()?;
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => tokio::process::Command::new("fig.exe")
+                .args(["_", "stream-from-socket"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()?,
+        };
 
         let stdin = child.stdin.take().context("Failed to open stdin")?;
         let stdout = child.stdout.take().context("Failed to open stdout")?;
@@ -107,7 +117,7 @@ async fn get_forwarded_stream() -> Result<(MessageSource, MessageSink, Option<Jo
     let socket = directories::remote_socket_path()?;
     let stream = fig_ipc::socket_connect_timeout(&socket, Duration::from_secs(5)).await?;
     let (reader, writer) = tokio::io::split(stream);
-    Ok((MessageSource::UnixStream(reader), MessageSink::UnixStream(writer), None))
+    Ok((MessageSource::IpcStream(reader), MessageSink::IpcStream(writer), None))
 }
 
 /// Spawns a local unix socket for communicating with figterm on a local machine
@@ -132,15 +142,14 @@ pub async fn spawn_figterm_ipc(
         }
     }
 
-    tokio::fs::remove_file(&socket_path).await.ok();
-    let socket_listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let mut socket_listener = fig_ipc::LocalListener::bind(&socket_path).await?;
 
     tokio::spawn(async move {
         loop {
-            if let Ok((stream, _)) = socket_listener.accept().await {
+            if let Ok(stream) = socket_listener.accept().await {
                 let incoming_tx = incoming_tx.clone();
 
-                let (read_half, mut write_half) = tokio::io::split(stream);
+                let (read_half, mut write_half) = tokio::io::split(stream.into_inner());
                 let (response_tx, response_rx) = unbounded::<FigtermResponseMessage>();
 
                 tokio::spawn(async move {

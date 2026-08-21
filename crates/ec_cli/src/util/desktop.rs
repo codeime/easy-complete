@@ -23,9 +23,9 @@ pub struct LaunchArgs {
 
 /// Whether shell integration should stand down because the desktop app is not running.
 ///
-/// Remote sessions are exempt. They reach the desktop app over the socket named by
-/// `Q_SET_PARENT`/`Q_PARENT` on the user's own machine, so there is never a local
-/// process to find and gating on one would disable SSH autocomplete permanently.
+/// No desktop process means `ec init` prints nothing, so VS Code Terminal Suggest,
+/// Otty, and distro widgets keep their own completions. Remote sessions are exempt:
+/// they reach the desktop over `Q_SET_PARENT`/`Q_PARENT`.
 pub fn suppress_without_desktop_app(env: &Env) -> bool {
     if env.get_os(Q_FORCE_FIGTERM_LAUNCH).is_some() || is_remote_session(env) {
         return false;
@@ -54,25 +54,7 @@ pub fn desktop_app_running() -> bool {
     !running_applications.is_empty()
 }
 
-#[cfg(target_os = "windows")]
-pub fn desktop_app_running() -> bool {
-    use crate::consts::APP_PROCESS_NAME;
-
-    let output = match std::process::Command::new("tasklist.exe")
-        .args(["/NH", "/FI", "IMAGENAME eq fig_desktop.exe"])
-        .output()
-    {
-        Ok(output) => output,
-        Err(_) => return false,
-    };
-
-    match std::str::from_utf8(&output.stdout) {
-        Ok(result) => result.contains(CODEWHISPERER_DESKTOP_PROCESS_NAME),
-        Err(_) => false,
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "macos"))]
 pub fn desktop_app_running() -> bool {
     use std::ffi::OsString;
 
@@ -107,6 +89,7 @@ pub fn launch_fig_desktop(args: LaunchArgs) -> Result<()> {
         },
     }
 
+    #[cfg(not(windows))]
     std::fs::remove_file(directories::desktop_socket_path()?).ok();
 
     let mut common_args = vec![];
@@ -129,9 +112,22 @@ pub fn launch_fig_desktop(args: LaunchArgs) -> Result<()> {
             }
         } else if #[cfg(windows)] {
             use std::os::windows::process::CommandExt;
+            use std::process::Stdio;
+
+            use fig_util::consts::APP_PROCESS_NAME;
             use windows::Win32::System::Threading::DETACHED_PROCESS;
 
-            Command::new("fig_desktop")
+            let exe = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|dir| dir.join(APP_PROCESS_NAME)))
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| std::path::PathBuf::from(APP_PROCESS_NAME));
+
+            Command::new(exe)
+                .args(&common_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .creation_flags(DETACHED_PROCESS.0)
                 .spawn()?;
         } else {
@@ -148,41 +144,40 @@ pub fn launch_fig_desktop(args: LaunchArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !desktop_app_running() {
+    if !cfg!(windows) && !desktop_app_running() {
         return Err(eyre!("{PRODUCT_NAME} was unable launch successfully"));
     }
 
-    // Wait for socket to exist
-    let path = directories::desktop_socket_path()?;
-
     cfg_if::cfg_if! {
         if #[cfg(windows)] {
-            for _ in 0..30 {
-                match path.metadata() {
-                    Ok(_) => return Ok(()),
-                    Err(err) => if let Some(code) = err.raw_os_error() {
-                        // Windows can't query socket file existence
-                        // Check against arbitrary error code
-                        if code == 1920 {
-                            return Ok(())
-                        }
-                    },
-                }
-
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
+            wait_for_desktop_pipe()
         } else {
+            let path = directories::desktop_socket_path()?;
             for _ in 0..30 {
-                // Wait for socket to exist
                 if path.exists() {
                     return Ok(());
                 }
-
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
+            Err(eyre!("failed to connect to socket".to_owned()))
         }
     }
+}
 
+#[cfg(windows)]
+fn wait_for_desktop_pipe() -> Result<()> {
+    use windows::Win32::System::Pipes::WaitNamedPipeW;
+    use windows::core::HSTRING;
+
+    let path = directories::desktop_socket_path()?;
+    let pipe = fig_ipc::pipe_name_from_path(&path);
+    let name = HSTRING::from(pipe.as_str());
+    for _ in 0..30 {
+        if unsafe { WaitNamedPipeW(&name, 0) }.is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
     Err(eyre!("failed to connect to socket".to_owned()))
 }
 

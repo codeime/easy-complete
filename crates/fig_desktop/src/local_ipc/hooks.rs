@@ -64,18 +64,16 @@ pub async fn file_changed(_file_changed_hook: FileChangedHook) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::unused_async)]
 pub async fn focused_window_data(
     hook: FocusedWindowDataHook,
     platform_state: &PlatformState,
     proxy: &EventLoopProxy,
 ) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    return crate::platform::integrations::from_hook(hook, platform_state, proxy);
-    #[cfg(not(target_os = "linux"))]
-    {
-        let (_hook, _platform_state, _proxy) = (hook, platform_state, proxy);
-        Ok(())
-    }
+    // Window-rect geometry is not a caret. Linux places only from
+    // RelativeToCaret (IBus/X11). Keep this hook a no-op.
+    let (_hook, _platform_state, _proxy) = (hook, platform_state, proxy);
+    Ok(())
 }
 
 pub async fn event(hook: EventHook, proxy: &EventLoopProxy) -> Result<()> {

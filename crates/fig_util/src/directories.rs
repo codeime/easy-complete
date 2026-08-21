@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 use std::fmt::Display;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use camino::Utf8PathBuf;
 use fig_os_shim::{Context, EnvProvider, FsProvider, Os, PlatformProvider, Shim};
@@ -10,8 +10,6 @@ use time::OffsetDateTime;
 #[cfg(unix)]
 use crate::RUNTIME_DIR_NAME;
 use crate::env_var::{Q_BUNDLE_METADATA_PATH, Q_PARENT};
-#[cfg(target_os = "linux")]
-use crate::linux::PACKAGE_NAME;
 use crate::system_info::{in_cloudshell, is_remote};
 use crate::{BACKUP_DIR_NAME, DATA_DIR_NAME, TAURI_PRODUCT_NAME};
 
@@ -360,12 +358,12 @@ pub fn figterm_socket_path(session_id: impl Display) -> Result<PathBuf> {
 /// The path to the resources directory
 ///
 /// - MacOS: "/Applications/{app_name}.app/Contents/Resources"
-/// - Linux: "/usr/share/fig"
+/// - Linux: `$PREFIX/share/easy-complete` (exe-relative, then `XDG_DATA_DIRS`, then `/usr/share`)
 /// - Windows: "%LOCALAPPDATA%\{data_dir}\resources"
 pub fn resources_path() -> Result<PathBuf> {
     cfg_if::cfg_if! {
         if #[cfg(all(unix, not(target_os = "macos")))] {
-            Ok(std::path::Path::new("/usr/share").join(PACKAGE_NAME))
+            Ok(linux_share_dir_from_std_env())
         } else if #[cfg(target_os = "macos")] {
             Ok(crate::app_bundle_path().join(crate::macos::BUNDLE_CONTENTS_RESOURCE_PATH))
         } else if #[cfg(windows)] {
@@ -385,7 +383,10 @@ pub fn resources_path_ctx<Ctx: EnvProvider + PlatformProvider>(ctx: &Ctx) -> Res
                     .current_dir()?
                     .join(format!("lib/{}", TAURI_PRODUCT_NAME.replace("_", "-"))))
             } else {
-                Ok(format!("/usr/share/{}", crate::DATA_DIR_NAME).into())
+                Ok(linux_share_dir_from_env(
+                    |key| ctx.env().get(key),
+                    ctx.env().current_exe().ok(),
+                ))
             }
         },
         fig_os_shim::Os::Windows => Ok(fig_data_dir()?.join("resources")),
@@ -393,10 +394,51 @@ pub fn resources_path_ctx<Ctx: EnvProvider + PlatformProvider>(ctx: &Ctx) -> Res
     }
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_share_dir_from_std_env() -> PathBuf {
+    linux_share_dir_from_env(std::env::var, std::env::current_exe().ok())
+}
+
+fn linux_share_dir_from_env(
+    env_var: impl Fn(&str) -> Result<String, std::env::VarError>,
+    current_exe: Option<PathBuf>,
+) -> PathBuf {
+    for dir in linux_share_dir_candidates(env_var, current_exe.as_deref()) {
+        if dir.is_dir() {
+            return dir;
+        }
+    }
+    PathBuf::from("/usr/share").join(DATA_DIR_NAME)
+}
+
+fn linux_share_dir_candidates(
+    env_var: impl Fn(&str) -> Result<String, std::env::VarError>,
+    current_exe: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(bin) = current_exe.and_then(Path::parent) {
+        dirs.push(bin.join(format!("../share/{DATA_DIR_NAME}")));
+    }
+    if let Ok(xdg_home) = env_var("XDG_DATA_HOME") {
+        if !xdg_home.is_empty() {
+            dirs.push(PathBuf::from(xdg_home).join(DATA_DIR_NAME));
+        }
+    }
+    let xdg_dirs = env_var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    for dir in xdg_dirs.split(':').filter(|dir| !dir.is_empty()) {
+        dirs.push(PathBuf::from(dir).join(DATA_DIR_NAME));
+    }
+    dirs.push(PathBuf::from("/usr/share").join(DATA_DIR_NAME));
+    dirs
+}
+
 /// The path to the fig install manifest
 ///
 /// - MacOS: "/Applications/{app_name}.app/Contents/Resources/manifest.json"
-/// - Linux: "/usr/share/fig/manifest.json"
+/// - Linux: "/usr/share/easy-complete/manifest.json"
 /// - Windows: "%LOCALAPPDATA%\{data_dir}\resources\bin\manifest.json"
 pub fn manifest_path() -> Result<PathBuf> {
     cfg_if::cfg_if! {
@@ -535,6 +577,31 @@ mod linux_tests {
         assert!(settings_path().is_ok());
         assert!(update_lock_path(&ctx).is_ok());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn sockets_live_under_runtime_dir_named_ecrun() {
+        let sockets = sockets_dir().unwrap();
+        assert_eq!(sockets.file_name().and_then(|n| n.to_str()), Some(RUNTIME_DIR_NAME));
+        assert_eq!(sockets.parent(), Some(runtime_dir().unwrap().as_path()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_sockets_follow_xdg_when_set() {
+        let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") else {
+            return;
+        };
+        if xdg.is_empty() {
+            return;
+        }
+        let sockets = sockets_dir().unwrap();
+        assert!(
+            sockets.starts_with(&xdg),
+            "sockets_dir {sockets:?} should be under XDG_RUNTIME_DIR {xdg}"
+        );
+        assert_eq!(sockets.file_name().and_then(|n| n.to_str()), Some("ecrun"));
+    }
 }
 
 // TODO(grant): Add back path tests on linux
@@ -657,21 +724,37 @@ mod tests {
     fn snapshot_fig_data_dir() {
         linux!(fig_data_dir(), @"$HOME/.local/share/easy-complete");
         macos!(fig_data_dir(), @"$HOME/Library/Application Support/easy-complete");
-        windows!(fig_data_dir(), @r"C:\Users\$USER\AppData\Local\AmazonQ");
+        windows!(fig_data_dir(), @r"C:\Users\$USER\AppData\Local\easy-complete");
     }
 
     #[test]
     fn snapshot_sockets_dir() {
         linux!(sockets_dir(), @"$XDG_RUNTIME_DIR/ecrun");
         macos!(sockets_dir(), @"$TMPDIR/ecrun");
-        windows!(sockets_dir(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets");
+        windows!(sockets_dir(), @r"C:\Users\$USER\AppData\Local\Temp\easy-complete\sockets");
     }
 
     #[test]
     fn snapshot_themes_dir() {
-        linux!(themes_dir(&Context::new()), @"/usr/share/fig/themes");
+        linux!(themes_dir(&Context::new()), @"/usr/share/easy-complete/themes");
         macos!(themes_dir(&Context::new()), @"/Applications/Easy Complete.app/Contents/Resources/themes");
-        windows!(themes_dir(&Context::new()), @r"C:\Users\$USER\AppData\Local\AmazonQ\resources\themes");
+        windows!(themes_dir(&Context::new()), @r"C:\Users\$USER\AppData\Local\easy-complete\resources\themes");
+    }
+
+    #[test]
+    fn linux_share_looks_beside_prefix_bin() {
+        let dirs = linux_share_dir_candidates(
+            |_| Err(std::env::VarError::NotPresent),
+            Some(Path::new("/usr/local/bin/easy-complete")),
+        );
+        assert_eq!(
+            dirs.first().map(PathBuf::as_path),
+            Some(Path::new("/usr/local/bin/../share/easy-complete"))
+        );
+        assert_eq!(
+            dirs.last().map(PathBuf::as_path),
+            Some(Path::new("/usr/share/easy-complete"))
+        );
     }
 
     #[test]
@@ -685,35 +768,35 @@ mod tests {
     fn snapshot_fig_socket_path() {
         linux!(desktop_socket_path(), @"$XDG_RUNTIME_DIR/ecrun/desktop.sock");
         macos!(desktop_socket_path(), @"$TMPDIR/ecrun/desktop.sock");
-        windows!(desktop_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\desktop.sock");
+        windows!(desktop_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\easy-complete\sockets\desktop.sock");
     }
 
     #[test]
     fn snapshot_remote_socket_path() {
         linux!(remote_socket_path(), @"$XDG_RUNTIME_DIR/ecrun/remote.sock");
         macos!(remote_socket_path(), @"$TMPDIR/ecrun/remote.sock");
-        windows!(remote_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\remote.sock");
+        windows!(remote_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\easy-complete\sockets\remote.sock");
     }
 
     #[test]
     fn snapshot_local_remote_socket_path() {
         linux!(local_remote_socket_path(), @"$XDG_RUNTIME_DIR/ecrun/remote.sock");
         macos!(local_remote_socket_path(), @"$TMPDIR/ecrun/remote.sock");
-        windows!(local_remote_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\remote.sock");
+        windows!(local_remote_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\easy-complete\sockets\remote.sock");
     }
 
     #[test]
     fn snapshot_figterm_socket_path() {
         linux!(figterm_socket_path("$SESSION_ID"), @"$XDG_RUNTIME_DIR/ecrun/t/$SESSION_ID.sock");
         macos!(figterm_socket_path("$SESSION_ID"), @"$TMPDIR/ecrun/t/$SESSION_ID.sock");
-        windows!(figterm_socket_path("$SESSION_ID"), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\t\$SESSION_ID.sock");
+        windows!(figterm_socket_path("$SESSION_ID"), @r"C:\Users\$USER\AppData\Local\Temp\easy-complete\sockets\t\$SESSION_ID.sock");
     }
 
     #[test]
     fn snapshot_settings_path() {
         linux!(settings_path(), @"$HOME/.local/share/easy-complete/settings.json");
         macos!(settings_path(), @"$HOME/Library/Application Support/easy-complete/settings.json");
-        windows!(settings_path(), @r"C:\Users\$USER\AppData\Local\AmazonQ\settings.json");
+        windows!(settings_path(), @r"C:\Users\$USER\AppData\Local\easy-complete\settings.json");
     }
 
     #[test]
@@ -721,7 +804,7 @@ mod tests {
         let ctx = Context::new();
         linux!(update_lock_path(&ctx), @"$HOME/.local/share/easy-complete/update.lock");
         macos!(update_lock_path(&ctx), @"$HOME/Library/Application Support/easy-complete/update.lock");
-        windows!(update_lock_path(&ctx), @r"C:\Users\$USER\AppData\Local\AmazonQ\update.lock");
+        windows!(update_lock_path(&ctx), @r"C:\Users\$USER\AppData\Local\easy-complete\update.lock");
     }
 
     #[test]

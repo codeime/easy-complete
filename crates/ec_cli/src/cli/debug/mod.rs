@@ -1,3 +1,4 @@
+#[cfg(unix)]
 mod fix_permissions;
 
 use std::fmt::Write as _;
@@ -12,6 +13,7 @@ use crossterm::style::Stylize;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use eyre::{Context, ContextCompat, Result, bail};
 use fig_ipc::local::{devtools_command, prompt_accessibility_command, set_debug_mode, toggle_debug_mode};
+#[cfg(unix)]
 use fig_os_shim::Env;
 use fig_util::consts::APP_BUNDLE_ID;
 use fig_util::env_var::Q_DEBUG_SHELL;
@@ -165,11 +167,13 @@ pub enum DebugSubcommand {
     /// Disables sourcing of user shell config and instead uses a minimal shell config
     Shell,
     /// Update the shell config permissions to have the correct owner and access rights
+    #[cfg(unix)]
     FixPermissions,
 }
 
 impl DebugSubcommand {
     pub async fn execute(&self) -> Result<ExitCode> {
+        #[cfg(unix)]
         let env = Env::new();
         match self {
             DebugSubcommand::App => {
@@ -739,6 +743,7 @@ impl DebugSubcommand {
                     None => error!("Could not determine current shell or shell not supported"),
                 }
             },
+            #[cfg(unix)]
             DebugSubcommand::FixPermissions => {
                 fix_permissions::fix_permissions(&env)?;
             },

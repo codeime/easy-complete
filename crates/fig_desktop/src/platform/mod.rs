@@ -10,18 +10,21 @@ use crate::webview::notification::WebviewNotificationsState;
 use crate::webview::{FigIdMap, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
+pub(crate) mod caret;
+
 cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        mod linux;
-        pub use self::linux::*;
-    } else if #[cfg(target_os = "macos")] {
+    if #[cfg(target_os = "macos")] {
         mod macos;
         pub use self::macos::*;
+    } else if #[cfg(target_os = "linux")] {
+        mod linux_caret;
+        pub use self::linux_caret::*;
     } else if #[cfg(target_os = "windows")] {
-        mod windows;
-        pub use self::windows::*;
+        mod windows_caret;
+        pub use self::windows_caret::*;
     } else {
-        compile_error!("Unsupported platform");
+        mod stub;
+        pub use self::stub::*;
     }
 }
 

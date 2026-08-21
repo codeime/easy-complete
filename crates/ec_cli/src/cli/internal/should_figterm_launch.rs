@@ -1,9 +1,10 @@
-use std::borrow::Cow;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::borrow::Cow;
 use std::io::{Write, stdout};
 use std::process::ExitCode;
 
 use fig_os_shim::Context;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use fig_util::Terminal;
 
 use crate::util::desktop::Q_FORCE_FIGTERM_LAUNCH;
@@ -51,6 +52,7 @@ impl Status {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn parent_status(ctx: &Context, current_pid: fig_os_shim::process_info::Pid) -> Status {
     use fig_util::env_var::Q_TERM;
     let env = ctx.env();
@@ -95,6 +97,7 @@ fn parent_status(ctx: &Context, current_pid: fig_os_shim::process_info::Pid) -> 
     })
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn grandparent_status(ctx: &Context, parent_pid: fig_os_shim::process_info::Pid) -> Status {
     let current_os = ctx.platform().os();
 
@@ -200,7 +203,6 @@ fn should_launch(ctx: &Context, quiet: bool) -> u8 {
     u8::from(!(grandparent_info.is_valid && parent_info.is_valid))
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn should_figterm_launch_exit_status(ctx: &Context, quiet: bool) -> u8 {
     use fig_util::env_var::{PROCESS_LAUNCHED_BY_Q, Q_PARENT};
 
@@ -292,37 +294,43 @@ pub fn should_figterm_launch_exit_status(ctx: &Context, quiet: bool) -> u8 {
         return 1;
     }
 
-    if fig_util::system_info::in_wsl() {
-        if !quiet {
-            writeln!(stdout(), "🟡 Falling back to old mechanism since in WSL").ok();
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        if fig_util::system_info::in_wsl() {
+            if !quiet {
+                writeln!(stdout(), "🟡 Falling back to old mechanism since in WSL").ok();
+            }
+            2
+        } else {
+            should_launch(ctx, quiet)
         }
-        2
-    } else {
-        should_launch(ctx, quiet)
     }
+
+    #[cfg(windows)]
+    {
+        windows_console_status()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    2
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn should_figterm_launch(ctx: &Context) -> ExitCode {
     ExitCode::from(should_figterm_launch_exit_status(ctx, false))
 }
 
-#[cfg(target_os = "windows")]
-pub fn should_qterm_launch() -> ExitCode {
+#[cfg(windows)]
+fn windows_console_status() -> u8 {
     use std::os::windows::io::AsRawHandle;
 
     use winapi::um::consoleapi::GetConsoleMode;
 
     let mut mode = 0;
     let stdin_ok = unsafe { GetConsoleMode(std::io::stdin().as_raw_handle() as *mut _, &mut mode) };
-    ExitCode::from(if stdin_ok == 1 { 2 } else { 1 });
+    if stdin_ok == 1 { 2 } else { 1 }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-pub fn should_qterm_launch() -> ExitCode {
-    ExitCode::from(2);
-}
-
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[cfg(test)]
 mod tests {
     #![allow(non_snake_case)]

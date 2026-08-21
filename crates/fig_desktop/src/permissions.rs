@@ -56,15 +56,16 @@ impl PermissionSnapshot {
     }
 
     pub fn all_ready(&self) -> bool {
-        self.accessibility == PermReady::Ready
-            && self.shell == PermReady::Ready
-            && self.input_method == PermReady::Ready
+        self.shell == PermReady::Ready
+            && (!cfg!(target_os = "macos")
+                || (self.accessibility == PermReady::Ready && self.input_method == PermReady::Ready))
     }
 
     pub fn still_checking(&self) -> bool {
-        matches!(self.accessibility, PermReady::Checking)
-            || matches!(self.shell, PermReady::Checking)
-            || matches!(self.input_method, PermReady::Checking)
+        matches!(self.shell, PermReady::Checking)
+            || (cfg!(target_os = "macos")
+                && (matches!(self.accessibility, PermReady::Checking)
+                    || matches!(self.input_method, PermReady::Checking)))
     }
 }
 
@@ -119,7 +120,8 @@ fn status_from_message(msg: ServerOriginatedSubMessage) -> Result<bool, String> 
         ServerOriginatedSubMessage::InstallResponse(response) => match response.response {
             Some(Response::InstallationStatus(status)) => {
                 let installed: i32 = InstallationStatus::Installed.into();
-                Ok(status == installed)
+                let not_supported: i32 = InstallationStatus::NotSupported.into();
+                Ok(status == installed || status == not_supported)
             },
             Some(Response::Result(result)) => {
                 let ok: i32 = ProtoResultEnum::Ok.into();
@@ -157,15 +159,27 @@ fn ready_from(result: Result<bool, String>) -> (PermReady, Option<String>) {
 }
 
 pub async fn check_all() -> PermissionSnapshot {
-    let (ax, ax_err) = ready_from(query(PermId::Accessibility, InstallAction::Status).await);
     let (shell, shell_err) = ready_from(query(PermId::Shell, InstallAction::Status).await);
-    let (ime, ime_err) = ready_from(query(PermId::InputMethod, InstallAction::Status).await);
-    let error = ax_err.or(shell_err).or(ime_err);
-    PermissionSnapshot {
-        accessibility: ax,
-        shell,
-        input_method: ime,
-        error,
+    #[cfg(target_os = "macos")]
+    {
+        let (ax, ax_err) = ready_from(query(PermId::Accessibility, InstallAction::Status).await);
+        let (ime, ime_err) = ready_from(query(PermId::InputMethod, InstallAction::Status).await);
+        let error = ax_err.or(shell_err).or(ime_err);
+        PermissionSnapshot {
+            accessibility: ax,
+            shell,
+            input_method: ime,
+            error,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionSnapshot {
+            accessibility: PermReady::Ready,
+            shell,
+            input_method: PermReady::Ready,
+            error: shell_err,
+        }
     }
 }
 
@@ -174,9 +188,20 @@ pub async fn repair(id: PermId) -> Result<(), String> {
     Ok(())
 }
 
+fn repair_ids() -> &'static [PermId] {
+    #[cfg(target_os = "macos")]
+    {
+        &[PermId::Accessibility, PermId::Shell, PermId::InputMethod]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        &[PermId::Shell]
+    }
+}
+
 pub async fn repair_all() -> Result<(), String> {
-    for id in [PermId::Accessibility, PermId::Shell, PermId::InputMethod] {
-        if let Err(err) = repair(id).await {
+    for id in repair_ids() {
+        if let Err(err) = repair(*id).await {
             warn!(?id, %err, "permission repair failed");
             return Err(err);
         }

@@ -50,34 +50,36 @@ pub async fn uninstall(components: InstallComponents, ctx: Arc<Context>) -> Resu
     };
 
     if components.contains(InstallComponents::BINARY) {
-        let remove_binary = |path: PathBuf| async move {
-            match tokio::fs::remove_file(&path).await {
-                Ok(_) => tracing::info!("Removed binary: {path:?}"),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {},
-                Err(err) => tracing::warn!(%err, "Failed to remove binary: {path:?}"),
-            }
-        };
+        #[cfg(unix)]
+        {
+            let remove_binary = |path: PathBuf| async move {
+                match tokio::fs::remove_file(&path).await {
+                    Ok(_) => tracing::info!("Removed binary: {path:?}"),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(err) => tracing::warn!(%err, "Failed to remove binary: {path:?}"),
+                }
+            };
 
-        // let folders = [directories::home_local_bin()?, Path::new("/usr/local/bin").into()];
-        let folders = [directories::home_local_bin()?];
+            let folders = [directories::home_local_bin()?];
 
-        let mut all_binary_names = vec![CLI_BINARY_NAME, PTY_BINARY_NAME];
-        all_binary_names.extend(OLD_CLI_BINARY_NAMES);
-        all_binary_names.extend(OLD_PTY_BINARY_NAMES);
+            let mut all_binary_names = vec![CLI_BINARY_NAME, PTY_BINARY_NAME];
+            all_binary_names.extend(OLD_CLI_BINARY_NAMES);
+            all_binary_names.extend(OLD_PTY_BINARY_NAMES);
 
-        let mut pty_names = vec![PTY_BINARY_NAME];
-        pty_names.extend(OLD_PTY_BINARY_NAMES);
+            let mut pty_names = vec![PTY_BINARY_NAME];
+            pty_names.extend(OLD_PTY_BINARY_NAMES);
 
-        for folder in folders {
-            for binary_name in &all_binary_names {
-                let binary_path = folder.join(binary_name);
-                remove_binary(binary_path).await;
-            }
+            for folder in folders {
+                for binary_name in &all_binary_names {
+                    let binary_path = folder.join(binary_name);
+                    remove_binary(binary_path).await;
+                }
 
-            for shell in Shell::all() {
-                for pty_name in &pty_names {
-                    let pty_path = folder.join(format!("{shell} ({pty_name})"));
-                    remove_binary(pty_path).await;
+                for shell in Shell::all() {
+                    for pty_name in &pty_names {
+                        let pty_path = folder.join(format!("{shell} ({pty_name})"));
+                        remove_binary(pty_path).await;
+                    }
                 }
             }
         }
@@ -85,8 +87,7 @@ pub async fn uninstall(components: InstallComponents, ctx: Arc<Context>) -> Resu
 
     #[cfg(target_os = "linux")]
     if components.contains(InstallComponents::GNOME_SHELL_EXTENSION) {
-        let shell_extensions = dbus::gnome_shell::ShellExtensions::new(Arc::downgrade(&ctx));
-        super::os::uninstall_gnome_extension(&ctx, &shell_extensions).await?;
+        super::os::uninstall_gnome_extension(&ctx).await?;
     }
 
     #[cfg(target_os = "linux")]
@@ -111,8 +112,14 @@ pub async fn uninstall(components: InstallComponents, ctx: Arc<Context>) -> Resu
         super::os::uninstall_desktop(&ctx).await?;
         // Must be last -- this will kill the running desktop process if this is
         // called from the desktop app.
+        #[cfg(unix)]
         let quit_res = tokio::process::Command::new("killall")
             .args([fig_util::consts::APP_PROCESS_NAME])
+            .output()
+            .await;
+        #[cfg(windows)]
+        let quit_res = tokio::process::Command::new("taskkill")
+            .args(["/F", "/IM", fig_util::consts::APP_PROCESS_NAME])
             .output()
             .await;
         if let Err(err) = quit_res {

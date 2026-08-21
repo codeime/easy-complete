@@ -174,6 +174,7 @@ impl Cli {
             },
             log_to_stdout: fig_os_shim::Env::new().q_log_stdout() || self.verbose > 0,
             log_file_path: match self.subcommand {
+                #[cfg(unix)]
                 Some(CliRootCommands::Internal(InternalSubcommand::Multiplexer(_))) => Some("mux.log".to_owned()),
                 _ => match fig_log::get_log_level_max() >= Level::DEBUG {
                     true => Some("cli.log".to_owned()),

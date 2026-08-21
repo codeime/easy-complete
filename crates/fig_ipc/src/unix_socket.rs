@@ -1,7 +1,8 @@
+use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-use tokio::net::UnixStream;
+use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, trace, warn};
 
 use crate::{BufferedReader, ConnectError};
@@ -14,43 +15,41 @@ impl std::fmt::Display for OctalU32 {
     }
 }
 
+pub fn ipc_endpoint_exists(socket: impl AsRef<Path>) -> bool {
+    socket.as_ref().exists()
+}
+
 pub async fn validate_socket(socket: impl AsRef<Path>) -> Result<(), ConnectError> {
-    cfg_if::cfg_if! {
-            if #[cfg(unix)] {
-            use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::PermissionsExt;
 
-            let socket = socket.as_ref();
+    let socket = socket.as_ref();
 
-            match tokio::fs::metadata(socket).await {
-                Ok(metadata) => {
-                    let mode = metadata.permissions().mode();
-                    if validate_mode_bits(mode, 0o600) {
-                        debug!(?socket, mode =% OctalU32(mode), "Socket permissions are 0o600");
-                        return Ok(());
-                    }
-                    warn!(?socket, mode =% OctalU32(mode), "Socket permissions are not 0o600");
-                },
-                Err(err) => {
-                    warn!(%err, ?socket, "Failed to get socket metadata, checking parent folder permissions");
-                },
+    match tokio::fs::metadata(socket).await {
+        Ok(metadata) => {
+            let mode = metadata.permissions().mode();
+            if validate_mode_bits(mode, 0o600) {
+                debug!(?socket, mode =% OctalU32(mode), "Socket permissions are 0o600");
+                return Ok(());
             }
-
-            if let Some(parent_path) = socket.parent() {
-                let metadata = tokio::fs::metadata(parent_path).await?;
-                let mode = metadata.permissions().mode();
-                if validate_mode_bits(mode, 0o700) {
-                    debug!(?socket, mode =% OctalU32(mode), "Socket folder permissions are 0o700");
-                    return Ok(());
-                }
-                warn!(?socket, mode =% OctalU32(mode), "Socket folder permissions are not 0o700");
-            }
-
-            error!(?socket, "Incorrect socket permissions, not connecting to socket");
-            Err(ConnectError::IncorrectSocketPermissions)
-        } else {
-            compile_error!("Unsupported platform");
-        }
+            warn!(?socket, mode =% OctalU32(mode), "Socket permissions are not 0o600");
+        },
+        Err(err) => {
+            warn!(%err, ?socket, "Failed to get socket metadata, checking parent folder permissions");
+        },
     }
+
+    if let Some(parent_path) = socket.parent() {
+        let metadata = tokio::fs::metadata(parent_path).await?;
+        let mode = metadata.permissions().mode();
+        if validate_mode_bits(mode, 0o700) {
+            debug!(?socket, mode =% OctalU32(mode), "Socket folder permissions are 0o700");
+            return Ok(());
+        }
+        warn!(?socket, mode =% OctalU32(mode), "Socket folder permissions are not 0o700");
+    }
+
+    error!(?socket, "Incorrect socket permissions, not connecting to socket");
+    Err(ConnectError::IncorrectSocketPermissions)
 }
 
 /// Connects to a unix socket
@@ -107,7 +106,27 @@ fn validate_mode_bits(left: u32, right: u32) -> bool {
     left & 0o777 == right & 0o777
 }
 
-pub type BufferedUnixStream = BufferedReader<UnixStream>;
+pub type IpcStream = UnixStream;
+pub type BufferedUnixStream = BufferedReader<IpcStream>;
+
+pub struct LocalListener {
+    inner: UnixListener,
+}
+
+impl LocalListener {
+    pub async fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        let _ = tokio::fs::remove_file(path).await;
+        Ok(Self {
+            inner: UnixListener::bind(path)?,
+        })
+    }
+
+    pub async fn accept(&mut self) -> io::Result<BufferedUnixStream> {
+        let (stream, _) = self.inner.accept().await?;
+        Ok(BufferedUnixStream::new(stream))
+    }
+}
 
 impl BufferedUnixStream {
     /// Connect to a unix socket

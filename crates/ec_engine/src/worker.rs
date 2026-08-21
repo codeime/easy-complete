@@ -396,6 +396,11 @@ pub fn default_specs_dir() -> PathBuf {
     if let Ok(dir) = bundled_specs_ir_dir() {
         return dir;
     }
+    for dir in installed_specs_ir_candidates() {
+        if dir.is_dir() {
+            return dir;
+        }
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bundle/specs-ir")
 }
 
@@ -412,6 +417,48 @@ fn bundled_specs_ir_dir() -> anyhow::Result<PathBuf> {
 /// so pointing at `Resources/specs` would silently yield an empty registry.
 fn specs_ir_in_bundle(macos_dir: &Path) -> PathBuf {
     macos_dir.join("../Resources/specs-ir")
+}
+
+/// Prefix layout for a Linux install. Must stay equal to
+/// `fig_util::consts::linux::PACKAGE_NAME` (`easy-complete`); this crate
+/// does not depend on `fig_util`.
+fn linux_share_specs_ir() -> PathBuf {
+    PathBuf::from("/usr/share/easy-complete/specs-ir")
+}
+
+fn specs_ir_beside_prefix_bin(exe: &Path) -> Option<PathBuf> {
+    let bin = exe.parent()?;
+    Some(bin.join("../share/easy-complete/specs-ir"))
+}
+
+fn installed_specs_ir_candidates() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent().map(|dir| dir.join("specs-ir")) {
+            dirs.push(dir);
+        }
+        if let Some(dir) = specs_ir_beside_prefix_bin(&exe) {
+            dirs.push(dir);
+        }
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        if !local.is_empty() {
+            dirs.push(PathBuf::from(local).join("easy-complete/specs-ir"));
+        }
+    }
+    if let Ok(xdg_home) = std::env::var("XDG_DATA_HOME") {
+        if !xdg_home.is_empty() {
+            dirs.push(PathBuf::from(xdg_home).join("easy-complete/specs-ir"));
+        }
+    } else if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(home).join(".local/share/easy-complete/specs-ir"));
+    }
+    let xdg_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    for dir in xdg_dirs.split(':').filter(|dir| !dir.is_empty()) {
+        dirs.push(PathBuf::from(dir).join("easy-complete/specs-ir"));
+    }
+    dirs.push(linux_share_specs_ir());
+    dirs
 }
 
 #[cfg(test)]
@@ -796,6 +843,22 @@ mod tests {
         assert_eq!(
             dir,
             PathBuf::from("/Applications/easy-complete.app/Contents/MacOS/../Resources/specs-ir")
+        );
+    }
+
+    #[test]
+    fn linux_share_prefix_matches_package_name() {
+        assert_eq!(
+            linux_share_specs_ir(),
+            PathBuf::from("/usr/share/easy-complete/specs-ir")
+        );
+    }
+
+    #[test]
+    fn linux_prefix_bin_looks_beside_share() {
+        assert_eq!(
+            specs_ir_beside_prefix_bin(Path::new("/usr/local/bin/easy-complete")).as_deref(),
+            Some(Path::new("/usr/local/bin/../share/easy-complete/specs-ir"))
         );
     }
 }

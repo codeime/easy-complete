@@ -126,7 +126,10 @@ impl std::future::Future for WinChild {
                 struct PassRawHandleToWaiterThread(pub RawHandle);
                 unsafe impl Send for PassRawHandleToWaiterThread {}
 
-                let proc = self.proc.lock().unwrap().try_clone()?;
+                let proc = match self.proc.lock().unwrap().try_clone() {
+                    Ok(proc) => proc,
+                    Err(err) => return Poll::Ready(Err(err.into())),
+                };
                 let handle = PassRawHandleToWaiterThread(proc.as_raw_handle());
 
                 let waker = cx.waker().clone();

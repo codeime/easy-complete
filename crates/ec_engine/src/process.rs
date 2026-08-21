@@ -352,6 +352,7 @@ fn kill_process_group(pid: u32) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn times_out_and_returns_empty() {
         let out = execute("sleep", &["2".into()], "/", Duration::from_millis(50));
@@ -362,12 +363,14 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn captures_stdout_without_an_extra_thread() {
         let out = execute("printf", &["hello-engine".into()], "/", Duration::from_millis(500));
         assert_eq!(out, "hello-engine");
     }
 
+    #[cfg(unix)]
     #[test]
     fn returns_stdout_after_pipe_closes_even_if_child_hangs() {
         let started = std::time::Instant::now();
@@ -385,6 +388,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn strict_isolated_execution_rejects_nonzero_status() {
         assert_eq!(

@@ -4,7 +4,7 @@ mod hooks;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use fig_ipc::{BufferedUnixStream, RecvMessage, SendMessage};
+use fig_ipc::{BufferedUnixStream, LocalListener, RecvMessage, SendMessage};
 use fig_os_shim::{Context as FigContext, ContextArcProvider, ContextProvider};
 use fig_proto::local::command_response::Response as CommandResponseTypes;
 use fig_proto::local::local_message::Type as LocalMessageType;
@@ -13,7 +13,6 @@ use fig_remote_ipc::figterm::FigtermState;
 use fig_settings::settings::SettingsProvider;
 use fig_settings::{Settings, State, StateProvider};
 use fig_util::directories;
-use tokio::net::UnixListener;
 use tracing::{debug, error, trace, warn};
 
 use crate::event::Event;
@@ -90,13 +89,11 @@ pub async fn start_local_ipc(
         }
     }
 
-    tokio::fs::remove_file(&socket_path).await.ok();
+    let mut listener = LocalListener::bind(&socket_path).await?;
 
-    let listener = UnixListener::bind(&socket_path)?;
-
-    while let Ok((stream, _)) = listener.accept().await {
+    while let Ok(stream) = listener.accept().await {
         tokio::spawn(handle_local_ipc(
-            BufferedUnixStream::new(stream),
+            stream,
             platform_state.clone(),
             figterm_state.clone(),
             webview_notifications_state.clone(),

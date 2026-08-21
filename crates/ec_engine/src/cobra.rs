@@ -172,7 +172,6 @@ pub fn parse_complete_output(stdout: &str) -> Vec<Suggestion> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn parses_tab_separated_and_plain_lines() {
@@ -183,8 +182,11 @@ mod tests {
         assert_eq!(suggestions[1].name, "beta");
     }
 
+    #[cfg(unix)]
     #[test]
     fn probes_fake_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("fakecobra");
         fs::write(&bin, "#!/bin/sh\nprintf 'feature-x\tbranch\\nfeature-y\\n:4\\n'\n").unwrap();
@@ -196,8 +198,11 @@ mod tests {
         assert!(names.contains(&"feature-y"), "{names:?}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn filters_last_token_prefix() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("fakecobra");
         fs::write(&bin, "#!/bin/sh\nprintf 'alpha\\nbeta\\n:4\\n'\n").unwrap();

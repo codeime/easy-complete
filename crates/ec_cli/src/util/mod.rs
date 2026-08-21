@@ -1,5 +1,6 @@
 mod cli_context;
 pub mod desktop;
+#[cfg(unix)]
 pub mod pid_file;
 mod region_check;
 pub mod spinner;
@@ -152,7 +153,15 @@ pub async fn quit_fig(verbose: bool) -> Result<ExitCode> {
                         }
                     }
                 } else if #[cfg(target_os = "windows")] {
-                    // TODO(chay): Add windows behavior here
+                    use fig_util::APP_PROCESS_NAME;
+                    if let Ok(output) = Command::new("taskkill")
+                        .args(["/F", "/IM", APP_PROCESS_NAME])
+                        .output()
+                    {
+                        if output.status.success() {
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                    }
                 }
             }
             if verbose {

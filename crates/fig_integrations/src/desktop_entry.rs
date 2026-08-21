@@ -19,11 +19,38 @@ pub fn local_entry_path<Ctx: FsProvider + EnvProvider>(ctx: &Ctx) -> Result<Path
     Ok(home_dir_ctx(ctx)?.join(format!(".local/share/applications/{}", DESKTOP_ENTRY_NAME)))
 }
 
-/// Path to the global [PRODUCT_NAME] desktop entry installed under `/usr/share/applications`
-pub fn global_entry_path<Ctx: FsProvider>(ctx: &Ctx) -> PathBuf {
-    // Using chroot_path for test code.
-    ctx.fs()
-        .chroot_path(format!("/usr/share/applications/{}", DESKTOP_ENTRY_NAME))
+/// Path to the packaged [PRODUCT_NAME] desktop entry (`$PREFIX/share/applications`).
+pub fn global_entry_path<Ctx: FsProvider + EnvProvider>(ctx: &Ctx) -> PathBuf {
+    let fs = ctx.fs();
+    let mut fallback = fs.chroot_path(format!("/usr/share/applications/{DESKTOP_ENTRY_NAME}"));
+    for path in global_entry_candidates(ctx) {
+        let resolved = fs.chroot_path(&path);
+        if fs.exists(&path) {
+            return resolved;
+        }
+        fallback = resolved;
+    }
+    fallback
+}
+
+fn global_entry_candidates<Ctx: EnvProvider>(ctx: &Ctx) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = ctx.env().current_exe() {
+        if let Some(bin) = exe.parent() {
+            dirs.push(bin.join("../share/applications").join(DESKTOP_ENTRY_NAME));
+        }
+    }
+    let xdg_dirs = ctx
+        .env()
+        .get("XDG_DATA_DIRS")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    for dir in xdg_dirs.split(':').filter(|dir| !dir.is_empty()) {
+        dirs.push(PathBuf::from(dir).join("applications").join(DESKTOP_ENTRY_NAME));
+    }
+    dirs.push(PathBuf::from(format!("/usr/share/applications/{DESKTOP_ENTRY_NAME}")));
+    dirs
 }
 
 /// Path to the local autostart symlink.
@@ -335,7 +362,7 @@ where
     async fn uninstall(&self) -> Result<()> {
         let fs = self.ctx.fs();
         let to_autostart_path = local_autostart_path(self.ctx)?;
-        if fs.symlink_exists(&to_autostart_path).await {
+        if fs.exists(&to_autostart_path) || fs.symlink_exists(&to_autostart_path).await {
             fs.remove_file(&to_autostart_path).await?;
         }
         Ok(())
@@ -451,6 +478,17 @@ Type=Application"#;
             integration.uninstall().await.is_ok(),
             "should be able to uninstall repeatedly without erroring"
         );
+    }
+
+    #[tokio::test]
+    async fn global_entry_prefers_usr_local_when_present() {
+        let ctx = ContextBuilder::new().with_test_home().await.unwrap().build_fake();
+        let usr_local = ctx
+            .fs()
+            .chroot_path(format!("/usr/local/share/applications/{DESKTOP_ENTRY_NAME}"));
+        ctx.fs().create_dir_all(usr_local.parent().unwrap()).await.unwrap();
+        ctx.fs().write(&usr_local, "[Desktop Entry]").await.unwrap();
+        assert_eq!(global_entry_path(&ctx), usr_local);
     }
 
     #[tokio::test]

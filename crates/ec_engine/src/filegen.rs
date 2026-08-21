@@ -1,7 +1,9 @@
 //! Filesystem path generator (IRIS FileGenerator).
 
 use std::cmp::Ordering;
+#[cfg(unix)]
 use std::ffi::CStr;
+#[cfg(unix)]
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,7 +14,7 @@ use crate::runtime::Suggestion;
 const MAX_RESULTS: usize = 50;
 
 pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -> Vec<Suggestion> {
-    if prefix == "~" {
+    if prefix == "~" || prefix == "~\\" {
         return complete_path("~/", cwd, folders_only, fuzzy);
     }
     let expanded = expand_home(prefix);
@@ -140,20 +142,22 @@ fn expand_tilde(path: &str) -> String {
 
     // `~` and `~/...` use the current process HOME, preserving the existing
     // behavior when HOME is unavailable.
-    if rest.is_empty() || rest.starts_with('/') {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+    if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from);
         // Strip all separators before joining.  `Path::join` treats an
         // absolute suffix as a replacement path, whereas shell tilde
         // expansion keeps the user's separators after the home directory
         // (`~//tmp` is still rooted under HOME).
-        let suffix = rest.trim_start_matches('/');
+        let suffix = rest.trim_start_matches(['/', '\\']);
         return home.map_or_else(
             || path.to_string(),
             |home| {
                 join_home_prefix(
                     &home,
                     suffix,
-                    rest.is_empty() || (rest.starts_with('/') && suffix.is_empty()),
+                    rest.is_empty() || (starts_with_path_sep(rest) && suffix.is_empty()),
                 )
             },
         );
@@ -162,26 +166,30 @@ fn expand_tilde(path: &str) -> String {
     // Resolve `~user` through the local account database.  This is a
     // read-only lookup and never executes shell code.  Unknown users remain
     // untouched, so a literal path is not accidentally redirected.
-    let username_end = rest.find('/').unwrap_or(rest.len());
+    let username_end = rest.find(['/', '\\']).unwrap_or(rest.len());
     let username = &rest[..username_end];
     let Some(home) = user_home_dir(username) else {
         return path.to_string();
     };
-    let suffix = &rest[username_end..];
+    let suffix = rest[username_end..].trim_start_matches(['/', '\\']);
     join_home_prefix(
         &home,
-        suffix.trim_start_matches('/'),
-        suffix.is_empty() || (suffix.starts_with('/') && suffix.trim_start_matches('/').is_empty()),
+        suffix,
+        rest[username_end..].is_empty() || (starts_with_path_sep(&rest[username_end..]) && suffix.is_empty()),
     )
 }
 
+fn starts_with_path_sep(s: &str) -> bool {
+    s.starts_with('/') || s.starts_with('\\')
+}
+
 fn join_home_prefix(home: &Path, suffix: &str, append_slash: bool) -> String {
-    let mut expanded = if suffix.is_empty() {
-        home.display().to_string()
-    } else {
-        home.join(suffix).display().to_string()
-    };
-    if append_slash && !expanded.ends_with('/') {
+    let mut path = home.to_path_buf();
+    for part in suffix.split(['/', '\\']).filter(|part| !part.is_empty()) {
+        path.push(part);
+    }
+    let mut expanded = path.display().to_string();
+    if append_slash && !expanded.ends_with('/') && !expanded.ends_with('\\') {
         expanded.push('/');
     }
     expanded
@@ -315,15 +323,27 @@ fn user_home_dir(username: &str) -> Option<PathBuf> {
 }
 
 #[cfg(not(unix))]
-fn user_home_dir(_username: &str) -> Option<PathBuf> {
-    None
+fn user_home_dir(username: &str) -> Option<PathBuf> {
+    let current = std::env::var("USERNAME").ok()?;
+    if !current.eq_ignore_ascii_case(username) {
+        return None;
+    }
+    std::env::var_os("USERPROFILE").map(PathBuf::from)
+}
+
+fn last_path_sep(s: &str) -> Option<usize> {
+    s.rfind(['/', '\\'])
+}
+
+fn ends_with_path_sep(s: &str) -> bool {
+    s.ends_with('/') || s.ends_with('\\')
 }
 
 fn dir_prefix(prefix: &str) -> String {
-    if prefix.ends_with('/') {
+    if ends_with_path_sep(prefix) {
         prefix.to_string()
-    } else if let Some(slash) = prefix.rfind('/') {
-        prefix[..=slash].to_string()
+    } else if let Some(sep) = last_path_sep(prefix) {
+        prefix[..=sep].to_string()
     } else {
         String::new()
     }
@@ -338,12 +358,12 @@ fn split_prefix(prefix: &str, cwd: &str) -> (PathBuf, String) {
     if prefix.is_empty() {
         return (base, String::new());
     }
-    if prefix.ends_with('/') {
+    if ends_with_path_sep(prefix) {
         return (join_base(&base, prefix), String::new());
     }
-    if let Some(slash) = prefix.rfind('/') {
-        let dir = &prefix[..=slash];
-        let query = prefix[slash + 1..].to_string();
+    if let Some(sep) = last_path_sep(prefix) {
+        let dir = &prefix[..=sep];
+        let query = prefix[sep + 1..].to_string();
         (join_base(&base, dir), query)
     } else {
         (base, prefix.to_string())
@@ -461,8 +481,11 @@ mod tests {
     #[test]
     fn preserves_tilde_prefix() {
         assert_eq!(dir_prefix("~/Des"), "~/");
+        assert_eq!(dir_prefix(r"~\Des"), r"~\");
         assert_eq!(dir_prefix("~"), "");
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/test".into());
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| "/Users/test".into());
         let expanded = expand_home("~/Desktop");
         assert!(
             expanded.starts_with(&home) && expanded.ends_with("Desktop"),
@@ -471,6 +494,15 @@ mod tests {
         let home_dir = expand_home("~");
         assert!(home_dir.ends_with('/'), "{home_dir}");
         assert_eq!(expand_home("~/"), home_dir);
+        let expanded_win = expand_home(r"~\Documents");
+        assert!(
+            expanded_win.starts_with(&home) && expanded_win.ends_with("Documents"),
+            "{expanded_win}"
+        );
+        let (_, query) = split_prefix(r"C:\Users\me\Desktop", ".");
+        assert_eq!(query, "Desktop");
+        let (_, empty) = split_prefix(r"C:\Users\me\", ".");
+        assert!(empty.is_empty(), "{empty}");
     }
 
     #[test]

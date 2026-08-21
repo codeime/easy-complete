@@ -405,38 +405,51 @@ impl DoctorCheck for DesktopSocketCheck {
 
     async fn check(&self, _: &()) -> Result<(), DoctorError> {
         let fig_socket_path = directories::desktop_socket_path().context("No socket path")?;
-        let parent = fig_socket_path.parent().map(PathBuf::from);
+        #[cfg(not(windows))]
+        {
+            let parent = fig_socket_path.parent().map(PathBuf::from);
 
-        if let Some(parent) = parent {
-            if !parent.exists() {
-                return Err(DoctorError::Error {
-                    reason: format!("{PRODUCT_NAME} socket parent directory does not exist").into(),
-                    info: vec![format!("Path: {}", fig_socket_path.display()).into()],
-                    fix: Some(DoctorFix::Sync(Box::new(|| {
-                        std::fs::create_dir_all(parent)?;
-                        Ok(())
-                    }))),
-                    error: None,
-                });
+            if let Some(parent) = parent {
+                if !parent.exists() {
+                    return Err(DoctorError::Error {
+                        reason: format!("{PRODUCT_NAME} socket parent directory does not exist").into(),
+                        info: vec![format!("Path: {}", fig_socket_path.display()).into()],
+                        fix: Some(DoctorFix::Sync(Box::new(|| {
+                            std::fs::create_dir_all(parent)?;
+                            Ok(())
+                        }))),
+                        error: None,
+                    });
+                }
             }
         }
 
-        check_file_exists(&fig_socket_path).map_err(|_err| {
-            doctor_fix_async!({
-                reason: format!("{PRODUCT_NAME} socket missing"),
+        #[cfg(windows)]
+        {
+            if fig_ipc::ipc_endpoint_exists(&fig_socket_path) {
+                return Ok(());
+            }
+            return Err(doctor_fix_async!({
+                reason: format!("{PRODUCT_NAME} IPC endpoint missing"),
                 fix: restart_fig()
-            })
-        })?;
+            }));
+        }
 
-        check_socket_perms(fig_socket_path).await
+        #[cfg(not(windows))]
+        {
+            check_file_exists(&fig_socket_path).map_err(|_err| {
+                doctor_fix_async!({
+                    reason: format!("{PRODUCT_NAME} socket missing"),
+                    fix: restart_fig()
+                })
+            })?;
+
+            check_socket_perms(fig_socket_path).await
+        }
     }
 
-    async fn get_type(&self, _: &(), platform: Platform) -> DoctorCheckType {
-        if platform == Platform::MacOs {
-            DoctorCheckType::NormalCheck
-        } else {
-            DoctorCheckType::NoCheck
-        }
+    async fn get_type(&self, _: &(), _: Platform) -> DoctorCheckType {
+        DoctorCheckType::NormalCheck
     }
 }
 
@@ -480,7 +493,7 @@ impl DoctorCheck for RemoteSocketCheck {
         check_socket_perms(&remote_socket).await?;
 
         // Check connecting to socket
-        match tokio::net::UnixStream::connect(&remote_socket).await {
+        match fig_ipc::socket_connect(&remote_socket).await {
             Ok(_) => Ok(()),
             Err(err) => Err(DoctorError::Error {
                 reason: "Failed to connect to remote socket".into(),
@@ -2070,33 +2083,6 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
                 &mut spinner,
             )
             .await?;
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            use checks::linux::{
-                DisplayServerCheck, GnomeExtensionCheck, IBusConnectionCheck, IBusEnvCheck, IBusRunningCheck,
-                SandboxCheck, get_linux_context,
-            };
-            // Linux desktop checks
-            if fig_util::manifest::is_full() && !fig_util::system_info::is_remote() {
-                run_checks_with_context(
-                    "Let's check Linux integrations",
-                    vec![
-                        &DisplayServerCheck,
-                        &IBusEnvCheck,
-                        &GnomeExtensionCheck,
-                        &IBusRunningCheck,
-                        &IBusConnectionCheck,
-                        // &DesktopCompatibilityCheck, // we need a better way of getting the data
-                        &SandboxCheck,
-                    ],
-                    get_linux_context,
-                    config,
-                    &mut spinner,
-                )
-                .await?;
-            }
         }
 
         #[cfg(target_os = "linux")]

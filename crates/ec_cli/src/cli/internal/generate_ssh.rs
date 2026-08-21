@@ -6,7 +6,6 @@ use crossterm::style::Stylize;
 use eyre::Result;
 use fig_util::{CLI_BINARY_NAME, PRODUCT_NAME, directories};
 use indoc::formatdoc;
-use tokio::net::UnixStream;
 use uuid::Uuid;
 
 const IGNORED_USERNAMES: &[&str] = &["git", "aur"];
@@ -41,7 +40,7 @@ impl GenerateSshArgs {
 
         // check if remote socket is able to be connected to
         let remote_socket = directories::remote_socket_path_utf8()?;
-        if UnixStream::connect(&remote_socket).await.is_err() {
+        if fig_ipc::socket_connect(&remote_socket).await.is_err() {
             should_generate_config = false;
         }
 

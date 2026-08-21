@@ -1,7 +1,6 @@
 mod bash_version;
 mod fish_version;
-#[cfg(target_os = "linux")]
-pub mod linux;
+// Linux GNOME doctor checks are not compiled.
 mod sshd_config;
 
 pub use bash_version::BashVersionCheck;

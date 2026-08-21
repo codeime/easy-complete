@@ -1,5 +1,6 @@
 mod generate_ssh;
 pub mod local_state;
+#[cfg(unix)]
 mod multiplexer;
 pub mod should_figterm_launch;
 
@@ -30,6 +31,7 @@ use fig_proto::util::get_shell;
 use fig_util::directories::{figterm_socket_path, logs_dir, update_lock_path};
 use fig_util::env_var::QTERM_SESSION_ID;
 use fig_util::{CLI_BINARY_NAME, directories};
+#[cfg(unix)]
 use multiplexer::MultiplexerArgs;
 use rand::distr::{Alphanumeric, SampleString};
 use sysinfo::System;
@@ -221,6 +223,7 @@ pub enum InternalSubcommand {
     /// This lets us bypass a bug in Include and vdollar_expand that causes environment variables to
     /// be expanded, even in files that are only referenced in match blocks that resolve to false
     GenerateSsh(generate_ssh::GenerateSshArgs),
+    #[cfg(unix)]
     #[command(alias = "mux")]
     Multiplexer(MultiplexerArgs),
 }
@@ -757,6 +760,7 @@ impl InternalSubcommand {
                 Ok(ExitCode::SUCCESS)
             },
             InternalSubcommand::GenerateSsh(args) => args.execute().await,
+            #[cfg(unix)]
             InternalSubcommand::Multiplexer(args) => match multiplexer::execute(args).await {
                 Ok(()) => Ok(ExitCode::SUCCESS),
                 Err(err) => {
