@@ -318,7 +318,7 @@ pub fn chat_profiles_dir<Ctx: FsProvider + EnvProvider>(ctx: &Ctx) -> Result<Pat
 ///
 /// - MacOS: `$TMPDIR/ecrun/desktop.sock`
 /// - Linux: `$XDG_RUNTIME_DIR/ecrun/desktop.sock`
-/// - Windows: `%TEMP%\sockets\desktop.sock`
+/// - Windows: `%TEMP%\{data_dir}\sockets\desktop.sock`
 pub fn desktop_socket_path() -> Result<PathBuf> {
     Ok(host_sockets_dir()?.join("desktop.sock"))
 }
