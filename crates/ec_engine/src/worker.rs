@@ -431,10 +431,15 @@ fn specs_ir_beside_prefix_bin(exe: &Path) -> Option<PathBuf> {
     Some(bin.join("../share/easy-complete/specs-ir"))
 }
 
+/// Windows zip (F6) and a portable Linux tree: `specs-ir/` next to the binary.
+fn specs_ir_beside_exe(exe: &Path) -> Option<PathBuf> {
+    Some(exe.parent()?.join("specs-ir"))
+}
+
 fn installed_specs_ir_candidates() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent().map(|dir| dir.join("specs-ir")) {
+        if let Some(dir) = specs_ir_beside_exe(&exe) {
             dirs.push(dir);
         }
         if let Some(dir) = specs_ir_beside_prefix_bin(&exe) {
@@ -859,6 +864,22 @@ mod tests {
         assert_eq!(
             specs_ir_beside_prefix_bin(Path::new("/usr/local/bin/easy-complete")).as_deref(),
             Some(Path::new("/usr/local/bin/../share/easy-complete/specs-ir"))
+        );
+    }
+
+    #[test]
+    fn windows_zip_layout_looks_beside_the_exe() {
+        // Do not parse `C:\...` on Linux: backslashes are not separators.
+        let mut exe = PathBuf::new();
+        exe.push("easy-complete");
+        exe.push("ec.exe");
+        assert_eq!(
+            specs_ir_beside_exe(&exe),
+            Some(PathBuf::from("easy-complete").join("specs-ir"))
+        );
+        assert_eq!(
+            specs_ir_beside_exe(Path::new("/opt/easy-complete/ec")),
+            Some(PathBuf::from("/opt/easy-complete/specs-ir"))
         );
     }
 }
