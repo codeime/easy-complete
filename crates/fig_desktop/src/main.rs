@@ -116,7 +116,7 @@ async fn async_main() -> ExitCode {
         error!(%err, "failed to init global settings");
     }
 
-    let mut launch_on_startup = fig_settings::settings::get_bool_or("app.launchOnStartup", false);
+    let launch_on_startup = fig_settings::settings::get_bool_or("app.launchOnStartup", false);
     #[cfg(target_os = "macos")]
     {
         const LOGIN_ITEM_MIGRATED_KEY: &str = "desktop.loginItemMigratedToSMAppService";

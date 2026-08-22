@@ -35,7 +35,8 @@ Mac。应用会收集匿名使用统计（打开次数、每日补全次数—�
   <img src="./.github/media/screenshot.png" alt="Easy Complete 自动补全效果">
 </p>
 
-> **平台：** 仅支持 macOS。当前发布的 DMG 仅支持 Apple Silicon / ARM64。
+> **平台：** 已发布产品仅支持 macOS（Apple Silicon / ARM64 DMG）。
+> Linux（以及实验性 Windows）的桌面/引擎工作在 `feat/cross-platform` 分支推进，见 [`CROSS_PLATFORM_PLAN.md`](./CROSS_PLATFORM_PLAN.md)。请勿当作已正式发布。
 
 ## 目录
 

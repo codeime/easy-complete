@@ -39,6 +39,7 @@ pub struct DesktopHost {
     pub api_handler_tx: UnboundedSender<(WindowId, String)>,
     pub overlay: OverlayController,
     pub settings: Option<crate::settings_ui::SettingsHandle>,
+    #[allow(dead_code)] // retained for macOS/WebView host; Linux uses linux_tray task
     pub tray: Option<TrayIcon>,
 }
 

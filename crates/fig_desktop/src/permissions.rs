@@ -20,6 +20,7 @@ use crate::event::Event;
 pub enum PermId {
     Accessibility,
     Shell,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // Linux/Windows gate skips IME
     InputMethod,
 }
 

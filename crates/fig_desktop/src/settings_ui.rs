@@ -23,6 +23,7 @@ pub const SETTINGS_WINDOW_TITLE: &str = "Settings";
 
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 
+#[allow(dead_code)] // reserved for callers that gate on settings visibility
 pub fn is_open() -> bool {
     SETTINGS_OPEN.load(Ordering::Relaxed)
 }

@@ -1,6 +1,7 @@
 //! GPUI overlay controller: suggestion list, caret placement, key actions, engine.
 
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -1424,6 +1425,7 @@ fn layout_overlay(
     }
 }
 
+#[cfg(target_os = "macos")]
 const MAX_UNCACHED_FILE_ICONS: usize = 8;
 
 fn file_icon_png(cwd: &str, name: &str, kind: &str, uncached: &mut usize) -> Option<Arc<gpui::Image>> {

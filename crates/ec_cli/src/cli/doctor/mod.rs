@@ -166,6 +166,7 @@ macro_rules! doctor_fix {
         }
     };
 }
+#[allow(unused_imports)] // re-export for doctor::checks::* (`use super::doctor_fix`)
 pub(crate) use doctor_fix;
 
 macro_rules! doctor_fix_async {

@@ -185,6 +185,7 @@ fn load_icon(path: impl AsRef<std::path::Path>) -> Option<Icon> {
     Icon::from_rgba(rgba, width, height).ok()
 }
 
+#[allow(dead_code)] // used by legacy WebviewManager path; GPUI host uses build_tray_icon
 pub async fn build_tray(
     _event_loop_window_target: &EventLoopWindowTarget,
     _figterm_state: &FigtermState,

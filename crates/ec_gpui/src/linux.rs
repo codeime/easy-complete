@@ -17,6 +17,7 @@ use x11rb::errors::ConnectionError;
 use x11rb::protocol::randr;
 use x11rb::protocol::xproto::{self, AtomEnum, ConfigureWindowAux, ConnectionExt, EventMask, PropMode};
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 pub const OVERLAY_WINDOW_TITLE: &str = "Fig Autocomplete";
 
@@ -280,8 +281,10 @@ fn find_window_by_title(conn: &RustConnection, screen_num: usize, title: &str) -
         if window_title(conn, window).as_deref() == Some(title) {
             return Some(window);
         }
-        if let Ok(tree) = conn.query_tree(window).and_then(|cookie| cookie.reply()) {
-            stack.extend(tree.children);
+        if let Ok(cookie) = conn.query_tree(window) {
+            if let Ok(tree) = cookie.reply() {
+                stack.extend(tree.children);
+            }
         }
     }
     None

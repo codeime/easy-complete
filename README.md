@@ -38,7 +38,9 @@ for the full list of what is and isn't collected.
   <img src="./.github/media/screenshot.png" alt="Easy Complete autocomplete in action">
 </p>
 
-> **Platform:** macOS only. The published DMG is Apple Silicon / ARM64 only.
+> **Platform:** macOS only for the published product (Apple Silicon / ARM64 DMG).
+> Linux (and experimental Windows) desktop/engine work lives on `feat/cross-platform`;
+> see [`CROSS_PLATFORM_PLAN.md`](./CROSS_PLATFORM_PLAN.md). Do not treat those builds as released.
 
 ## Contents
 

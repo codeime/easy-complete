@@ -15,6 +15,7 @@ use crate::index::UpdatePackage;
 use crate::{Error, UpdateStatus};
 
 #[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)] // exercised by unit tests; AppImage updater no longer parses tar names
 struct ArchiveParser<'a> {
     /// The name of the archive file, e.g. `foo-x86_64-linux.tar.zst`
     file_name: &'a str,
@@ -29,6 +30,7 @@ struct ArchiveParser<'a> {
 }
 
 impl<'a> ArchiveParser<'a> {
+    #[allow(dead_code)]
     fn from_url(url: &'a Url) -> Result<Self, Error> {
         let url = url.path();
 

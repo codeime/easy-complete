@@ -119,7 +119,7 @@ async fn handle_accessible(
     };
     let dest = sender.as_str();
     let path = path.as_str();
-    let member = header.member().map(|m| m.as_str()).unwrap_or("");
+    let member = header.member().map_or("", |m| m.as_str());
 
     if member == "StateChanged" {
         let Some((kind, detail1)) = state_changed_focus(msg) else {

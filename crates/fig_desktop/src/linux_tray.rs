@@ -29,7 +29,7 @@ pub fn spawn() {
                 error!(%err, "gtk init failed on tray thread");
                 return;
             }
-            let mut tray = match crate::tray::build_tray_icon() {
+            let tray = match crate::tray::build_tray_icon() {
                 Ok(tray) => tray,
                 Err(err) => {
                     error!(%err, "Failed to create Linux tray icon");

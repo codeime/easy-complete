@@ -353,9 +353,10 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 
 ## 8. 当前执行指针
 
-- 分支：`feat/cross-platform`（从 `main` @ `55b043ff` 切出）
-- 下一步：Windows 手测 + named pipe 往返测试（F 代码已落树，CI 待 push）
+- 分支：`feat/cross-platform`（从 `main` @ `55b043ff` 切出）；审计修复见 `fix/cross-platform-audit-1`
+- 下一步：Windows 手测 + named pipe 往返测试（F 代码已落树，CI 待 push）；Linux CI/`cargo clippy -D warnings` 以 Ubuntu 原生为准
 - 本文件就是 M0 的文档交付物
+- 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `cargo check`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
 
 进度勾选：
 

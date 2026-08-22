@@ -396,7 +396,9 @@ pub fn resources_path_ctx<Ctx: EnvProvider + PlatformProvider>(ctx: &Ctx) -> Res
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn linux_share_dir_from_std_env() -> PathBuf {
-    linux_share_dir_from_env(std::env::var, std::env::current_exe().ok())
+    // Wrap `std::env::var` in a closure so the `Fn(&str)` bound is HRTB-general
+    // (`std::env::var` alone is a polymorphic fn item and fails on Linux rustc).
+    linux_share_dir_from_env(|key| std::env::var(key), std::env::current_exe().ok())
 }
 
 fn linux_share_dir_from_env(

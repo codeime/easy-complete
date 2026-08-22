@@ -10,6 +10,7 @@ pub fn is_cargo_debug_build() -> bool {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // XDG icon helper retained for packaging; tray embeds PNG
 pub fn icon() -> Icon {
     load_icon(
         fig_util::search_xdg_data_dirs("icons/hicolor/512x512/apps/fig.png")
@@ -24,6 +25,7 @@ pub fn icon() -> Icon {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 fn load_icon(path: impl AsRef<std::path::Path>) -> Option<Icon> {
     let image = image::open(path).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
@@ -32,6 +34,7 @@ fn load_icon(path: impl AsRef<std::path::Path>) -> Option<Icon> {
 }
 
 #[cfg(any(target_os = "linux", test))]
+#[allow(dead_code)]
 fn load_from_memory() -> Icon {
     let (icon_rgba, icon_width, icon_height) = {
         // TODO: Use different per platform icons
