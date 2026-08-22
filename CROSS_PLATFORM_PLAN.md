@@ -71,7 +71,7 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
 | 开机启动 | macOS 13+ `SMAppService`；12 为 LaunchAgent | Linux：XDG Autostart（`fig_integrations::desktop_entry` 已有草稿）。Windows：以后再说 |
 | 打包 | Darwin arm64 `.app` + Sparkle | Linux：`.desktop` + 前缀布局，不是 App 包。Windows：zip/MSI，不是 DMG |
 
-`ec_gpui/src/lib.rs` **无条件** `mod macos`，`overlay.rs` 无条件 `use crate::macos::{...}`。Linux 目标上这个 crate 现在编不过。
+`ec_gpui`：macOS 窗口模块已 `cfg(target_os = "macos")`。Linux 走 `linux.rs`（按标题 find + X11 configure/map），Windows 走 `windows.rs`（GPUI HWND + `SetWindowPos`）；HWND/标志策略在 `windows_overlay.rs`，每 OS 可单测。考古 `platform/linux/` 与 `platform/windows.rs` **仍不编译**。
 
 ### 2.3 已可复用的底座
 
@@ -81,8 +81,8 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
 | `fig_os_shim` | 对 Mac/Linux/Windows 建模；**本机交叉编译 `aarch64-unknown-linux-gnu` 已通过** | 只是 I/O 门面，不是桌面 |
 | `fig_proto` | 依赖 `fig_util`，所以被其 Linux 编译错误挡住 | 协议本身与 OS 无关 |
 | `fig_settings` | rusqlite bundled | 交叉编译需要目标 gcc；Linux CI 原生即可 |
-| `fig_ipc` | `tokio::net::UnixStream`，Linux 可复用 | 非 Unix 是 `compile_error!`，没有 named pipe |
-| `figterm` PTY | macOS/Linux：`posix_openpt`；Windows：ConPTY 目录已在 `pty/win/` | Linux/Windows 是否编过 **未在 CI 验证** |
+| `fig_ipc` | Unix socket（macOS/Linux）；Windows named pipe（`windows_pipe.rs`，slug 在 `pipe_name.rs`） | accept/connect 测试是 `cfg(windows)`；retry/bind 策略每 OS 可测 |
+| `figterm` PTY | macOS/Linux：`posix_openpt`；Windows：ConPTY 在 `pty/win/` | ConPTY 只在 `rust-windows` 编译；无 live I/O 测试 |
 | shell hook | zsh/bash/fish rc 注入（`fig_integrations`） | `ec init` 在桌面 app 未运行时整段站起，Linux 无桌面时要想清楚 |
 | `fig_integrations::desktop_entry` | XDG desktop / autostart | 可用，但安装路径仍假设旧 Fig 布局 |
 
@@ -354,10 +354,12 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 ## 8. 当前执行指针
 
 - 分支：`feat/cross-platform`（从 `main` @ `55b043ff` 切出）；审计修复见 `fix/cross-platform-audit-1`
-- 下一步：Windows 手测 + named pipe 往返测试（F 代码已落树，CI 待 push）；Linux CI/`cargo clippy -D warnings` 以 Ubuntu 原生为准
+- **发运：** 仍只有 macOS Apple Silicon DMG。Linux / Windows 是 WIP，不是产品（无 Linux 包、无 Windows 安装器）。
 - 本文件就是 M0 的文档交付物
-- 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `cargo check`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
+- 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `clippy -D warnings`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
 - 2026-08-23：`rust-toolchain.toml` 去掉额外 `targets`（避免 Linux/Windows CI 拉 Darwin std）；`rust-linux` **不**装 `shellcheck`（与 macOS job 不同），测试在二进制缺失时 skip；F2 `taskkill /T` + `~user`、F3 `TerminateProcess` BOOL、F4 Win32 caret 换算可在 Linux 单测；`setup.sh` 不再装 WebKit / 不再 `rustup default stable`
+- 2026-08-23 续：F5 `SetWindowPos` 策略（不抢焦点、NOSIZE、park=HIDE+NOMOVE、place 顶左取整、缺 HWND / 空虚拟屏则不摆）在 `ec_gpui::windows_overlay` 钉死，`windows.rs` 仍 `cfg(windows)`。named-pipe retry/bind 策略在 `fig_ipc::windows_pipe_policy` 钉死；accept/connect 仍是 `cfg(windows)`。`rust-windows` 与 `rust-linux` **同一 crate 列表**，是 MSVC 下 ConPTY / named pipe / GPUI HWND 的**编译**，不是桌面会话——GetGUIThreadInfo、对真实 HWND 的 `SetWindowPos`、ConPTY I/O 都没有测。两 job 都在 YAML 里，**第一次 GitHub 原生 run 仍待 push**。
+- 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要复活考古 `platform/linux/` / `platform/windows.rs`。
 
 进度勾选：
 
@@ -373,4 +375,4 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - [x] PR-D2（GPUI 0.2.2 无 layer-shell，浮层仍走 X11/XWayland。GNOME Wayland 终端 caret 走 AT-SPI `GetCharacterExtents(SCREEN)`，不用 Shell 扩展；窗口 `GetExtents` 只给 IBus relative 当原点，不当列表位置。无 a11y 总线或非终端 focus 则隐藏）
 - [x] PR-D3（`ec_gpui/src/linux.rs`：按标题找 overlay，`unmap` park、`configure`+`map` 显示；启动时若有 `DISPLAY` 则清掉 `WAYLAND_DISPLAY` 让 GPUI 走 X11，`EC_GPUI_BACKEND=wayland` 可退出；无屏幕列表则 park，不用窗口矩形当 edges）
 - [x] PR-E1 / PR-E2（`scripts/build-linux.sh` 前缀布局 + tar.gz；`scripts/install-linux.sh --prefix`；`.desktop` + hicolor 图标；不装 WebKit，不改 `build-app.sh`）
-- [ ] 阶段 F（进行中：F1 named pipe + LocalListener；F2 `~user` 仅当前 USERPROFILE；F3 windows-latest CI 头less+desktop clippy；F4 GetGUIThreadInfo caret 无窗口矩形兜底；F5 GPUI HWND SetWindowPos；F6 zip 脚本。未在本机 Windows 手测）
+- [ ] 阶段 F（进行中。F1–F6 代码在树：slug / `~user` / BOOL / caret 换算 / SetWindowPos 策略 / zip 布局可在 Linux 单测。Live named-pipe accept、ConPTY、GetGUIThreadInfo、HWND 仍要 Windows 主机。CI 待 push。）

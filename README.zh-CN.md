@@ -36,7 +36,8 @@ Mac。应用会收集匿名使用统计（打开次数、每日补全次数—�
 </p>
 
 > **平台：** 已发布产品仅支持 macOS（Apple Silicon / ARM64 DMG）。
-> Linux（以及实验性 Windows）的桌面/引擎工作在 `feat/cross-platform` 分支推进，见 [`CROSS_PLATFORM_PLAN.md`](./CROSS_PLATFORM_PLAN.md)。请勿当作已正式发布。
+> Linux 与 Windows 仍是 `feat/cross-platform` 上的进行中工作，见 [`CROSS_PLATFORM_PLAN.md`](./CROSS_PLATFORM_PLAN.md)。
+> 尚未发运：没有 Linux 安装包，也没有 Windows 安装器。该分支上的 CI 只是编译/测试门禁，不是发货。
 
 ## 目录
 
