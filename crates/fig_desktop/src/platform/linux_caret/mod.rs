@@ -52,6 +52,10 @@ pub struct PlatformStateImpl {
     pub(super) x11_classified: Mutex<Option<bool>>,
     #[serde(skip)]
     pub(super) atspi_focused: Mutex<Option<(String, String)>>,
+    /// IBus is subscribed to foreign `SetCursorLocation` (monitor or eavesdrop).
+    /// AT-SPI yields to IBus on classified X11 only while this is true.
+    #[serde(skip)]
+    pub(super) ibus_listening: AtomicBool,
 }
 
 impl PlatformStateImpl {
@@ -62,6 +66,7 @@ impl PlatformStateImpl {
             active_terminal: Mutex::new(None),
             x11_classified: Mutex::new(None),
             atspi_focused: Mutex::new(None),
+            ibus_listening: AtomicBool::new(false),
         }
     }
 
@@ -118,6 +123,44 @@ pub(super) fn mark_wm_data() {
 }
 
 #[cfg(test)]
+pub(crate) struct TestBus {
+    child: std::process::Child,
+    pub address: String,
+}
+
+#[cfg(test)]
+impl Drop for TestBus {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Private session bus for caret tests. `None` when `dbus-daemon` is missing.
+#[cfg(test)]
+pub(crate) fn spawn_test_bus() -> Option<TestBus> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("dbus-daemon")
+        .args(["--session", "--print-address", "--nofork", "--nopidfile"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdout = child.stdout.take()?;
+    let mut address = String::new();
+    BufReader::new(stdout).read_line(&mut address).ok()?;
+    let address = address.trim().to_string();
+    if address.is_empty() || !address.contains("unix:") {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+    Some(TestBus { child, address })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::platform::PlatformState;
@@ -130,5 +173,6 @@ mod tests {
         assert!(state.get_cursor_position().is_none());
         assert!(state.get_active_window().is_none());
         assert!(!autocomplete_active());
+        assert!(!state.inner().ibus_listening.load(Ordering::Relaxed));
     }
 }

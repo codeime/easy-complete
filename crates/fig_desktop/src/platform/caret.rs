@@ -140,6 +140,25 @@ pub fn atspi_is_self_app(name: &str) -> bool {
         || lower.contains("easy-complete")
 }
 
+/// D2: X11 terminals prefer IBus. AT-SPI is the GNOME Wayland caret.
+///
+/// Yield only while IBus is actually subscribed. A failed IBus subscribe
+/// (no `BecomeMonitor`, eavesdrop AddMatch also failing) must not stand
+/// AT-SPI down, or a real `GetCharacterExtents` box is thrown away.
+pub fn atspi_yields_to_ibus(x11_classified: Option<bool>, ibus_listening: bool) -> bool {
+    x11_classified == Some(true) && ibus_listening
+}
+
+/// at-spi2 2.56 dropped these as methods; they are D-Bus properties.
+pub const ATSPI_IFACE_ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
+pub const ATSPI_IFACE_TEXT: &str = "org.a11y.atspi.Text";
+pub const ATSPI_PROP_NAME: &str = "Name";
+pub const ATSPI_PROP_CARET_OFFSET: &str = "CaretOffset";
+pub const ATSPI_PROP_PARENT: &str = "Parent";
+pub const ATSPI_METHOD_GET_NAME: &str = "GetName";
+pub const ATSPI_METHOD_GET_CARET_OFFSET: &str = "GetCaretOffset";
+pub const ATSPI_METHOD_GET_PARENT: &str = "GetParent";
+
 /// Bottom-left caret origins need a primary-screen height to convert into the
 /// overlay's top-left space. Top-left (IBus / X11) does not.
 pub fn caret_origin_needs_screens(origin: Origin) -> bool {
@@ -247,6 +266,30 @@ mod tests {
         assert!(atspi_is_self_app("Easy Complete"));
         assert!(!atspi_is_self_app("gnome-terminal-server"));
         assert!(!atspi_is_self_app("Firefox"));
+    }
+
+    #[test]
+    fn atspi_yields_to_ibus_only_when_x11_terminal_and_ibus_is_up() {
+        assert!(atspi_yields_to_ibus(Some(true), true));
+        assert!(
+            !atspi_yields_to_ibus(Some(true), false),
+            "IBus subscribe failed: AT-SPI must still be able to place from extents"
+        );
+        assert!(!atspi_yields_to_ibus(None, true));
+        assert!(!atspi_yields_to_ibus(Some(false), true));
+        assert!(!atspi_yields_to_ibus(None, false));
+    }
+
+    #[test]
+    fn atspi_256_name_and_caret_offset_are_properties() {
+        assert_eq!(ATSPI_PROP_NAME, "Name");
+        assert_eq!(ATSPI_PROP_CARET_OFFSET, "CaretOffset");
+        assert_eq!(ATSPI_PROP_PARENT, "Parent");
+        assert_eq!(ATSPI_IFACE_ACCESSIBLE, "org.a11y.atspi.Accessible");
+        assert_eq!(ATSPI_IFACE_TEXT, "org.a11y.atspi.Text");
+        assert_eq!(ATSPI_METHOD_GET_NAME, "GetName");
+        assert_eq!(ATSPI_METHOD_GET_CARET_OFFSET, "GetCaretOffset");
+        assert_eq!(ATSPI_METHOD_GET_PARENT, "GetParent");
     }
 
     #[test]

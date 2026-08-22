@@ -17,7 +17,9 @@ use super::PlatformStateImpl;
 use crate::EventLoopProxy;
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{
-    ATSPI_ROLE_APPLICATION, ATSPI_ROLE_FRAME, ATSPI_ROLE_WINDOW, atspi_state_changed_is_focus_gained,
+    ATSPI_IFACE_ACCESSIBLE, ATSPI_IFACE_TEXT, ATSPI_METHOD_GET_CARET_OFFSET, ATSPI_METHOD_GET_NAME,
+    ATSPI_METHOD_GET_PARENT, ATSPI_PROP_CARET_OFFSET, ATSPI_PROP_NAME, ATSPI_PROP_PARENT, ATSPI_ROLE_APPLICATION,
+    ATSPI_ROLE_FRAME, ATSPI_ROLE_WINDOW, atspi_state_changed_is_focus_gained, atspi_yields_to_ibus,
     caret_from_atspi_extents,
 };
 use crate::webview::AUTOCOMPLETE_ID;
@@ -138,8 +140,13 @@ async fn handle_accessible(
         }
     }
 
-    // IBus+X11 own the caret only while an X11 terminal is focused.
-    if *state.x11_classified.lock() == Some(true) {
+    // D2: IBus+X11 own the caret while an X11 terminal is focused *and*
+    // IBus is subscribed. If IBus never got SetCursorLocation (no
+    // Monitoring, eavesdrop failed), keep probing AT-SPI extents.
+    if atspi_yields_to_ibus(
+        *state.x11_classified.lock(),
+        state.ibus_listening.load(std::sync::atomic::Ordering::Acquire),
+    ) {
         return Ok(());
     }
 
@@ -169,16 +176,12 @@ async fn handle_accessible(
         *state.active_window.lock() = Some(window);
     }
 
-    let offset: i32 = conn
-        .call_method(Some(dest), path, Some("org.a11y.atspi.Text"), "GetCaretOffset", &())
-        .await?
-        .body()
-        .deserialize()?;
+    let offset = caret_offset(conn, dest, path).await?;
     let (x, y, w, h): (i32, i32, i32, i32) = conn
         .call_method(
             Some(dest),
             path,
-            Some("org.a11y.atspi.Text"),
+            Some(ATSPI_IFACE_TEXT),
             "GetCharacterExtents",
             &(offset, COORD_TYPE_SCREEN),
         )
@@ -192,32 +195,106 @@ async fn handle_accessible(
     Ok(())
 }
 
-async fn application_name(conn: &zbus::Connection, dest: &str, path: &str) -> anyhow::Result<String> {
-    let (name, app_path): (String, OwnedObjectPath) = conn
+async fn dbus_property<T>(
+    conn: &zbus::Connection,
+    dest: &str,
+    path: &str,
+    interface: &str,
+    name: &str,
+) -> anyhow::Result<T>
+where
+    T: TryFrom<zbus::zvariant::OwnedValue>,
+    T::Error: std::fmt::Display,
+{
+    let reply = conn
         .call_method(
             Some(dest),
             path,
-            Some("org.a11y.atspi.Accessible"),
-            "GetApplication",
-            &(),
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(interface, name),
         )
+        .await?;
+    let value: zbus::zvariant::OwnedValue = reply.body().deserialize()?;
+    T::try_from(value).map_err(|err| anyhow::anyhow!("AT-SPI {interface}.{name}: {err}"))
+}
+
+async fn property_or_method<T>(
+    conn: &zbus::Connection,
+    dest: &str,
+    path: &str,
+    interface: &str,
+    property: &str,
+    method: &str,
+) -> anyhow::Result<T>
+where
+    T: TryFrom<zbus::zvariant::OwnedValue> + serde::de::DeserializeOwned + zbus::zvariant::Type,
+    T::Error: std::fmt::Display,
+{
+    match dbus_property(conn, dest, path, interface, property).await {
+        Ok(value) => Ok(value),
+        Err(prop_err) => {
+            debug!(%prop_err, interface, property, method, "AT-SPI property missing; trying method");
+            let reply = conn.call_method(Some(dest), path, Some(interface), method, &()).await?;
+            Ok(reply.body().deserialize()?)
+        },
+    }
+}
+
+pub(crate) async fn caret_offset(conn: &zbus::Connection, dest: &str, path: &str) -> anyhow::Result<i32> {
+    property_or_method(
+        conn,
+        dest,
+        path,
+        ATSPI_IFACE_TEXT,
+        ATSPI_PROP_CARET_OFFSET,
+        ATSPI_METHOD_GET_CARET_OFFSET,
+    )
+    .await
+}
+
+pub(crate) async fn accessible_name(conn: &zbus::Connection, dest: &str, path: &str) -> anyhow::Result<String> {
+    property_or_method(
+        conn,
+        dest,
+        path,
+        ATSPI_IFACE_ACCESSIBLE,
+        ATSPI_PROP_NAME,
+        ATSPI_METHOD_GET_NAME,
+    )
+    .await
+}
+
+async fn parent_ref(conn: &zbus::Connection, dest: &str, path: &str) -> Option<(String, OwnedObjectPath)> {
+    if let Ok(pair) =
+        dbus_property::<(String, OwnedObjectPath)>(conn, dest, path, ATSPI_IFACE_ACCESSIBLE, ATSPI_PROP_PARENT).await
+    {
+        return Some(pair);
+    }
+    conn.call_method(
+        Some(dest),
+        path,
+        Some(ATSPI_IFACE_ACCESSIBLE),
+        ATSPI_METHOD_GET_PARENT,
+        &(),
+    )
+    .await
+    .ok()?
+    .body()
+    .deserialize()
+    .ok()
+}
+
+async fn application_name(conn: &zbus::Connection, dest: &str, path: &str) -> anyhow::Result<String> {
+    let (name, app_path): (String, OwnedObjectPath) = conn
+        .call_method(Some(dest), path, Some(ATSPI_IFACE_ACCESSIBLE), "GetApplication", &())
         .await?
         .body()
         .deserialize()?;
     if !name.is_empty() && fig_util::Terminal::from_linux_identity(&name).is_some() {
         return Ok(name);
     }
-    let app_name: String = conn
-        .call_method(
-            Some(dest),
-            app_path.as_str(),
-            Some("org.a11y.atspi.Accessible"),
-            "GetName",
-            &(),
-        )
-        .await?
-        .body()
-        .deserialize()?;
+    let app_name = accessible_name(conn, dest, app_path.as_str()).await?;
     if !app_name.is_empty() {
         return Ok(app_name);
     }
@@ -231,7 +308,7 @@ async fn window_extents(conn: &zbus::Connection, dest: &str, start_path: &str) -
             .call_method(
                 Some(dest),
                 current.as_str(),
-                Some("org.a11y.atspi.Accessible"),
+                Some(ATSPI_IFACE_ACCESSIBLE),
                 "GetRole",
                 &(),
             )
@@ -265,19 +342,7 @@ async fn window_extents(conn: &zbus::Connection, dest: &str, start_path: &str) -
         if role == ATSPI_ROLE_APPLICATION {
             return None;
         }
-        let (_name, parent): (String, OwnedObjectPath) = conn
-            .call_method(
-                Some(dest),
-                current.as_str(),
-                Some("org.a11y.atspi.Accessible"),
-                "GetParent",
-                &(),
-            )
-            .await
-            .ok()?
-            .body()
-            .deserialize()
-            .ok()?;
+        let (_name, parent) = parent_ref(conn, dest, current.as_str()).await?;
         current = parent.as_str().to_owned();
     }
     None
@@ -317,4 +382,147 @@ fn send_caret(proxy: &EventLoopProxy, caret: crate::platform::caret::CaretOnScre
             dry_run: false,
         },
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::caret::atspi_yields_to_ibus;
+
+    struct PropertyText {
+        offset: i32,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl PropertyText {
+        #[zbus(property)]
+        fn caret_offset(&self) -> i32 {
+            self.offset
+        }
+    }
+
+    struct MethodText {
+        offset: i32,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl MethodText {
+        async fn get_caret_offset(&self) -> i32 {
+            self.offset
+        }
+    }
+
+    struct PropertyAccessible {
+        name: String,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl PropertyAccessible {
+        #[zbus(property)]
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+    }
+
+    async fn connect(address: &str) -> zbus::Result<zbus::Connection> {
+        let mut last = None;
+        for _ in 0..20 {
+            match zbus::connection::Builder::address(address)?.build().await {
+                Ok(conn) => return Ok(conn),
+                Err(err) => {
+                    last = Some(err);
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                },
+            }
+        }
+        Err(last.expect("dbus retries"))
+    }
+
+    #[test]
+    fn x11_classified_does_not_drop_atspi_when_ibus_is_down() {
+        assert!(!atspi_yields_to_ibus(Some(true), false));
+    }
+
+    #[tokio::test]
+    async fn caret_offset_reads_property_when_method_is_absent() {
+        let Some(bus) = crate::platform::spawn_test_bus() else {
+            eprintln!("skip: dbus-daemon not available");
+            return;
+        };
+        let _server = zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .name("dev.emmmm.easy-complete.atspi-prop")
+            .unwrap()
+            .serve_at("/org/a11y/atspi/accessible/37", PropertyText { offset: 114 })
+            .unwrap()
+            .build()
+            .await
+            .expect("atspi property server");
+        let client = connect(&bus.address).await.expect("client");
+        let offset = caret_offset(
+            &client,
+            "dev.emmmm.easy-complete.atspi-prop",
+            "/org/a11y/atspi/accessible/37",
+        )
+        .await
+        .expect("CaretOffset property");
+        assert_eq!(offset, 114);
+    }
+
+    #[tokio::test]
+    async fn caret_offset_falls_back_to_get_caret_offset_method() {
+        let Some(bus) = crate::platform::spawn_test_bus() else {
+            eprintln!("skip: dbus-daemon not available");
+            return;
+        };
+        let _server = zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .name("dev.emmmm.easy-complete.atspi-method")
+            .unwrap()
+            .serve_at("/org/a11y/atspi/accessible/1", MethodText { offset: 7 })
+            .unwrap()
+            .build()
+            .await
+            .expect("atspi method server");
+        let client = connect(&bus.address).await.expect("client");
+        let offset = caret_offset(
+            &client,
+            "dev.emmmm.easy-complete.atspi-method",
+            "/org/a11y/atspi/accessible/1",
+        )
+        .await
+        .expect("GetCaretOffset method");
+        assert_eq!(offset, 7);
+    }
+
+    #[tokio::test]
+    async fn accessible_name_reads_property_when_get_name_is_absent() {
+        let Some(bus) = crate::platform::spawn_test_bus() else {
+            eprintln!("skip: dbus-daemon not available");
+            return;
+        };
+        let _server = zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .name("dev.emmmm.easy-complete.atspi-name")
+            .unwrap()
+            .serve_at(
+                "/org/a11y/atspi/accessible/root",
+                PropertyAccessible {
+                    name: "xfce4-terminal".into(),
+                },
+            )
+            .unwrap()
+            .build()
+            .await
+            .expect("atspi name server");
+        let client = connect(&bus.address).await.expect("client");
+        let name = accessible_name(
+            &client,
+            "dev.emmmm.easy-complete.atspi-name",
+            "/org/a11y/atspi/accessible/root",
+        )
+        .await
+        .expect("Name property");
+        assert_eq!(name, "xfce4-terminal");
+    }
 }
