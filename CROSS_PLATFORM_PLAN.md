@@ -358,7 +358,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - 本文件就是 M0 的文档交付物
 - 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `clippy -D warnings`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
 - 2026-08-23：`rust-toolchain.toml` 去掉额外 `targets`（避免 Linux/Windows CI 拉 Darwin std）；`rust-linux` **不**装 `shellcheck`（与 macOS job 不同），测试在二进制缺失时 skip；F2 `taskkill /T` + `~user`、F3 `TerminateProcess` BOOL、F4 Win32 caret 换算可在 Linux 单测；`setup.sh` 不再装 WebKit / 不再 `rustup default stable`
-- 2026-08-23 续：F5 `SetWindowPos` 策略（不抢焦点、NOSIZE、park=HIDE+NOMOVE、place 顶左取整、缺 HWND / 空虚拟屏则不摆）在 `ec_gpui::windows_overlay` 钉死，`windows.rs` 仍 `cfg(windows)`。named-pipe retry/bind 策略在 `fig_ipc::windows_pipe_policy` 钉死；accept/connect 仍是 `cfg(windows)`。`rust-windows` 与 `rust-linux` **同一 crate 列表**，是 MSVC 下 ConPTY / named pipe / GPUI HWND 的**编译**，不是桌面会话——GetGUIThreadInfo、对真实 HWND 的 `SetWindowPos`、ConPTY I/O 都没有测。两 job 都在 YAML 里，**第一次 GitHub 原生 run 仍待 push**。
+- 2026-08-23 续：F5 `SetWindowPos` 策略（不抢焦点、NOSIZE、park=HIDE+NOMOVE、place 顶左取整、缺 HWND / 空虚拟屏则不摆）在 `ec_gpui::windows_overlay` 钉死，`windows.rs` 仍 `cfg(windows)`。named-pipe retry/bind 策略在 `fig_ipc::windows_pipe_policy` 钉死；accept/connect 仍是 `cfg(windows)`。F3 续：ConPTY `HRESULT` 成功是 0，与 `TerminateProcess` BOOL 相反。`rust-windows` 与 `rust-linux` **同一 crate 列表**，是 MSVC 下 ConPTY / named pipe / GPUI HWND 的**编译**，不是桌面会话——GetGUIThreadInfo、对真实 HWND 的 `SetWindowPos`、ConPTY I/O 都没有测。两 job 都在 YAML 里，**第一次 GitHub 原生 run 仍待 push**。
 - 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要复活考古 `platform/linux/` / `platform/windows.rs`。
 
 进度勾选：
@@ -375,4 +375,4 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - [x] PR-D2（GPUI 0.2.2 无 layer-shell，浮层仍走 X11/XWayland。GNOME Wayland 终端 caret 走 AT-SPI `GetCharacterExtents(SCREEN)`，不用 Shell 扩展；窗口 `GetExtents` 只给 IBus relative 当原点，不当列表位置。无 a11y 总线或非终端 focus 则隐藏）
 - [x] PR-D3（`ec_gpui/src/linux.rs`：按标题找 overlay，`unmap` park、`configure`+`map` 显示；启动时若有 `DISPLAY` 则清掉 `WAYLAND_DISPLAY` 让 GPUI 走 X11，`EC_GPUI_BACKEND=wayland` 可退出；无屏幕列表则 park，不用窗口矩形当 edges）
 - [x] PR-E1 / PR-E2（`scripts/build-linux.sh` 前缀布局 + tar.gz；`scripts/install-linux.sh --prefix`；`.desktop` + hicolor 图标；不装 WebKit，不改 `build-app.sh`）
-- [ ] 阶段 F（进行中。F1–F6 代码在树：slug / `~user` / BOOL / caret 换算 / SetWindowPos 策略 / zip 布局可在 Linux 单测。Live named-pipe accept、ConPTY、GetGUIThreadInfo、HWND 仍要 Windows 主机。CI 待 push。）
+- [ ] 阶段 F（进行中。F1–F6 代码在树：slug / `~user` / BOOL+HRESULT / caret 换算 / SetWindowPos 策略 / zip 布局可在 Linux 单测。Live named-pipe accept、ConPTY I/O、GetGUIThreadInfo、HWND 仍要 Windows 主机。CI 待 push。）
