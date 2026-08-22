@@ -268,8 +268,8 @@ pub fn themes_dir(ctx: &Context) -> Result<PathBuf> {
 }
 
 /// The directory to all the fig logs
-/// - Linux: `/tmp/fig/$USER/logs`
-/// - MacOS: `$TMPDIR/logs`
+/// - Linux: `$XDG_RUNTIME_DIR/eclog` (then `$TMPDIR` / `/tmp`)
+/// - MacOS: `$TMPDIR/eclog`
 /// - Windows: `%TEMP%\{data_dir}\logs`
 pub fn logs_dir() -> Result<PathBuf> {
     cfg_if::cfg_if! {
@@ -328,7 +328,7 @@ pub fn desktop_socket_path() -> Result<PathBuf> {
 // - Linux/MacOS not on ssh:
 /// - MacOS: `$TMPDIR/ecrun/remote.sock`
 /// - Linux: `$XDG_RUNTIME_DIR/ecrun/remote.sock`
-/// - Windows: `%TEMP%\sockets\remote.sock`
+/// - Windows: `%TEMP%\{data_dir}\sockets\remote.sock`
 pub fn remote_socket_path() -> Result<PathBuf> {
     // Normal implementation for non-test code
     // TODO(grant): This is only enabled on Linux for now to prevent public dist
@@ -347,17 +347,16 @@ pub fn remote_socket_path() -> Result<PathBuf> {
 ///
 /// - MacOS: `$TMPDIR/ecrun/remote.sock`
 /// - Linux: `$XDG_RUNTIME_DIR/ecrun/remote.sock`
-/// - Windows: `%TEMP%\sockets\remote.sock`
+/// - Windows: `%TEMP%\{data_dir}\sockets\remote.sock`
 pub fn local_remote_socket_path() -> Result<PathBuf> {
     Ok(host_sockets_dir()?.join("remote.sock"))
 }
 
 /// Get path to a figterm socket
 ///
-/// - Linux/Macos: `/var/tmp/fig/%USERNAME%/figterm/$SESSION_ID.sock`
 /// - MacOS: `$TMPDIR/ecrun/t/$SESSION_ID.sock`
 /// - Linux: `$XDG_RUNTIME_DIR/ecrun/t/$SESSION_ID.sock`
-/// - Windows: `%TEMP%\sockets\t\$SESSION_ID.sock`
+/// - Windows: `%TEMP%\{data_dir}\sockets\t\$SESSION_ID.sock`
 pub fn figterm_socket_path(session_id: impl Display) -> Result<PathBuf> {
     Ok(sockets_dir()?.join("t").join(format!("{session_id}.sock")))
 }
@@ -596,6 +595,18 @@ mod linux_tests {
         let sockets = sockets_dir().unwrap();
         assert_eq!(sockets.file_name().and_then(|n| n.to_str()), Some(RUNTIME_DIR_NAME));
         assert_eq!(sockets.parent(), Some(runtime_dir().unwrap().as_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn logs_live_under_runtime_dir_named_eclog() {
+        let logs = logs_dir().unwrap();
+        assert_eq!(
+            logs.file_name().and_then(|n| n.to_str()),
+            Some("eclog"),
+            "CLI_BINARY_NAME + \"log\""
+        );
+        assert_eq!(logs.parent(), Some(runtime_dir().unwrap().as_path()));
     }
 
     #[cfg(target_os = "linux")]

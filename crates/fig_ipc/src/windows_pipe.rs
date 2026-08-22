@@ -110,12 +110,18 @@ pub struct LocalListener {
 impl LocalListener {
     pub async fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
         let name = pipe_name_from_path(path);
+        // Unlike the Unix socket bind, there is no file to unlink. Named pipes
+        // vanish when the last handle closes. `first_pipe_instance` fails if a
+        // previous server is still alive — that is the Windows equivalent of
+        // EADDRINUSE.
         let server = ServerOptions::new().first_pipe_instance(true).create(&name)?;
         Ok(Self { name, server })
     }
 
     pub async fn accept(&mut self) -> io::Result<BufferedUnixStream> {
         self.server.connect().await?;
+        // Recreate the next instance before returning so a client that races
+        // into FILE_NOT_FOUND can retry (see `named_pipe_connect_retryable`).
         let next = ServerOptions::new().create(&self.name)?;
         let connected = std::mem::replace(&mut self.server, next);
         Ok(BufferedUnixStream::new(IpcStream::Server(connected)))
