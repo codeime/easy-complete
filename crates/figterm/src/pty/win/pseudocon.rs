@@ -12,7 +12,7 @@ use lazy_static::lazy_static;
 use shared_library::shared_library;
 use tracing::error;
 use winapi::shared::minwindef::DWORD;
-use winapi::shared::winerror::{HRESULT, S_OK};
+use winapi::shared::winerror::HRESULT;
 use winapi::um::handleapi::*;
 use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::{
@@ -89,14 +89,18 @@ impl PseudoCon {
                 &mut con,
             )
         };
-        ensure!(result == S_OK, "failed to create pseudo console: HRESULT {}", result);
+        ensure!(
+            crate::pty::win32_hresult_succeeded(result),
+            "failed to create pseudo console: HRESULT {}",
+            result
+        );
         Ok(Self { con })
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {
         let result = unsafe { (CONPTY.ResizePseudoConsole)(self.con, size) };
         ensure!(
-            result == S_OK,
+            crate::pty::win32_hresult_succeeded(result),
             "failed to resize console to {}x{}: HRESULT: {}",
             size.X,
             size.Y,

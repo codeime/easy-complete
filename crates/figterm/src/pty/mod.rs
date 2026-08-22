@@ -49,14 +49,30 @@ pub(crate) fn win32_bool_succeeded(res: i32) -> bool {
     res != 0
 }
 
+/// Win32 `HRESULT`: zero (`S_OK`) is success. Opposite of `BOOL`.
+/// `CreatePseudoConsole` / `ResizePseudoConsole` return this — do not feed
+/// them to [`win32_bool_succeeded`]. Live ConPTY I/O still needs Windows.
+#[cfg(any(test, windows))]
+pub(crate) fn win32_hresult_succeeded(hr: i32) -> bool {
+    hr == 0
+}
+
 #[cfg(test)]
 mod win32_bool_tests {
-    use super::win32_bool_succeeded;
+    use super::{win32_bool_succeeded, win32_hresult_succeeded};
 
     #[test]
     fn terminateprocess_success_is_nonzero() {
         assert!(win32_bool_succeeded(1));
         assert!(!win32_bool_succeeded(0));
+    }
+
+    #[test]
+    fn conpty_hresult_success_is_zero_the_opposite_of_bool() {
+        assert!(win32_hresult_succeeded(0));
+        assert!(!win32_hresult_succeeded(1));
+        assert_ne!(win32_hresult_succeeded(0), win32_bool_succeeded(0));
+        assert_ne!(win32_hresult_succeeded(1), win32_bool_succeeded(1));
     }
 }
 
