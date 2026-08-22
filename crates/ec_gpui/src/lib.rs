@@ -13,6 +13,9 @@ mod platform_stub;
 mod theme;
 #[cfg(target_os = "windows")]
 mod windows;
+/// HWND / SetWindowPos policy. Compiled on every OS so Linux CI pins F5;
+/// `windows.rs` is still `cfg(windows)` and issues the real call.
+mod windows_overlay;
 
 #[cfg(target_os = "linux")]
 pub use linux::{
