@@ -33,7 +33,16 @@ info() { echo "==> $*"; }
 cd "$REPO_DIR"
 
 info "Building Linux binaries (profile: ${CARGO_PROFILE})..."
-cargo build --profile "$CARGO_PROFILE" -p fig_desktop -p figterm -p ec_cli
+# --locked matches rust-linux CI. Override profile with CARGO_PROFILE=dist
+# for a stripped tarball (release keeps debuginfo).
+cargo build --locked --profile "$CARGO_PROFILE" -p fig_desktop -p figterm -p ec_cli
+
+for bin in easy-complete ec ecterm; do
+  if [ ! -x "${TARGET_DIR}/${bin}" ]; then
+    echo "error: missing ${TARGET_DIR}/${bin}" >&2
+    exit 1
+  fi
+done
 
 if [ ! -f "${REPO_DIR}/bundle/specs/index.json" ]; then
   info "Bundled specs are missing; syncing them now..."
@@ -41,6 +50,14 @@ if [ ! -f "${REPO_DIR}/bundle/specs/index.json" ]; then
 fi
 info "Compiling spec IR..."
 node "${REPO_DIR}/scripts/compile-spec-ir.mjs"
+if [ ! -f "${REPO_DIR}/bundle/specs-ir/index.json" ]; then
+  echo "error: spec IR compile did not write index.json" >&2
+  exit 1
+fi
+if ! find "${REPO_DIR}/bundle/specs-ir/hooks" -name '*.js' -print -quit | grep -q .; then
+  echo "error: spec IR hooks directory is missing or empty" >&2
+  exit 1
+fi
 
 rm -rf "$DEST"
 mkdir -p "$BIN" "$SHARE" "$APPLICATIONS" "$ICONS"
@@ -56,6 +73,8 @@ install -m 644 "${REPO_DIR}/crates/fig_desktop/icons/512x512.png" "${ICONS}/easy
 cat > "${DEST}/README" <<EOF
 Easy Complete ${VERSION} (${ARCH})
 
+This is a work-in-progress Linux prefix tree, not a shipped product.
+
 Prefix layout:
   bin/easy-complete   desktop host
   bin/ec              CLI
@@ -65,10 +84,13 @@ Prefix layout:
   share/icons/hicolor/512x512/apps/easy-complete.png
 
 Install (example):
-  sudo ./scripts/install-linux.sh --prefix /usr/local
+  ./scripts/install-linux.sh --prefix /usr/local
 
 Completions read specs from EC_SPECS_DIR, then beside the prefix bin
 (../share/easy-complete/specs-ir), then XDG_DATA_DIRS, then /usr/share.
+
+The desktop overlay needs X11/XWayland and a Vulkan ICD (GPUI). No caret
+⇒ the list stays hidden. There is no window-rect fallback.
 EOF
 
 TARBALL="${REPO_DIR}/dist/linux/easy-complete-${VERSION}-${ARCH}.tar.gz"

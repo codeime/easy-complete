@@ -25,16 +25,44 @@ while [ $# -gt 0 ]; do
 done
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Absolute prefix so desktop Exec= is not cwd-relative, and uninstall can
+# match autostart entries that belong to this tree only.
+PREFIX="$(readlink -f "$PREFIX")"
 if [ -z "$SRC" ]; then
   SRC="${REPO_DIR}/dist/linux/easy-complete"
 fi
+if [ "$UNINSTALL" != 1 ]; then
+  SRC="$(readlink -f "$SRC")"
+fi
+
+remove_prefix_autostart() {
+  # install-linux.sh does not write autostart; `ec integrations install
+  # autostart-entry` does. Only delete a file that points at this PREFIX so
+  # `--prefix /tmp/foo --uninstall` cannot wipe a different install's login
+  # entry.
+  local config_home="${XDG_CONFIG_HOME:-${HOME}/.config}"
+  local autostart="${config_home}/autostart/easy-complete.desktop"
+  if [ ! -e "$autostart" ] && [ ! -L "$autostart" ]; then
+    return 0
+  fi
+  local target=""
+  if [ -L "$autostart" ]; then
+    target="$(readlink -f "$autostart" || true)"
+  fi
+  if grep -F -q "${PREFIX}/bin/easy-complete" "$autostart" 2>/dev/null \
+    || [ "$target" = "${PREFIX}/share/applications/easy-complete.desktop" ]; then
+    rm -f "$autostart"
+  fi
+}
 
 if [ "$UNINSTALL" = 1 ]; then
+  # Autostart may be a symlink into PREFIX; resolve it before the desktop file
+  # is deleted so a prefix uninstall cannot leave a dangling login entry.
+  remove_prefix_autostart
   rm -f "${PREFIX}/bin/easy-complete" "${PREFIX}/bin/ec" "${PREFIX}/bin/ecterm"
   rm -rf "${PREFIX}/share/easy-complete"
   rm -f "${PREFIX}/share/applications/easy-complete.desktop"
   rm -f "${PREFIX}/share/icons/hicolor/512x512/apps/easy-complete.png"
-  rm -f "${HOME}/.config/autostart/easy-complete.desktop"
   echo "Removed Easy Complete from ${PREFIX}"
   exit 0
 fi
