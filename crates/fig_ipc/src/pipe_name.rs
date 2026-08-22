@@ -1,7 +1,10 @@
 use std::path::Path;
 
 /// Map a desktop socket path onto a Windows named-pipe name.
-/// Used only on Windows at runtime; compiled everywhere so the mapping is tested in macOS CI.
+///
+/// Used only on Windows at runtime; compiled everywhere so the mapping is
+/// tested in macOS and Linux CI. Live accept/connect stays `cfg(windows)`
+/// in `windows_pipe.rs`.
 pub fn pipe_name_from_path(path: impl AsRef<Path>) -> String {
     let slug: String = path
         .as_ref()

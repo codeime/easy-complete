@@ -10,6 +10,10 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions};
 use tracing::{error, trace};
 
+use crate::windows_pipe_policy::{
+    NAMED_PIPE_CONNECT_BUDGET_SECS, named_pipe_connect_retryable_os_error,
+    named_pipe_validate_socket_checks_permissions,
+};
 use crate::{BufferedReader, ConnectError, pipe_name_from_path};
 
 pub fn ipc_endpoint_exists(socket: impl AsRef<Path>) -> bool {
@@ -21,15 +25,14 @@ pub fn ipc_endpoint_exists(socket: impl AsRef<Path>) -> bool {
 }
 
 pub async fn validate_socket(_socket: impl AsRef<Path>) -> Result<(), ConnectError> {
+    debug_assert!(!named_pipe_validate_socket_checks_permissions());
     Ok(())
 }
 
-const ERROR_PIPE_BUSY: i32 = 231;
-const ERROR_FILE_NOT_FOUND: i32 = 2;
-const CONNECT_BUDGET: Duration = Duration::from_secs(5);
+const CONNECT_BUDGET: Duration = Duration::from_secs(NAMED_PIPE_CONNECT_BUDGET_SECS);
 
 fn named_pipe_connect_retryable(err: &io::Error) -> bool {
-    matches!(err.raw_os_error(), Some(ERROR_PIPE_BUSY) | Some(ERROR_FILE_NOT_FOUND))
+    err.raw_os_error().is_some_and(named_pipe_connect_retryable_os_error)
 }
 
 pub async fn socket_connect(socket_path: impl AsRef<Path>) -> Result<IpcStream, ConnectError> {
@@ -113,8 +116,12 @@ impl LocalListener {
         // Unlike the Unix socket bind, there is no file to unlink. Named pipes
         // vanish when the last handle closes. `first_pipe_instance` fails if a
         // previous server is still alive — that is the Windows equivalent of
-        // EADDRINUSE.
-        let server = ServerOptions::new().first_pipe_instance(true).create(&name)?;
+        // EADDRINUSE. Contract is pinned in `windows_pipe_policy` (every OS).
+        debug_assert!(!crate::windows_pipe_policy::named_pipe_bind_unlinks_a_path());
+        debug_assert!(crate::windows_pipe_policy::named_pipe_bind_requires_first_instance());
+        let server = ServerOptions::new()
+            .first_pipe_instance(crate::windows_pipe_policy::named_pipe_bind_requires_first_instance())
+            .create(&name)?;
         Ok(Self { name, server })
     }
 
@@ -122,6 +129,7 @@ impl LocalListener {
         self.server.connect().await?;
         // Recreate the next instance before returning so a client that races
         // into FILE_NOT_FOUND can retry (see `named_pipe_connect_retryable`).
+        debug_assert!(crate::windows_pipe_policy::named_pipe_accept_creates_next_instance_before_return());
         let next = ServerOptions::new().create(&self.name)?;
         let connected = std::mem::replace(&mut self.server, next);
         Ok(BufferedUnixStream::new(IpcStream::Server(connected)))
@@ -142,6 +150,8 @@ impl BufferedUnixStream {
 mod listener_tests {
     use super::*;
 
+    /// Live accept/connect. Stays `cfg(windows)` — Linux cannot open `\\.\pipe\`.
+    /// Bind/retry policy is tested in `windows_pipe_policy` on every OS.
     #[tokio::test]
     async fn accept_then_client_connects() {
         let path = std::env::temp_dir().join(format!("ec-ipc-{}-desktop.sock", std::process::id()));

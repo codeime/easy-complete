@@ -2,6 +2,7 @@ pub mod local;
 
 mod error;
 mod pipe_name;
+mod windows_pipe_policy;
 
 mod buffered_reader;
 mod codec;
