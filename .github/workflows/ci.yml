@@ -136,18 +136,31 @@ jobs:
       - name: Clippy (desktop host)
         run: cargo clippy --locked -p ec_gpui -p fig_desktop --color always -- -D warnings
 
+      # list/theme/overlay + Linux Xft scale + Windows F5 SetWindowPos flags.
+      # No DISPLAY: none of these open a window.
+      - name: Test (GPUI overlay policy)
+        run: cargo test --locked -p ec_gpui
+
       # Pure geometry; no DISPLAY. Pins IBus/AT-SPI/Win32 caret conversion so
       # Linux CI covers the Windows F4 mapping without a Windows host.
       - name: Test (caret conversion)
         run: cargo test --locked -p fig_desktop -- platform::caret
 
+      - name: Test (overlay placement)
+        run: cargo test --locked -p fig_desktop -- overlay::
+
   rust-windows:
     name: Rust (Windows)
     runs-on: windows-latest
     timeout-minutes: 45
-    # No shellcheck / zsh / fish. Named-pipe and ConPTY tests that need a real
-    # Windows host run here; shellcheck-backed tests skip when the binary is
-    # missing (same as rust-linux).
+    # Same crate list as rust-linux. This is the MSVC compile of ConPTY, named
+    # pipes, and GPUI HWND — not a live desktop session. GetGUIThreadInfo,
+    # SetWindowPos against a real HWND, and ConPTY I/O are not exercised.
+    # The named-pipe accept/connect test is cfg(windows) and runs here only;
+    # F1 slug / F2 ~user / F3 BOOL / F4 caret / F5 SetWindowPos flags / F6 zip
+    # layout are unit-tested on Linux too. No shellcheck/zsh/fish; those
+    # tests skip when the binary is missing (same as rust-linux). protoc is
+    # fetched by fig_proto/build.rs when PATH has none.
     steps:
       - uses: actions/checkout@v7
 
@@ -170,5 +183,11 @@ jobs:
       - name: Clippy (desktop host)
         run: cargo clippy --locked -p ec_gpui -p fig_desktop --color always -- -D warnings
 
+      - name: Test (GPUI overlay policy)
+        run: cargo test --locked -p ec_gpui
+
       - name: Test (caret conversion)
         run: cargo test --locked -p fig_desktop -- platform::caret
+
+      - name: Test (overlay placement)
+        run: cargo test --locked -p fig_desktop -- overlay::
