@@ -18,7 +18,18 @@ if [ "$is_windows" != 1 ]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION=$(cargo metadata --no-deps --format-version 1 | python -c "import sys,json; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='fig_desktop'))" 2>/dev/null || echo "dev")
+if command -v python >/dev/null 2>&1; then
+  PYTHON=python
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+else
+  PYTHON=
+fi
+if [ -n "$PYTHON" ]; then
+  VERSION=$(cargo metadata --no-deps --format-version 1 | "$PYTHON" -c "import sys,json; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='fig_desktop'))" 2>/dev/null || echo "dev")
+else
+  VERSION=dev
+fi
 ARCH=$(uname -m)
 CARGO_PROFILE="${CARGO_PROFILE:-release}"
 

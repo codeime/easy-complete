@@ -422,6 +422,7 @@ fn specs_ir_in_bundle(macos_dir: &Path) -> PathBuf {
 /// Prefix layout for a Linux install. Must stay equal to
 /// `fig_util::consts::linux::PACKAGE_NAME` (`easy-complete`); this crate
 /// does not depend on `fig_util`.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn linux_share_specs_ir() -> PathBuf {
     PathBuf::from("/usr/share/easy-complete/specs-ir")
 }
@@ -451,18 +452,21 @@ fn installed_specs_ir_candidates() -> Vec<PathBuf> {
             dirs.push(PathBuf::from(local).join("easy-complete/specs-ir"));
         }
     }
-    if let Ok(xdg_home) = std::env::var("XDG_DATA_HOME") {
-        if !xdg_home.is_empty() {
-            dirs.push(PathBuf::from(xdg_home).join("easy-complete/specs-ir"));
+    #[cfg(unix)]
+    {
+        if let Ok(xdg_home) = std::env::var("XDG_DATA_HOME") {
+            if !xdg_home.is_empty() {
+                dirs.push(PathBuf::from(xdg_home).join("easy-complete/specs-ir"));
+            }
+        } else if let Ok(home) = std::env::var("HOME") {
+            dirs.push(PathBuf::from(home).join(".local/share/easy-complete/specs-ir"));
         }
-    } else if let Ok(home) = std::env::var("HOME") {
-        dirs.push(PathBuf::from(home).join(".local/share/easy-complete/specs-ir"));
+        let xdg_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+        for dir in xdg_dirs.split(':').filter(|dir| !dir.is_empty()) {
+            dirs.push(PathBuf::from(dir).join("easy-complete/specs-ir"));
+        }
+        dirs.push(linux_share_specs_ir());
     }
-    let xdg_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
-    for dir in xdg_dirs.split(':').filter(|dir| !dir.is_empty()) {
-        dirs.push(PathBuf::from(dir).join("easy-complete/specs-ir"));
-    }
-    dirs.push(linux_share_specs_ir());
     dirs
 }
 
