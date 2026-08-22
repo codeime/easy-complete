@@ -166,14 +166,9 @@ pub fn launch_fig_desktop(args: LaunchArgs) -> Result<()> {
 
 #[cfg(windows)]
 fn wait_for_desktop_pipe() -> Result<()> {
-    use windows::Win32::System::Pipes::WaitNamedPipeW;
-    use windows::core::HSTRING;
-
     let path = directories::desktop_socket_path()?;
-    let pipe = fig_ipc::pipe_name_from_path(&path);
-    let name = HSTRING::from(pipe.as_str());
     for _ in 0..30 {
-        if unsafe { WaitNamedPipeW(&name, 0) }.is_ok() {
+        if fig_ipc::ipc_endpoint_exists(&path) {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
