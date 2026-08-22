@@ -332,6 +332,14 @@ fn kill_and_reap(child: &mut Child, pid: u32) {
     reap(child);
 }
 
+/// `taskkill` argv for a timed-out generator. `/T` kills the process tree,
+/// matching Unix `kill(-pgid, SIGKILL)`. Compiled in tests on every OS so
+/// Linux CI can pin the flags.
+#[cfg(any(test, not(unix)))]
+fn windows_taskkill_args(pid: u32) -> Vec<String> {
+    vec!["/PID".to_string(), pid.to_string(), "/T".to_string(), "/F".to_string()]
+}
+
 fn kill_process_group(pid: u32) {
     #[cfg(unix)]
     {
@@ -344,13 +352,18 @@ fn kill_process_group(pid: u32) {
     }
     #[cfg(not(unix))]
     {
-        let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).status();
+        let _ = Command::new("taskkill").args(windows_taskkill_args(pid)).status();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_timeout_kill_includes_process_tree_flag() {
+        assert_eq!(windows_taskkill_args(4242), ["/PID", "4242", "/T", "/F"]);
+    }
 
     #[cfg(unix)]
     #[test]

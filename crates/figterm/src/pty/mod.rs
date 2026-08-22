@@ -41,6 +41,25 @@ pub trait AsyncMasterPtyExt: AsyncMasterPty {
 
 impl<T: AsyncMasterPty + ?Sized> AsyncMasterPtyExt for T {}
 
+/// Win32 `BOOL`: non-zero is success. `TerminateProcess` used to invert this
+/// (`if res != 0 { Err }`), so a successful kill was reported as failure.
+/// Compiled in tests on every OS so Linux CI pins the mapping.
+#[cfg(any(test, windows))]
+pub(crate) fn win32_bool_succeeded(res: i32) -> bool {
+    res != 0
+}
+
+#[cfg(test)]
+mod win32_bool_tests {
+    use super::win32_bool_succeeded;
+
+    #[test]
+    fn terminateprocess_success_is_nonzero() {
+        assert!(win32_bool_succeeded(1));
+        assert!(!win32_bool_succeeded(0));
+    }
+}
+
 pub trait MasterPty {
     fn get_async_master_pty(self: Box<Self>) -> Result<Box<dyn AsyncMasterPty + Send + Sync>>;
 }

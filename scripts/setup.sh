@@ -5,18 +5,36 @@ set -e
 OS="$(uname -s)"
 
 install_linux_deps() {
+  # Source of truth for compile deps is `.github/workflows/ci.yml` `rust-linux`.
+  # Do not install WebKit: the UI is GPUI.
   if [ -f /etc/debian_version ]; then
     echo "Detected Debian/Ubuntu"
     sudo apt update
-    sudo apt install build-essential pkg-config jq dpkg curl wget cmake clang libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev valac libibus-1.0-dev libglib2.0-dev sqlite3 libxdo-dev protobuf-compiler
+    sudo apt install -y --no-install-recommends \
+      build-essential pkg-config jq dpkg curl wget cmake \
+      clang libclang-dev \
+      libssl-dev protobuf-compiler sqlite3 zsh fish \
+      libgtk-3-dev libayatana-appindicator3-dev \
+      libxkbcommon-dev libxkbcommon-x11-dev \
+      libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
+      libx11-xcb-dev libxcb-xfixes0-dev libxcb-xkb-dev \
+      libvulkan-dev libfreetype6-dev libfontconfig1-dev
   elif [ -f /etc/arch-release ]; then
     echo "Detected Arch"
     sudo pacman -Syu --noconfirm
-    sudo pacman -S --noconfirm --needed webkit2gtk base-devel curl wget openssl appmenu-gtk-module gtk3 libappindicator-gtk3 librsvg libvips cmake jq pkgconf
+    sudo pacman -S --noconfirm --needed \
+      base-devel curl wget openssl gtk3 libappindicator-gtk3 \
+      libxkbcommon libx11 cmake jq pkgconf protobuf clang \
+      zsh fish
   elif [ -f /etc/fedora-release ]; then
     echo "Detected Fedora"
-    sudo dnf check-update
-    sudo dnf install -y webkit2gtk3-devel.x86_64 openssl-devel curl wget libappindicator-gtk3 librsvg2-devel jq
+    sudo dnf check-update || true
+    sudo dnf install -y \
+      gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \
+      curl wget jq protobuf-compiler clang gtk3-devel \
+      libappindicator-gtk3 libxkbcommon-devel libX11-devel \
+      vulkan-devel freetype-devel fontconfig-devel \
+      zsh fish
     sudo dnf group install -y "C Development Tools and Libraries"
   else
     echo "Unsupported Linux distribution. Check the docs for manual installation instructions."
@@ -48,12 +66,9 @@ install_rust() {
       ;;
   esac
 
-  rustup default stable
+  # rust-toolchain.toml pins 1.88.0 for this repo. Do not `rustup default
+  # stable` — that is how a box ends up on 1.85 while rquickjs needs >=1.87.
   cargo install typos-cli
-
-  if [[ "$OS" == "Darwin" ]]; then
-    rustup target add aarch64-apple-darwin
-  fi
 }
 add_mise_to_shell() {
   echo "Adding mise integration to shell..."

@@ -357,6 +357,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - 下一步：Windows 手测 + named pipe 往返测试（F 代码已落树，CI 待 push）；Linux CI/`cargo clippy -D warnings` 以 Ubuntu 原生为准
 - 本文件就是 M0 的文档交付物
 - 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `cargo check`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
+- 2026-08-23：`rust-toolchain.toml` 去掉额外 `targets`（避免 Linux/Windows CI 拉 Darwin std）；`rust-linux` **不**装 `shellcheck`（与 macOS job 不同），测试在二进制缺失时 skip；F2 `taskkill /T` + `~user`、F3 `TerminateProcess` BOOL、F4 Win32 caret 换算可在 Linux 单测；`setup.sh` 不再装 WebKit / 不再 `rustup default stable`
 
 进度勾选：
 

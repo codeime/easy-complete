@@ -4,11 +4,17 @@ set -euo pipefail
 # Prefix-free zip of Windows binaries. Not a DMG, not an MSI.
 # Run on windows-latest (or a Windows host with the MSVC toolchain).
 
-if [ "$(uname -s)" != "MINGW"* ] && [ "$(uname -s)" != "MSYS"* ] && [ "$(uname -o 2>/dev/null || true)" != "Msys" ]; then
-  if [ "${OS:-}" != "Windows_NT" ]; then
-    echo "error: scripts/build-windows.sh is meant to run on Windows" >&2
-    exit 1
-  fi
+# `[ "$x" != "MINGW"* ]` does not glob: the pattern is quoted. Use case.
+is_windows=0
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) is_windows=1 ;;
+esac
+if [ "${OS:-}" = "Windows_NT" ]; then
+  is_windows=1
+fi
+if [ "$is_windows" != 1 ]; then
+  echo "error: scripts/build-windows.sh is meant to run on Windows" >&2
+  exit 1
 fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"

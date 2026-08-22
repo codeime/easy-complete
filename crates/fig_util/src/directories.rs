@@ -212,6 +212,13 @@ pub fn runtime_dir() -> Result<PathBuf> {
     }
 }
 
+/// Windows nested layout under `%TEMP%`. Compiled on every OS so Linux CI can
+/// pin `%TEMP%\easy-complete\{sockets,logs}` without a Windows host.
+#[cfg(any(test, windows))]
+fn windows_temp_child(temp: &Path, leaf: &str) -> PathBuf {
+    temp.join(DATA_DIR_NAME).join(leaf)
+}
+
 /// The q sockets directory of the local q installation
 ///
 /// - Linux: $XDG_RUNTIME_DIR/ecrun
@@ -222,7 +229,7 @@ pub fn sockets_dir() -> Result<PathBuf> {
         if #[cfg(unix)] {
             Ok(runtime_dir()?.join(RUNTIME_DIR_NAME))
         } else if #[cfg(windows)] {
-            Ok(runtime_dir()?.join(DATA_DIR_NAME).join("sockets"))
+            Ok(windows_temp_child(&runtime_dir()?, "sockets"))
         }
     }
 }
@@ -234,7 +241,7 @@ pub fn sockets_dir() -> Result<PathBuf> {
 ///
 /// - Linux: $XDG_RUNTIME_DIR/ecrun
 /// - MacOS: $TMPDIR/ecrun
-/// - Windows: %TEMP%\sockets
+/// - Windows: %TEMP%\{data_dir}\sockets (same as [`sockets_dir`])
 pub fn host_sockets_dir() -> Result<PathBuf> {
     // TODO: make this work again
     // #[cfg(target_os = "linux")]
@@ -270,7 +277,7 @@ pub fn logs_dir() -> Result<PathBuf> {
             use crate::CLI_BINARY_NAME;
             Ok(runtime_dir()?.join(format!("{CLI_BINARY_NAME}log")))
         } else if #[cfg(windows)] {
-            Ok(std::env::temp_dir().join(DATA_DIR_NAME).join("logs"))
+            Ok(windows_temp_child(&std::env::temp_dir(), "logs"))
         }
     }
 }
@@ -559,7 +566,10 @@ utf8_dir!(settings_path);
 
 #[cfg(test)]
 mod linux_tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::DATA_DIR_NAME;
 
     #[test]
     fn all_paths() {
@@ -603,6 +613,16 @@ mod linux_tests {
             "sockets_dir {sockets:?} should be under XDG_RUNTIME_DIR {xdg}"
         );
         assert_eq!(sockets.file_name().and_then(|n| n.to_str()), Some("ecrun"));
+    }
+
+    #[test]
+    fn windows_temp_layout_nests_under_data_dir() {
+        let temp = PathBuf::from(r"C:\Users\Ada\AppData\Local\Temp");
+        assert_eq!(
+            windows_temp_child(&temp, "sockets"),
+            temp.join(DATA_DIR_NAME).join("sockets")
+        );
+        assert_eq!(windows_temp_child(&temp, "logs"), temp.join(DATA_DIR_NAME).join("logs"));
     }
 }
 

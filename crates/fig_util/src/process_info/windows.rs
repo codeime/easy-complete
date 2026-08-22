@@ -91,6 +91,7 @@ impl PidExt for Pid {
     fn exe(&self) -> Option<PathBuf> {
         unsafe {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, self.0).ok()?;
+            let handle = SafeHandle::new(handle)?;
 
             // Get the terminal name
             let mut len = MAX_PATH;
@@ -98,7 +99,7 @@ impl PidExt for Pid {
             process_name[MAX_PATH as usize] = u8::try_from('\0').unwrap();
 
             if QueryFullProcessImageNameA(
-                handle,
+                *handle,
                 PROCESS_NAME_FORMAT(0),
                 PSTR(process_name.as_mut_ptr()),
                 &mut len,

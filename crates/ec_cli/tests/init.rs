@@ -7,7 +7,7 @@ use anstream::println;
 #[cfg(not(windows))]
 use assert_cmd::prelude::*;
 use eyre::Context;
-use fig_util::consts::build::{SKIP_FISH_TESTS, SKIP_SHELLCHECK_TESTS};
+use fig_util::consts::build::{SKIP_FISH_TESTS, skip_shellcheck_tests};
 use fig_util::consts::{CLI_BINARY_NAME, CLI_CRATE_NAME};
 use paste::paste;
 
@@ -45,7 +45,7 @@ macro_rules! init_test {
                     return Ok(());
                 }
 
-                if $exe == "shellcheck" && SKIP_SHELLCHECK_TESTS {
+                if $exe == "shellcheck" && skip_shellcheck_tests() {
                     return Ok(());
                 }
 
@@ -55,7 +55,16 @@ macro_rules! init_test {
                 cmd$(.arg($arg))*.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
                 cmd.env("Q_INIT_SNAPSHOT_TEST", "1");
 
-                let child = cmd.spawn().context(format!("{} is not installed", $exe))?;
+                let child = match cmd.spawn() {
+                    Ok(child) => child,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        eprintln!("skipping: {} is not installed", $exe);
+                        return Ok(());
+                    },
+                    Err(err) => {
+                        return Err(err).context(format!("{} is not installed", $exe))?;
+                    },
+                };
                 write!(child.stdin.as_ref().unwrap(), "{}", init)?;
                 let output = child.wait_with_output()?;
                 if !output.status.success() {

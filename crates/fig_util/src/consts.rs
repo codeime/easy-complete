@@ -62,8 +62,25 @@ pub mod build {
     /// If `fish` tests should be skipped
     pub const SKIP_FISH_TESTS: bool = option_env!("AMAZON_Q_BUILD_SKIP_FISH_TESTS").is_some();
 
-    /// If `shellcheck` tests should be skipped
+    /// If `shellcheck` tests should be skipped via the build env var.
+    ///
+    /// Prefer [`skip_shellcheck_tests`]: the macOS rust job installs `shellcheck`
+    /// via brew, but the Linux and Windows jobs do not. Tests must also skip
+    /// when the binary is missing so those jobs stay aligned without installing
+    /// a linter they never had.
     pub const SKIP_SHELLCHECK_TESTS: bool = option_env!("AMAZON_Q_BUILD_SKIP_SHELLCHECK_TESTS").is_some();
+
+    /// Whether shellcheck-backed tests should no-op.
+    pub fn skip_shellcheck_tests() -> bool {
+        SKIP_SHELLCHECK_TESTS || !command_on_path("shellcheck")
+    }
+
+    fn command_on_path(name: &str) -> bool {
+        let Some(paths) = std::env::var_os("PATH") else {
+            return false;
+        };
+        std::env::split_paths(&paths).any(|dir| dir.join(name).is_file() || dir.join(format!("{name}.exe")).is_file())
+    }
 }
 
 /// macOS specific constants

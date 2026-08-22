@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
-use tao::dpi::{PhysicalPosition, PhysicalSize, Position};
+use tao::dpi::Position;
 use tracing::info;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::{PlatformBoundEvent, PlatformWindow};
 use crate::event::{Event, WindowEvent, WindowPosition};
-use crate::platform::caret::{CaretOnScreen, ibus_rect_is_usable};
+use crate::platform::caret::{CaretOnScreen, caret_from_win32_client_caret};
 use crate::utils::Rect;
 use crate::webview::AUTOCOMPLETE_ID;
 use crate::webview::notification::WebviewNotificationsState;
@@ -125,16 +125,7 @@ fn poll_caret() -> Option<CaretOnScreen> {
             y: rect.top,
         };
         let _ = ClientToScreen(info.hwndCaret, &mut origin);
-        let width = (rect.right - rect.left).max(1);
-        let height = rect.bottom - rect.top;
-        if !ibus_rect_is_usable(origin.x, origin.y, width, height) {
-            return None;
-        }
-        Some(CaretOnScreen {
-            position: PhysicalPosition::new(origin.x, origin.y).into(),
-            size: PhysicalSize::new(width, height).into(),
-            origin: fig_proto::local::caret_position_hook::Origin::TopLeft,
-        })
+        caret_from_win32_client_caret(rect.left, rect.top, rect.right, rect.bottom, origin.x, origin.y)
     }
 }
 

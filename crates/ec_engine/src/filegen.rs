@@ -322,13 +322,28 @@ fn user_home_dir(username: &str) -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(unix))]
-fn user_home_dir(username: &str) -> Option<PathBuf> {
-    let current = std::env::var("USERNAME").ok()?;
+/// Windows has no `getpwnam`. Only the current account maps through
+/// `%USERPROFILE%`; any other `~user` stays literal.
+#[cfg(any(test, not(unix)))]
+fn windows_current_user_home(
+    username: &str,
+    current_username: Option<&str>,
+    userprofile: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let current = current_username?;
     if !current.eq_ignore_ascii_case(username) {
         return None;
     }
-    std::env::var_os("USERPROFILE").map(PathBuf::from)
+    userprofile
+}
+
+#[cfg(not(unix))]
+fn user_home_dir(username: &str) -> Option<PathBuf> {
+    windows_current_user_home(
+        username,
+        std::env::var("USERNAME").ok().as_deref(),
+        std::env::var_os("USERPROFILE").map(PathBuf::from),
+    )
 }
 
 fn last_path_sep(s: &str) -> Option<usize> {
@@ -607,6 +622,17 @@ mod tests {
                 .any(|suggestion| suggestion.name == format!("{cwd}/absolute/")),
             "{absolute:?}"
         );
+    }
+
+    #[test]
+    fn windows_tilde_user_only_matches_the_current_account() {
+        let home = PathBuf::from(r"C:\Users\Ada");
+        assert_eq!(
+            windows_current_user_home("Ada", Some("ada"), Some(home.clone())),
+            Some(home.clone())
+        );
+        assert_eq!(windows_current_user_home("bob", Some("ada"), Some(home.clone())), None);
+        assert_eq!(windows_current_user_home("ada", None, Some(home)), None);
     }
 
     #[cfg(unix)]

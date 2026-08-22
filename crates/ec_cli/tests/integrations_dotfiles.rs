@@ -70,7 +70,7 @@ fn zsh_dotfiles_install_and_uninstall_in_temp_home() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn input_method_is_macos_only() -> Result<()> {
     cli()
-        .args(["integrations", "install", "input-method", "--silent"])
+        .args(["integrations", "install", "--silent", "input-method"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("only supported on macOS"));

@@ -33,7 +33,7 @@ impl WinChild {
         let mut status: DWORD = 0;
         let proc = self.proc.lock().unwrap().try_clone().unwrap();
         let res = unsafe { GetExitCodeProcess(proc.as_raw_handle() as _, &mut status) };
-        if res != 0 {
+        if crate::pty::win32_bool_succeeded(res as i32) {
             if status == STILL_ACTIVE {
                 Ok(None)
             } else {
@@ -48,7 +48,11 @@ impl WinChild {
         let proc = self.proc.lock().unwrap().try_clone().unwrap();
         let res = unsafe { TerminateProcess(proc.as_raw_handle() as _, 1) };
         let err = io::Error::last_os_error();
-        if res != 0 { Err(err) } else { Ok(()) }
+        if crate::pty::win32_bool_succeeded(res as i32) {
+            Ok(())
+        } else {
+            Err(err)
+        }
     }
 }
 
@@ -73,7 +77,11 @@ impl ChildKiller for WinChildKiller {
     fn kill(&mut self) -> io::Result<()> {
         let res = unsafe { TerminateProcess(self.proc.as_raw_handle() as _, 1) };
         let err = io::Error::last_os_error();
-        if res != 0 { Err(err) } else { Ok(()) }
+        if crate::pty::win32_bool_succeeded(res as i32) {
+            Ok(())
+        } else {
+            Err(err)
+        }
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
@@ -97,7 +105,7 @@ impl Child for WinChild {
         }
         let mut status: DWORD = 0;
         let res = unsafe { GetExitCodeProcess(proc.as_raw_handle() as _, &mut status) };
-        if res != 0 {
+        if crate::pty::win32_bool_succeeded(res as i32) {
             Ok(ExitStatus::with_exit_code(status))
         } else {
             Err(io::Error::last_os_error())

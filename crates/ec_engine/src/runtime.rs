@@ -1242,12 +1242,14 @@ mod tests {
             })
             .expect("complete");
         assert!(result.suggestions.iter().all(|s| s.name != "checkout"));
+        // Exact first-token may also insert an `auto-execute` wrapper named
+        // `git` (Enter runs the already-typed command). The command row itself
+        // stays `arg` with a raw insertValue.
         let git = result
             .suggestions
             .iter()
-            .find(|s| s.name == "git")
+            .find(|s| s.name == "git" && s.kind == "arg")
             .expect("first-token command row");
-        assert_eq!(git.kind, "arg");
         assert_eq!(git.insert_value.as_deref(), Some("git"));
         assert!(!git.should_add_space);
         assert_eq!(result.search_term, "git");

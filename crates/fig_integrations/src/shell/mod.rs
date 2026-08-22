@@ -823,24 +823,28 @@ mod test {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    use fig_util::build::SKIP_SHELLCHECK_TESTS;
+    use fig_util::build::skip_shellcheck_tests;
     use fig_util::directories::{home_dir, old_fig_data_dir};
 
     use super::*;
 
     fn run_shellcheck(source: String) {
-        if SKIP_SHELLCHECK_TESTS {
+        if skip_shellcheck_tests() {
             return;
         }
 
         let shell_arg = "--shell=bash";
-        let mut child = Command::new("shellcheck")
+        let mut child = match Command::new("shellcheck")
             .args([shell_arg, "--color=always", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .unwrap();
+        {
+            Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+            Err(err) => panic!("failed to spawn shellcheck: {err}"),
+        };
 
         let mut stdin = child.stdin.take().unwrap();
         std::thread::spawn(move || {
