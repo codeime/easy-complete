@@ -56,6 +56,9 @@ pub const CARD_BORDER: f32 = 0.0;
 /// `#description.popout` used a literal `border-radius: 4px`, so unlike the
 /// suggestion card it did not scale with the font size.
 const POPOUT_RADIUS: f32 = 4.0;
+/// WebView debug mode painted `:root` red so overlay bounds were visible
+/// through the transparent pad. Native overlay paints the window the same way.
+pub const DEBUG_WINDOW_FILL: u32 = 0xff_00_00;
 /// CSS `box-shadow` blur maps to twice the gaussian sigma, and GPUI's
 /// `blur_radius` *is* that sigma. The legacy `0 0 3px` therefore needs 1.5
 /// here; passing 3.0 doubles the halo and reads as a soft grey smear.
@@ -654,6 +657,7 @@ impl Render for SuggestionList {
         let loading = overlay.loading;
         let show_hint = !overlay.always_show_description && !loading;
         let show_dev = overlay.show_dev_banner;
+        let debug_window = overlay.debug_window;
         let common_prefix = common_prefix_for(selected, &overlay.items);
         // The bottom Description falls back to currentArg, but the old
         // popout deliberately describes only the selected suggestion.
@@ -810,6 +814,7 @@ impl Render for SuggestionList {
             .overflow_hidden()
             .w_full()
             .h_full()
+            .when(debug_window, |this| this.bg(rgb(DEBUG_WINDOW_FILL)))
             .when(!loading && is_above && show_dev, {
                 let disable_dev = disable_dev.clone();
                 let state = state.clone();
@@ -1406,6 +1411,16 @@ mod tests {
         assert_eq!(row_corner_radii(4, 4, 3.2, false), (0.0, 3.2));
         // A lone row owns all four corners.
         assert_eq!(row_corner_radii(0, 0, 3.2, false), (3.2, 3.2));
+    }
+
+    #[test]
+    fn debug_window_fill_is_opaque_red() {
+        assert_eq!(DEBUG_WINDOW_FILL, 0xff_00_00);
+        let src = include_str!("list.rs");
+        assert!(
+            src.contains("when(debug_window") && src.contains("DEBUG_WINDOW_FILL"),
+            "debug mode must paint the overlay window root, not only the suggestion card"
+        );
     }
 
     #[test]

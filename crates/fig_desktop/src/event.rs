@@ -26,9 +26,9 @@ pub enum Event {
 
     ReloadCredentials,
     ReloadAccessibility,
-    ReloadTray {
-        is_logged_in: bool,
-    },
+    /// Rebuild the tray icon and menu. Auth is gone, so this is never a
+    /// signed-out / "session expired" state.
+    ReloadTray,
 
     /// Menu bar or tray item activated. Delivered by `muda::MenuEvent::set_event_handler`.
     MenuClicked(String),
@@ -139,9 +139,11 @@ pub enum WindowEvent {
         path: Cow<'static, str>,
     },
 
-    Reload,
-
+    /// Open the native inspector equivalent. Settings maps this to Show;
+    /// the overlay maps it to showing kept rows (there is no WebView).
     Devtools,
+    /// `ec debug autocomplete-window`: paint the overlay window so its
+    /// bounds are visible, including transparent padding.
     DebugMode(bool),
 
     Batch(Vec<WindowEvent>),

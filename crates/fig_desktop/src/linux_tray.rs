@@ -11,7 +11,7 @@ use tracing::{error, warn};
 use crate::tray::{get_context_menu, get_icon};
 
 enum TrayOp {
-    Reload { is_logged_in: bool },
+    Reload,
     SetVisible(bool),
 }
 
@@ -39,10 +39,10 @@ pub fn spawn() {
             loop {
                 while let Ok(op) = rx.try_recv() {
                     match op {
-                        TrayOp::Reload { is_logged_in } => {
-                            tray.set_icon(get_icon(is_logged_in)).map_err(|err| warn!(?err)).ok();
+                        TrayOp::Reload => {
+                            tray.set_icon(get_icon()).map_err(|err| warn!(?err)).ok();
                             tray.set_icon_as_template(true);
-                            tray.set_menu(Some(Box::new(get_context_menu(is_logged_in))));
+                            tray.set_menu(Some(Box::new(get_context_menu())));
                         },
                         TrayOp::SetVisible(visible) => {
                             tray.set_visible(visible).map_err(|err| warn!(?err)).ok();
@@ -57,9 +57,9 @@ pub fn spawn() {
         .ok();
 }
 
-pub fn reload(is_logged_in: bool) {
+pub fn reload() {
     if let Some(tx) = TX.get() {
-        tx.send(TrayOp::Reload { is_logged_in }).ok();
+        tx.send(TrayOp::Reload).ok();
     }
 }
 

@@ -237,6 +237,16 @@ impl OverlayController {
         }
     }
 
+    /// `ec debug autocomplete-window`. Paints the overlay window so its
+    /// bounds (including transparent padding) are visible. Persists across
+    /// hide/dismiss; only this call turns it off.
+    pub fn set_debug_mode(&mut self, enabled: bool, cx: &mut App) {
+        self.state.update(cx, |overlay, cx| {
+            overlay.debug_window = enabled;
+            cx.notify();
+        });
+    }
+
     pub fn hide(&mut self, cx: &mut App) {
         self.bump_generation();
         self.take_loading_owner();
@@ -371,12 +381,15 @@ impl OverlayController {
             .unwrap_or_else(|err| err.into_inner())
             .is_some();
         let has_items = !overlay.loading && !overlay.items.is_empty();
-        set_intercept_flags(
-            figterm_state,
-            session_id,
-            overlay.visible && has_items && has_position,
-            has_items && has_position,
-        );
+        // Not a layout pass: `positioned` is false, so a visible list
+        // without a successful place this frame does not swallow keys.
+        let (visible_intercept, global_intercept) = positioned_intercept_flags(InterceptInputs {
+            overlay_visible: overlay.visible,
+            has_items,
+            positioned: false,
+            has_last_position: has_position,
+        });
+        set_intercept_flags(figterm_state, session_id, visible_intercept, global_intercept);
     }
 
     fn show_kept_items(&mut self, figterm_state: &FigtermState, cx: &mut App) {
@@ -1776,7 +1789,14 @@ fn escape_insertion(value: &str, is_folder: bool) -> String {
 fn intercept_flags(overlay_visible: bool, has_items: bool) -> (bool, bool) {
     // Keystrokes only while the list is on screen. Global intercept stays on when
     // items are kept (onlyShowOnTab / hideAutocomplete) so Tab can show the list.
-    (overlay_visible && has_items, has_items)
+    // Without a caret sample this assumes a usable last position whenever
+    // rows exist — `sync_intercept` passes the real last-position bit.
+    positioned_intercept_flags(InterceptInputs {
+        overlay_visible,
+        has_items,
+        positioned: overlay_visible,
+        has_last_position: has_items,
+    })
 }
 
 /// Grouped so the four independent flags cannot be silently transposed at a
@@ -2411,6 +2431,38 @@ mod tests {
         assert_eq!(intercept_flags(false, true), (false, true));
         assert_eq!(intercept_flags(false, false), (false, false));
         assert_eq!(intercept_flags(true, false), (false, false));
+    }
+
+    #[test]
+    fn intercept_flags_share_one_policy() {
+        assert_eq!(
+            intercept_flags(true, true),
+            positioned_intercept_flags(InterceptInputs {
+                overlay_visible: true,
+                has_items: true,
+                positioned: true,
+                has_last_position: true,
+            })
+        );
+        assert_eq!(
+            intercept_flags(false, true),
+            positioned_intercept_flags(InterceptInputs {
+                overlay_visible: false,
+                has_items: true,
+                positioned: false,
+                has_last_position: true,
+            })
+        );
+        let src = include_str!("overlay.rs");
+        let sync = rust_fn_body(src, "fn sync_intercept");
+        assert!(
+            sync.contains("positioned_intercept_flags"),
+            "hide/dismiss intercept must use the same caret-aware policy as layout"
+        );
+        assert!(
+            !sync.contains("overlay.visible && has_items && has_position"),
+            "sync_intercept must not re-derive flags beside positioned_intercept_flags"
+        );
     }
 
     #[test]

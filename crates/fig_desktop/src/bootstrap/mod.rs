@@ -11,7 +11,6 @@ use std::sync::{Arc, OnceLock};
 use fig_os_shim::Context;
 use fig_remote_ipc::figterm::FigtermState;
 use gpui::AppContext as _;
-use tao::dpi::LogicalSize;
 use tao::window::Theme as TaoTheme;
 use tracing::{debug, error, warn};
 
@@ -25,11 +24,7 @@ use crate::remote_ipc::RemoteHook;
 use crate::tray::build_tray;
 use crate::{EventLoopProxy, EventLoopWindowTarget, file_watcher, local_ipc};
 
-pub const SETTINGS_SIZE: LogicalSize<f64> = LogicalSize::new(820.0, 640.0);
-
 pub const AUTOCOMPLETE_WINDOW_TITLE: &str = ec_gpui::OVERLAY_WINDOW_TITLE;
-
-pub const LOGIN_PATH: &str = "/";
 
 fn map_theme(theme: &str) -> Option<TaoTheme> {
     match theme {

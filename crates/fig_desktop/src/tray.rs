@@ -13,7 +13,6 @@ use tao::event_loop::ControlFlow;
 use tracing::{error, trace, warn};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use crate::bootstrap::LOGIN_PATH;
 use crate::event::{Event, ShowMessageNotification, WindowEvent};
 use crate::{AUTOCOMPLETE_ID, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID};
 
@@ -35,7 +34,6 @@ use crate::{AUTOCOMPLETE_ID, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID}
 //     }};
 // }
 
-const LOGIN_MENU_ID: &str = "onboarding";
 const ACCESSIBILITY_MENU_ID: &str = "accessibility";
 
 /// Autocomplete is fully inert without Accessibility, so the tray is the one surface that can say
@@ -80,17 +78,6 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
         },
         "quit" => {
             proxy.send_event_or_warn(Event::ControlFlow(ControlFlow::Exit));
-        },
-        LOGIN_MENU_ID => {
-            proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: SETTINGS_ID.clone(),
-                window_event: WindowEvent::Batch(vec![
-                    WindowEvent::NavigateRelative {
-                        path: LOGIN_PATH.into(),
-                    },
-                    WindowEvent::Show,
-                ]),
-            });
         },
         "settings" => {
             proxy.send_event_or_warn(Event::WindowEvent {
@@ -165,11 +152,10 @@ pub async fn build_tray(
 }
 
 pub(crate) fn build_tray_icon() -> tray_icon::Result<TrayIcon> {
-    let is_logged_in = true; // fig_auth removed
     let mut builder = TrayIconBuilder::new()
         .with_icon_as_template(true)
-        .with_menu(Box::new(get_context_menu(is_logged_in)));
-    if let Some(icon) = get_icon(is_logged_in) {
+        .with_menu(Box::new(get_context_menu()));
+    if let Some(icon) = get_icon() {
         builder = builder.with_icon(icon);
     } else {
         warn!("bundled tray icon missing or invalid; building tray without an icon");
@@ -197,34 +183,18 @@ pub(crate) fn decode_tray_icon(bytes: &[u8]) -> Option<Icon> {
     }
 }
 
-pub fn get_icon(is_logged_in: bool) -> Option<Icon> {
-    if is_logged_in {
-        static SIGNED_IN: OnceLock<Option<Icon>> = OnceLock::new();
-        return SIGNED_IN
-            .get_or_init(|| {
-                cfg_if! {
-                    if #[cfg(target_os = "linux")] {
-                        decode_tray_icon(include_bytes!("../icons/icon-monochrome-light.png"))
-                    } else {
-                        decode_tray_icon(include_bytes!("../icons/icon-monochrome.png"))
-                    }
-                }
-            })
-            .clone();
-    }
-
-    static SIGNED_OUT: OnceLock<Option<Icon>> = OnceLock::new();
-    SIGNED_OUT
-        .get_or_init(|| {
-            cfg_if! {
-                if #[cfg(target_os = "linux")] {
-                    decode_tray_icon(include_bytes!("../icons/icon-monochrome-light.png"))
-                } else {
-                    decode_tray_icon(include_bytes!("../icons/not-logged-in.png"))
-                }
+pub fn get_icon() -> Option<Icon> {
+    static ICON: OnceLock<Option<Icon>> = OnceLock::new();
+    ICON.get_or_init(|| {
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                decode_tray_icon(include_bytes!("../icons/icon-monochrome-light.png"))
+            } else {
+                decode_tray_icon(include_bytes!("../icons/icon-monochrome.png"))
             }
-        })
-        .clone()
+        }
+    })
+    .clone()
 }
 
 fn warning_icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
@@ -243,11 +213,10 @@ fn warning_icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
     .clone()
 }
 
-pub fn get_context_menu(is_logged_in: bool) -> Menu {
+pub fn get_context_menu() -> Menu {
     let mut tray_menu = Menu::new();
 
-    let elements = menu(is_logged_in);
-    for elem in elements {
+    for elem in menu() {
         elem.add_to_menu(&mut tray_menu);
     }
 
@@ -400,30 +369,12 @@ fn append_or_warn(result: muda::Result<()>) {
     }
 }
 
-fn menu(is_logged_in: bool) -> Vec<MenuElement> {
+fn menu() -> Vec<MenuElement> {
     let quit = MenuElement::entry(None, None, "Quit", "quit").with_accelerator("super+KeyQ");
     let settings = MenuElement::entry(None, None, "Settings", "settings").with_accelerator("super+Comma");
     let check_for_updates = MenuElement::entry(None, None, "Check for Updates…", "update");
 
-    // Auth is gone, so the signed-out branches never run. Do not read
-    // `desktop.completedOnboarding` from SQLite on every tray rebuild.
-    let mut menu = if !is_logged_in {
-        let yellow_circle_img = warning_icon_rgba();
-        let onboarded_completed = fig_settings::state::get_bool_or("desktop.completedOnboarding", false);
-        if !onboarded_completed {
-            vec![
-                MenuElement::info(yellow_circle_img, format!("{PRODUCT_NAME} hasn't been set up yet...")),
-                MenuElement::entry(None, None, "Get Started", LOGIN_MENU_ID),
-            ]
-        } else {
-            vec![
-                MenuElement::info(yellow_circle_img, "Your session has expired"),
-                MenuElement::entry(None, None, "Log back in", LOGIN_MENU_ID),
-            ]
-        }
-    } else {
-        vec![settings, check_for_updates]
-    };
+    let mut menu = vec![settings, check_for_updates];
 
     if accessibility_is_missing() {
         let warning_img = warning_icon_rgba();
@@ -445,14 +396,10 @@ fn menu(is_logged_in: bool) -> Vec<MenuElement> {
 mod tests {
     #[test]
     fn tray_icon_decode_is_cached() {
-        let first = super::get_icon(true);
-        let second = super::get_icon(true);
-        assert!(first.is_some(), "bundled signed-in tray icon must decode");
-        assert!(second.is_some(), "bundled signed-in tray icon must decode");
-        assert!(
-            super::get_icon(false).is_some(),
-            "bundled signed-out tray icon must decode"
-        );
+        let first = super::get_icon();
+        let second = super::get_icon();
+        assert!(first.is_some(), "bundled tray icon must decode");
+        assert!(second.is_some(), "bundled tray icon must decode");
         let warning = super::warning_icon_rgba().expect("yellow-circle.png must decode on the happy path");
         assert!(!warning.0.is_empty());
         assert_eq!(warning.0.len(), (warning.1 * warning.2 * 4) as usize);
@@ -483,7 +430,7 @@ mod tests {
 
     #[test]
     fn tray_menu_append_does_not_unwrap() {
-        let _menu = super::get_context_menu(true);
+        let _menu = super::get_context_menu();
         let production = include_str!("tray.rs")
             .split("#[cfg(test)]")
             .next()
@@ -501,6 +448,29 @@ mod tests {
         assert!(
             production.contains("append_or_warn") && production.contains("failed to append tray menu item"),
             "append errors must warn"
+        );
+    }
+
+    #[test]
+    fn tray_menu_is_not_an_auth_gate() {
+        let production = include_str!("tray.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains("Your session has expired")
+                && !production.contains("Log back in")
+                && !production.contains("hasn't been set up yet")
+                && !production.contains("is_logged_in"),
+            "fig_auth is gone; the tray must not offer a signed-out / session-expired menu"
+        );
+        assert!(
+            production.contains("Settings") && production.contains("Check for Updates"),
+            "signed-in tray entries still exist"
+        );
+        assert!(
+            !production.contains("fn get_icon(is_logged_in") && production.contains("fn get_icon()"),
+            "tray icon must not branch on a signed-in flag"
         );
     }
 }

@@ -65,6 +65,9 @@ pub struct OverlayState {
     pub navigate_to_history: bool,
     pub insert_space_automatically: bool,
     pub show_dev_banner: bool,
+    /// `ec debug autocomplete-window`: paint the window root so overlay
+    /// bounds are visible, including transparent padding.
+    pub debug_window: bool,
     pub suppress_until_shown: bool,
     /// Set after accepting a completion that does not open a new argument.
     /// The shell emits one buffer update for that insertion; hide that update
@@ -115,6 +118,7 @@ impl OverlayState {
             navigate_to_history: false,
             insert_space_automatically: true,
             show_dev_banner: false,
+            debug_window: false,
             suppress_until_shown: false,
             suppress_next_completion: false,
             suppress_unchanged_completion: None,
@@ -382,6 +386,26 @@ mod tests {
         assert!(!overlay.visible);
         assert!(overlay.items.is_empty());
         assert!(overlay.search_term.is_empty());
+    }
+
+    #[test]
+    fn debug_window_survives_hide_and_dismiss() {
+        let mut overlay = OverlayState::new();
+        overlay.debug_window = true;
+        overlay.set_suggestions(
+            vec![SuggestionItem {
+                name: "checkout".into(),
+                ..SuggestionItem::default()
+            }],
+            "ch".into(),
+        );
+        overlay.hide();
+        assert!(overlay.debug_window);
+        overlay.dismiss();
+        assert!(
+            overlay.debug_window,
+            "`ec debug autocomplete-window` is a process flag, not per-result state"
+        );
     }
 
     fn two_items() -> OverlayState {

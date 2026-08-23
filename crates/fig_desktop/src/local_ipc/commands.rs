@@ -15,7 +15,6 @@ use tao::event_loop::ControlFlow;
 use tracing::error;
 
 use super::{LocalResponse, LocalResult};
-use crate::bootstrap::SETTINGS_SIZE;
 use crate::event::{Event, WindowEvent};
 use crate::platform::PlatformState;
 use crate::{AUTOCOMPLETE_ID, EventLoopProxy, SETTINGS_ID, platform};
@@ -177,48 +176,24 @@ pub fn log_level(LogLevelCommand { level }: LogLevelCommand) -> LocalResult {
 }
 
 pub async fn login(proxy: &EventLoopProxy) -> LocalResult {
-    proxy
-        .send_event(Event::WindowEvent {
-            window_id: SETTINGS_ID,
-            window_event: WindowEvent::Batch(vec![
-                WindowEvent::UpdateWindowGeometry {
-                    size: Some(SETTINGS_SIZE),
-                    position: None,
-                    anchor: None,
-                    tx: None,
-                    dry_run: false,
-                },
-                WindowEvent::Reload,
-                WindowEvent::Show,
-            ]),
-        })
-        .map_err(|err| error!(?err))
-        .ok();
-
-    proxy
-        .send_event(Event::ReloadTray { is_logged_in: true })
-        .map_err(|err| error!(?err))
-        .ok();
-
+    // fig_auth is gone. Keep the IPC so old clients still open settings
+    // instead of a WebView dashboard reload.
+    proxy.send_event_or_warn(Event::WindowEvent {
+        window_id: SETTINGS_ID,
+        window_event: WindowEvent::Show,
+    });
+    proxy.send_event_or_warn(Event::ReloadTray);
     Ok(LocalResponse::Success(None))
 }
 
 pub async fn logout(proxy: &EventLoopProxy) -> LocalResult {
-    // fig_auth removed
-
-    proxy
-        .send_event(Event::WindowEvent {
-            window_id: SETTINGS_ID,
-            window_event: WindowEvent::Batch(vec![WindowEvent::Reload, WindowEvent::Show]),
-        })
-        .map_err(|err| error!(?err))
-        .ok();
-
-    proxy
-        .send_event(Event::ReloadTray { is_logged_in: false })
-        .map_err(|err| error!(?err))
-        .ok();
-
+    // Do not flip the tray into a fake "session expired" state. Auth never
+    // comes back, so signed-out copy would strand the user.
+    proxy.send_event_or_warn(Event::WindowEvent {
+        window_id: SETTINGS_ID,
+        window_event: WindowEvent::Show,
+    });
+    proxy.send_event_or_warn(Event::ReloadTray);
     Ok(LocalResponse::Success(None))
 }
 
@@ -261,5 +236,26 @@ pub async fn bundle_metadata(ctx: &Context) -> LocalResult {
             code: None,
             message: Some(format!("Failed to get the bundled metadata: {err:?}")),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn login_and_logout_do_not_reload_a_webview_or_fake_auth() {
+        let src = include_str!("commands.rs");
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("WindowEvent::Reload"),
+            "login/logout must not send WebView location.reload"
+        );
+        assert!(
+            !production.contains("is_logged_in: false") && !production.contains("is_logged_in: true"),
+            "login/logout must not flip the tray into a signed-out session"
+        );
+        assert!(
+            production.contains("Event::ReloadTray") && production.contains("WindowEvent::Show"),
+            "login/logout still open settings and rebuild the (signed-in) tray"
+        );
     }
 }

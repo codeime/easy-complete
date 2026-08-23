@@ -50,14 +50,14 @@ impl DesktopHost {
             },
             Event::ControlFlow(ControlFlow::Exit) => cx.quit(),
             Event::ControlFlow(_) => {},
-            Event::ReloadTray { is_logged_in } => {
+            Event::ReloadTray => {
                 #[cfg(target_os = "linux")]
-                crate::linux_tray::reload(is_logged_in);
+                crate::linux_tray::reload();
                 #[cfg(not(target_os = "linux"))]
                 if let Some(tray) = &mut self.tray {
-                    tray.set_icon(get_icon(is_logged_in)).map_err(|err| error!(?err)).ok();
+                    tray.set_icon(get_icon()).map_err(|err| error!(?err)).ok();
                     tray.set_icon_as_template(true);
-                    tray.set_menu(Some(Box::new(get_context_menu(is_logged_in))));
+                    tray.set_menu(Some(Box::new(get_context_menu())));
                 }
             },
             Event::ReloadCredentials => {
@@ -70,10 +70,10 @@ impl DesktopHost {
             },
             Event::ReloadAccessibility => {
                 #[cfg(target_os = "linux")]
-                crate::linux_tray::reload(true);
+                crate::linux_tray::reload();
                 #[cfg(not(target_os = "linux"))]
                 if let Some(tray) = &mut self.tray {
-                    tray.set_menu(Some(Box::new(get_context_menu(true))));
+                    tray.set_menu(Some(Box::new(get_context_menu())));
                 }
                 let autocomplete_enabled = autocomplete_should_run();
                 self.overlay.apply_theme(cx);
@@ -178,7 +178,8 @@ impl DesktopHost {
                         self.overlay.apply_position(position, &self.platform_state, cx);
                     }
                 },
-                WindowEvent::Show => self.overlay.show(cx),
+                WindowEvent::Show | WindowEvent::Devtools => self.overlay.show(cx),
+                WindowEvent::DebugMode(enabled) => self.overlay.set_debug_mode(enabled, cx),
                 other => trace!(?other, "Ignoring settings-only event on GPUI overlay"),
             },
             other => trace!(%other, ?window_event, "Ignoring event for unknown window"),
@@ -330,4 +331,55 @@ pub fn spawn_engine() -> anyhow::Result<EngineClient> {
         );
     }
     EngineClient::spawn(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn overlay_handles_devtools_and_debug_mode() {
+        let src = include_str!("gpui_host.rs");
+        let overlay = src.find("id if id == AUTOCOMPLETE_ID").expect("overlay dispatch");
+        let body = &src[overlay..overlay + 900];
+        assert!(
+            body.contains("WindowEvent::Show | WindowEvent::Devtools"),
+            "`ec debug devtools autocomplete` must show the overlay, not be ignored"
+        );
+        assert!(
+            body.contains("WindowEvent::DebugMode(enabled)"),
+            "`ec debug autocomplete-window` must reach OverlayController::set_debug_mode"
+        );
+        assert!(
+            !body.contains("Ignoring settings-only event on GPUI overlay") || body.contains("WindowEvent::DebugMode"),
+            "DebugMode must not be grouped with ignored leftover events"
+        );
+    }
+
+    #[test]
+    fn native_settings_do_not_reload_a_webview() {
+        let src = include_str!("event.rs");
+        assert!(
+            !src.contains(&["WindowEvent", "Reload"].join("::")) && !src.contains("\n    Reload,\n"),
+            "WebView location.reload has no native settings equivalent"
+        );
+        let production = include_str!("gpui_host.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains(&["WindowEvent", "Reload"].join("::")),
+            "settings dispatch must not handle a WebView Reload"
+        );
+    }
+
+    #[test]
+    fn tray_reload_is_not_an_auth_state() {
+        let production = include_str!("gpui_host.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains("Event::ReloadTray =>") && !production.contains("is_logged_in"),
+            "tray rebuild must not take a signed-in flag after fig_auth was removed"
+        );
+    }
 }
