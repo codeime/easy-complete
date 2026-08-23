@@ -5,9 +5,9 @@ use macos_utils::window_server::ApplicationSpecifier;
 use serde::Serialize;
 use tao::dpi::Position;
 
+use crate::bootstrap::notification::NotificationsState;
+use crate::bootstrap::{FigIdMap, WindowId};
 use crate::utils::Rect;
-use crate::webview::notification::WebviewNotificationsState;
-use crate::webview::{FigIdMap, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
 pub(crate) mod caret;
@@ -52,7 +52,7 @@ impl PlatformState {
         event: PlatformBoundEvent,
         window_target: &EventLoopWindowTarget,
         window_map: &FigIdMap,
-        notifications_state: &Arc<WebviewNotificationsState>,
+        notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
         self.clone()
             .0
@@ -128,7 +128,7 @@ pub enum PlatformBoundEvent {
     /// Re-applies the autocomplete overlay's window level from the currently focused terminal.
     ///
     /// The level is normally set by [`PlatformBoundEvent::ExternalWindowFocusChanged`], but the
-    /// overlay's webview can be released and rebuilt between focus changes, which leaves the new
+    /// overlay window can be parked and remapped between focus changes, which leaves the new
     /// native window at the default level until the user switches terminals again.
     AutocompleteWindowLevelUpdateRequested,
 }

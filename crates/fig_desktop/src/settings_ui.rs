@@ -14,10 +14,10 @@ use gpui::{
 use tracing::error;
 
 use crate::EventLoopProxy;
+use crate::bootstrap::DASHBOARD_ID;
 use crate::event::{Event, WindowEvent};
 use crate::permissions::{self, PermId, PermReady, PermissionSnapshot};
 use crate::platform::PlatformBoundEvent;
-use crate::webview::DASHBOARD_ID;
 
 pub const SETTINGS_WINDOW_TITLE: &str = "Settings";
 

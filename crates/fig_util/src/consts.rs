@@ -7,7 +7,7 @@ pub const APP_PROCESS_NAME: &str = "easy-complete";
 #[cfg(windows)]
 pub const APP_PROCESS_NAME: &str = "easy-complete.exe";
 
-/// The name configured under `"package.productName"` in the tauri.conf.json file.
+/// Product name used in install-layout paths such as `lib/<name>`.
 pub const TAURI_PRODUCT_NAME: &str = "Easy Complete";
 
 pub const CLI_BINARY_NAME: &str = "ec";

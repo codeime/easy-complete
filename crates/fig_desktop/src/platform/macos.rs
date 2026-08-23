@@ -31,10 +31,10 @@ use tao::platform::macos::ActivationPolicy;
 use tracing::{debug, error, trace, warn};
 
 use super::{PlatformBoundEvent, PlatformWindow};
+use crate::bootstrap::notification::NotificationsState;
+use crate::bootstrap::{FigIdMap, GLOBAL_PROXY, WindowId};
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::utils::Rect;
-use crate::webview::notification::WebviewNotificationsState;
-use crate::webview::{FigIdMap, GLOBAL_PROXY, WindowId};
 use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget};
 
 pub const DEFAULT_CARET_WIDTH: f64 = 10.0;
@@ -284,7 +284,7 @@ impl PlatformStateImpl {
         event: PlatformBoundEvent,
         window_target: &EventLoopWindowTarget,
         window_map: &FigIdMap,
-        notifications_state: &Arc<WebviewNotificationsState>,
+        notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
         debug!("Handling platform event: {:?}", event);
         match event {

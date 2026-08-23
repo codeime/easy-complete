@@ -323,14 +323,55 @@ mod tests {
             !platform_mod.contains("mod windows;\n") && !platform_mod.contains("mod windows; "),
             "old platform/windows.rs must stay uncompiled"
         );
-        let webview = include_str!("../webview/mod.rs");
+        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
         assert!(
-            !webview.contains("WryIdMap"),
+            !src.join("webview").exists(),
+            "webview/ was renamed to bootstrap/; do not restore the old name"
+        );
+        assert!(src.join("bootstrap/mod.rs").exists());
+        let bootstrap = include_str!("../bootstrap/mod.rs");
+        let notifications = include_str!("../bootstrap/notification.rs");
+        assert!(
+            bootstrap.contains("pub struct AppRuntime"),
+            "desktop bootstrap type is AppRuntime"
+        );
+        assert!(
+            !bootstrap.contains("struct WebviewManager"),
+            "WKWebView host name must stay gone"
+        );
+        assert!(
+            !notifications.contains("struct WebviewNotificationsState"),
+            "notification state must not keep the WebView name"
+        );
+        assert!(
+            !bootstrap.contains("WryIdMap"),
             "WKWebView window-id map is gone with the WebView host"
         );
         assert!(
-            !webview.contains("api_handler_tx"),
+            !bootstrap.contains("api_handler_tx"),
             "disconnected WebView JS handler channel is gone"
+        );
+    }
+
+    #[test]
+    fn leftover_crates_are_not_default_workspace_members() {
+        let workspace = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"));
+        assert!(
+            workspace
+                .lines()
+                .any(|line| line.trim() == "default-members = [\"crates/ec_cli\"]"),
+            "default-members must stay only the CLI"
+        );
+
+        let linux = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/build-linux.sh"));
+        let macos = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/build-app.sh"));
+        assert!(
+            !linux.contains("ec_overlay_spike") && !macos.contains("ec_overlay_spike"),
+            "dist profiles must not ship the overlay spike"
+        );
+        assert!(
+            linux.contains("-p fig_desktop") && macos.contains("-p fig_desktop"),
+            "dist still builds fig_desktop, which links fig_desktop_api"
         );
     }
 

@@ -15,6 +15,7 @@ use zbus::{MatchRule, Message, MessageStream};
 
 use super::PlatformStateImpl;
 use crate::EventLoopProxy;
+use crate::bootstrap::AUTOCOMPLETE_ID;
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{
     ATSPI_COORD_TYPE_SCREEN, ATSPI_IFACE_ACCESSIBLE, ATSPI_IFACE_TEXT, ATSPI_METHOD_GET_CARET_OFFSET,
@@ -22,7 +23,6 @@ use crate::platform::caret::{
     ATSPI_ROLE_APPLICATION, ATSPI_ROLE_FRAME, ATSPI_ROLE_WINDOW, atspi_state_changed_is_focus_gained,
     atspi_yields_to_ibus, caret_from_atspi_extents,
 };
-use crate::webview::AUTOCOMPLETE_ID;
 
 pub fn spawn(proxy: EventLoopProxy, state: Arc<PlatformStateImpl>) {
     tokio::spawn(async move {

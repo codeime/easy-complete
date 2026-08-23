@@ -10,10 +10,10 @@ use tracing::{debug, error, trace};
 
 use crate::Event;
 use crate::EventLoopProxy;
+use crate::bootstrap::notification::NotificationsState;
 use crate::notification_bus::NOTIFICATION_BUS;
-use crate::webview::notification::WebviewNotificationsState;
 
-pub async fn setup_listeners(notifications_state: Arc<WebviewNotificationsState>, proxy: EventLoopProxy) {
+pub async fn setup_listeners(notifications_state: Arc<NotificationsState>, proxy: EventLoopProxy) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let mut watcher = notify::recommended_watcher(move |res| match res {
@@ -63,8 +63,8 @@ pub async fn setup_listeners(notifications_state: Arc<WebviewNotificationsState>
         #[cfg(target_os = "linux")]
         {
             use crate::Event;
+            use crate::bootstrap::AUTOCOMPLETE_ID;
             use crate::event::WindowEvent;
-            use crate::webview::AUTOCOMPLETE_ID;
             proxy
                 .send_event(Event::WindowEvent {
                     window_id: AUTOCOMPLETE_ID,

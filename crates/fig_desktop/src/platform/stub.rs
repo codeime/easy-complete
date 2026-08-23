@@ -9,9 +9,9 @@ use tao::dpi::Position;
 use tracing::info;
 
 use super::{PlatformBoundEvent, PlatformWindow};
+use crate::bootstrap::notification::NotificationsState;
+use crate::bootstrap::{FigIdMap, WindowId};
 use crate::utils::Rect;
-use crate::webview::notification::WebviewNotificationsState;
-use crate::webview::{FigIdMap, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
 #[derive(Debug)]
@@ -36,7 +36,7 @@ impl PlatformStateImpl {
         event: PlatformBoundEvent,
         _window_target: &EventLoopWindowTarget,
         _window_map: &FigIdMap,
-        _notifications_state: &Arc<WebviewNotificationsState>,
+        _notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
         if matches!(event, PlatformBoundEvent::Initialize) {
             info!("platform stub: no caret source; overlay stays hidden");
@@ -88,7 +88,7 @@ mod tests {
     fn stub_handles_caret_events_as_no_ops() {
         let (proxy, _rx) = crate::event_loop::channel();
         let state = Arc::new(PlatformStateImpl::new(proxy));
-        let notifications = Arc::new(WebviewNotificationsState::default());
+        let notifications = Arc::new(NotificationsState::default());
         state
             .handle(
                 PlatformBoundEvent::CaretPositionUpdateRequested,

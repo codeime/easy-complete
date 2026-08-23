@@ -1,3 +1,8 @@
+//! Desktop process bootstrap: event loop, tray, IPC, then GPUI.
+//!
+//! This directory used to host WKWebView. Overlay and settings are GPUI views
+//! now. Do not put wry / WKWebView back.
+
 pub mod menu;
 pub mod notification;
 pub mod window_id;
@@ -14,14 +19,14 @@ use tao::window::Theme as TaoTheme;
 use tracing::{debug, error, warn};
 
 use self::menu::menu_bar;
-use self::notification::WebviewNotificationsState;
+use self::notification::NotificationsState;
+pub use self::window_id::{AUTOCOMPLETE_ID, DASHBOARD_ID, WindowId};
 use crate::event::{Event, WindowEvent};
 use crate::notification_bus::{JsonNotification, NOTIFICATION_BUS};
 use crate::platform::{PlatformBoundEvent, PlatformState};
 use crate::remote_ipc::RemoteHook;
 #[cfg(not(target_os = "linux"))]
 use crate::tray::build_tray;
-pub use crate::webview::window_id::{AUTOCOMPLETE_ID, DASHBOARD_ID, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget, file_watcher, local_ipc};
 
 pub const DASHBOARD_SIZE: LogicalSize<f64> = LogicalSize::new(820.0, 640.0);
@@ -40,19 +45,19 @@ fn map_theme(theme: &str) -> Option<TaoTheme> {
 
 pub type FigIdMap = HashSet<WindowId, FnvBuildHasher>;
 
-pub struct WebviewManager {
+pub struct AppRuntime {
     pub(crate) fig_id_map: FigIdMap,
     pub(crate) event_rx: flume::Receiver<Event>,
     pub(crate) proxy: EventLoopProxy,
     pub(crate) figterm_state: Arc<FigtermState>,
     pub(crate) platform_state: Arc<PlatformState>,
-    pub(crate) notifications_state: Arc<WebviewNotificationsState>,
+    pub(crate) notifications_state: Arc<NotificationsState>,
     pub(crate) context: Arc<Context>,
     pub(crate) show_dashboard_after_normal_launch: bool,
 }
 
 /// The platform layer reaches for this from callbacks that carry no state of
-/// their own. Everything else is threaded through [`WebviewManager`].
+/// their own. Everything else is threaded through [`AppRuntime`].
 pub static GLOBAL_PROXY: OnceLock<EventLoopProxy> = OnceLock::new();
 
 fn diagnostic_exit(message: &str) -> ! {
@@ -62,7 +67,7 @@ fn diagnostic_exit(message: &str) -> ! {
     std::process::exit(1);
 }
 
-impl WebviewManager {
+impl AppRuntime {
     #[allow(unused_variables)]
     #[allow(unused_mut)]
     pub fn new(context: Arc<Context>, visible: bool, show_dashboard_after_normal_launch: bool) -> Self {
@@ -83,7 +88,7 @@ impl WebviewManager {
 
         let figterm_state = Arc::new(FigtermState::default());
         let platform_state = Arc::new(PlatformState::new(proxy.clone()));
-        let notifications_state = Arc::new(WebviewNotificationsState::default());
+        let notifications_state = Arc::new(NotificationsState::default());
 
         Self {
             fig_id_map: Default::default(),
@@ -133,7 +138,7 @@ impl WebviewManager {
 
         file_watcher::setup_listeners(self.notifications_state.clone(), self.proxy.clone()).await;
 
-        init_webview_notification_listeners(self.proxy.clone()).await;
+        init_notification_listeners(self.proxy.clone()).await;
 
         let menu_proxy = self.proxy.clone();
         muda::MenuEvent::set_event_handler(Some({
@@ -236,7 +241,7 @@ impl WebviewManager {
     }
 }
 
-async fn init_webview_notification_listeners(proxy: EventLoopProxy) {
+async fn init_notification_listeners(proxy: EventLoopProxy) {
     #[allow(unused_macros)]
     macro_rules! watcher {
         ($type:ident, $name:expr, $on_update:expr) => {{

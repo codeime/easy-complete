@@ -8,6 +8,10 @@ members = [
     "crates/macos-utils/appkit-nsworkspace-bindings",
     "tests/figterm2",
 ]
+# `cargo test` / `cargo build` without --workspace only builds crates/ec_cli.
+# fig_desktop_api is the leftover install-request crate still linked by fig_desktop
+# (macOS dist needs it). ec_overlay_spike is a Linux overlay lab binary and is
+# not in any dist profile.
 default-members = ["crates/ec_cli"]
 
 [workspace.package]

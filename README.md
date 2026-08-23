@@ -240,6 +240,10 @@ cargo fmt                                                         # format
 cargo test -p <crate_name>                                        # test a crate
 ```
 
+`cargo test` / `cargo build` without `-p` or `--workspace` only build `crates/ec_cli`
+(`default-members`). `fig_desktop_api` is still linked by `fig_desktop` (macOS dist).
+`ec_overlay_spike` is a Linux overlay lab binary and is not shipped.
+
 ### TypeScript
 
 ```bash

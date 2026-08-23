@@ -154,7 +154,7 @@ Relevant settings:
 
 The WebView overlay and dashboard sources (`packages/autocomplete-app`, `packages/dashboard-app`) were deleted after v2.2.2 — nothing loaded them once both surfaces went native. Read them out of git when you need the legacy insertion / ranking behavior as a reference. The repo carries no tags, so use the v2.2.2 bump commit `edf0936a`: `git show edf0936a:packages/autocomplete-app/src/state/insertion.ts`, or `git worktree add /tmp/ec-baseline edf0936a` for a full tree to diff against.
 
-The Rust half of that bridge is gone too: `fig_desktop/src/protocol/` (the `fig://`, `ecresource://` and `spec://` handlers), `fig_desktop/src/request/`, and most of `fig_desktop_api`. `crates/fig_desktop/src/webview/` keeps its name but is now just the app bootstrap — `WebviewManager` owns the event loop, tray and IPC, and starts GPUI. Do not restore `#![allow(dead_code)]` on those modules; it is what let the bridge rot in place unnoticed. Note that `mod` versus `pub mod` matters here: a `pub mod` at the crate root exempts its items from both the `dead_code` lint and clippy's `avoid_breaking_exported_api` lints, which hides exactly this class of leftover.
+The Rust half of that bridge is gone too: `fig_desktop/src/protocol/` (the `fig://`, `ecresource://` and `spec://` handlers), `fig_desktop/src/request/`, and most of `fig_desktop_api`. `crates/fig_desktop/src/bootstrap/` is the app bootstrap — `AppRuntime` owns the event loop, tray and IPC, and starts GPUI. Do not restore `#![allow(dead_code)]` on those modules; it is what let the bridge rot in place unnoticed. Note that `mod` versus `pub mod` matters here: a `pub mod` at the crate root exempts its items from both the `dead_code` lint and clippy's `avoid_breaking_exported_api` lints, which hides exactly this class of leftover.
 
 `crates/fig_desktop/src/platform/mod.rs` selects the live backend: macOS → `macos.rs`, Linux → `linux_caret/`, Windows → `windows_caret.rs`, otherwise `stub.rs`. The pre-GPUI `platform/linux/` tree and `platform/windows.rs` are **deleted**; do not restore them and do not flip a `cfg` to revive them. Linux overlay placement is `ec_gpui::linux` (X11); Windows is `ec_gpui::windows` plus `windows_overlay`. `cargo clippy --workspace -- -D warnings` on macOS still covers the shipping face. Linux CI clippy covers `fig_desktop` on Ubuntu; it does not verify macOS Accessibility, IME, or DMG.
 
@@ -218,7 +218,8 @@ To keep the bundle small, the sync script supports excluding whole namespaces vi
 | `fig_input_method` | macOS IMKit input method helper                                  |
 | `ec_hitoolbox`     | The HIToolbox palette lists, shared by the IME and the CLI        |
 | `fig_integrations` | Shell/terminal/editor integration install logic                  |
-| `fig_desktop_api`  | All that is left of the WebView bridge: the `install` request      |
+| `fig_desktop_api`  | Leftover install request from the WebView bridge; still linked by fig_desktop IPC. Not in `default-members`. |
+| `ec_overlay_spike` | Linux overlay lab binary (window type / ABOVE). Not shipped, not in `default-members`. |
 | `fig_ipc`          | Unix socket IPC primitives                                       |
 | `fig_proto`        | Generated Protobuf message types                                 |
 | `fig_settings`     | Settings persistence (JSON)                                      |

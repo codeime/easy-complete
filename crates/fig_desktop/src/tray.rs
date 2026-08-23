@@ -13,8 +13,8 @@ use tao::event_loop::ControlFlow;
 use tracing::{error, trace};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
+use crate::bootstrap::LOGIN_PATH;
 use crate::event::{Event, ShowMessageNotification, WindowEvent};
-use crate::webview::LOGIN_PATH;
 use crate::{AUTOCOMPLETE_ID, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget};
 
 // macro_rules! icon {
@@ -171,7 +171,7 @@ fn load_icon(path: impl AsRef<std::path::Path>) -> Option<Icon> {
     Icon::from_rgba(rgba, width, height).ok()
 }
 
-#[allow(dead_code)] // used by legacy WebviewManager path; GPUI host uses build_tray_icon
+#[allow(dead_code)] // used by AppRuntime on macOS/Windows; Linux uses linux_tray
 pub async fn build_tray(
     _event_loop_window_target: &EventLoopWindowTarget,
     _figterm_state: &FigtermState,

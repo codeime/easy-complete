@@ -4,9 +4,9 @@ use fig_proto::local::{
 };
 use tao::dpi::{LogicalPosition, LogicalSize};
 
+use crate::bootstrap::WindowId;
 use crate::event::{WindowEvent, WindowPosition};
 use crate::platform::PlatformState;
-use crate::webview::WindowId;
 use crate::{AUTOCOMPLETE_ID, Event, EventLoopProxy};
 
 /// The overlay is positioned relative to the caret, so a degenerate rect is not a small error —

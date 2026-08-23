@@ -17,14 +17,14 @@ use time::OffsetDateTime;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+use crate::bootstrap::notification::NotificationsState;
 use crate::event::{EmitEventName, Event, WindowEvent};
 use crate::platform::PlatformBoundEvent;
-use crate::webview::notification::WebviewNotificationsState;
 use crate::{AUTOCOMPLETE_ID, EventLoopProxy};
 
 #[derive(Debug, Clone)]
 pub struct RemoteHook {
-    pub notifications_state: Arc<WebviewNotificationsState>,
+    pub notifications_state: Arc<NotificationsState>,
     pub proxy: EventLoopProxy,
 }
 
@@ -67,7 +67,7 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
         });
 
         // GPUI never inserts here. Skip UTF-16 / protobuf / base64 unless a
-        // leftover WebView subscriber is actually listening.
+        // window is actually subscribed.
         if !self.notifications_state.subscriptions.is_empty() {
             let utf16_cursor_position = hook
                 .text
@@ -98,7 +98,7 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
                 let mut encoded = BytesMut::new();
                 message.encode(&mut encoded).unwrap();
 
-                debug!(%message_id, "Sending edit buffer change notification to webview");
+                debug!(%message_id, "Sending edit buffer change notification");
 
                 self.proxy
                     .send_event(Event::WindowEvent {

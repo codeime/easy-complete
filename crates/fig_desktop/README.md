@@ -22,6 +22,7 @@ cargo run --bin ec -- engine complete --buffer "git ch"
 
 ## Layout
 
+- `src/bootstrap/` — event loop, tray, IPC, starts GPUI (`AppRuntime`)
 - `src/gpui_host.rs` — process-wide `NSApplication`, event dispatch
 - `src/overlay.rs` — completion requests, insertion, caret placement
 - `src/settings_ui.rs` — native settings window

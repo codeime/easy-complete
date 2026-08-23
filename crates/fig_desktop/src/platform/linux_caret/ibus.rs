@@ -19,9 +19,9 @@ use zbus::{MatchRule, MessageStream};
 
 use super::PlatformStateImpl;
 use crate::EventLoopProxy;
+use crate::bootstrap::AUTOCOMPLETE_ID;
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{caret_from_ibus_absolute, caret_from_ibus_relative};
-use crate::webview::AUTOCOMPLETE_ID;
 
 pub(crate) const IBUS_INPUT_CONTEXT_IFACE: &str = "org.freedesktop.IBus.InputContext";
 

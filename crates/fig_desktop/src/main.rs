@@ -6,6 +6,7 @@ mod overlay;
 mod permissions;
 mod settings_ui;
 // mod figterm;
+mod bootstrap;
 mod file_watcher;
 mod install;
 #[cfg(target_os = "linux")]
@@ -17,13 +18,14 @@ mod remote_ipc;
 mod tray;
 mod update;
 mod utils;
-mod webview;
 
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use bootstrap::AppRuntime;
+pub use bootstrap::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID};
 use clap::Parser;
 use event::Event;
 use fig_log::{LogArgs, initialize_logging};
@@ -38,8 +40,6 @@ use sysinfo::get_current_pid;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tracing::{error, warn};
 use url::Url;
-use webview::WebviewManager;
-pub use webview::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID};
 
 // #[global_allocator]
 // static GLOBAL: Jemalloc = Jemalloc;
@@ -228,7 +228,7 @@ async fn async_main() -> ExitCode {
     let defer_dashboard_for_modern_login_item = false;
     let visible = !cli.no_dashboard && !silent_launch && !defer_dashboard_for_modern_login_item;
 
-    let webview_manager = WebviewManager::new(ctx, visible, defer_dashboard_for_modern_login_item);
+    let runtime = AppRuntime::new(ctx, visible, defer_dashboard_for_modern_login_item);
     let auto_updates_enabled = !fig_settings::settings::get_bool_or("app.disableAutoupdates", false);
     if auto_updates_enabled {
         // start_automatic_checks dispatches to the main thread asynchronously,
@@ -241,7 +241,7 @@ async fn async_main() -> ExitCode {
             let _ = update::check_for_update(false, false).await;
         });
     }
-    webview_manager.run().await.unwrap();
+    runtime.run().await.unwrap();
     ExitCode::SUCCESS
 }
 

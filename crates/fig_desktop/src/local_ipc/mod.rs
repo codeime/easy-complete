@@ -15,9 +15,9 @@ use fig_settings::{Settings, State, StateProvider};
 use fig_util::directories;
 use tracing::{debug, error, trace, warn};
 
+use crate::bootstrap::notification::NotificationsState;
 use crate::event::Event;
 use crate::platform::PlatformState;
-use crate::webview::notification::WebviewNotificationsState;
 use crate::{AUTOCOMPLETE_ID, DASHBOARD_ID, EventLoopProxy};
 
 pub enum LocalResponse {
@@ -72,7 +72,7 @@ impl ContextArcProvider for LocalIpcContext {
 pub async fn start_local_ipc(
     platform_state: Arc<PlatformState>,
     figterm_state: Arc<FigtermState>,
-    webview_notifications_state: Arc<WebviewNotificationsState>,
+    notifications_state: Arc<NotificationsState>,
     proxy: EventLoopProxy,
 ) -> Result<()> {
     let socket_path = directories::desktop_socket_path()?;
@@ -96,7 +96,7 @@ pub async fn start_local_ipc(
             stream,
             platform_state.clone(),
             figterm_state.clone(),
-            webview_notifications_state.clone(),
+            notifications_state.clone(),
             proxy.clone(),
             LocalIpcContext::new(),
         ));
@@ -109,7 +109,7 @@ async fn handle_local_ipc<Ctx>(
     mut stream: BufferedUnixStream,
     platform_state: Arc<PlatformState>,
     figterm_state: Arc<FigtermState>,
-    webview_notifications_state: Arc<WebviewNotificationsState>,
+    notifications_state: Arc<NotificationsState>,
     proxy: EventLoopProxy,
     ctx: Ctx,
 ) where
@@ -147,12 +147,9 @@ async fn handle_local_ipc<Ctx>(
                             LogLevel(command) => commands::log_level(command),
                             Login(_) => commands::login(&proxy).await,
                             Logout(_) => commands::logout(&proxy).await,
-                            DumpState(command) => commands::dump_state(
-                                command,
-                                &figterm_state,
-                                &webview_notifications_state,
-                                &platform_state,
-                            ),
+                            DumpState(command) => {
+                                commands::dump_state(command, &figterm_state, &notifications_state, &platform_state)
+                            },
                             ConnectToIbus(_) => commands::connect_to_ibus(proxy.clone(), &platform_state).await,
                             BundleMetadata(_) => commands::bundle_metadata(&ctx.context_arc()).await,
                             Update(_) => {

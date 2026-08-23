@@ -10,14 +10,14 @@ use tao::event_loop::ControlFlow;
 use tracing::{debug, error, info, trace};
 use tray_icon::TrayIcon;
 
+use crate::bootstrap::notification::NotificationsState;
+use crate::bootstrap::{AUTOCOMPLETE_ID, DASHBOARD_ID, FigIdMap, WindowId};
 use crate::event::{Event, ShowMessageNotification, WindowEvent};
 use crate::overlay::OverlayController;
 use crate::platform::PlatformState;
 use crate::tray;
 #[cfg(not(target_os = "linux"))]
 use crate::tray::{get_context_menu, get_icon};
-use crate::webview::notification::WebviewNotificationsState;
-use crate::webview::{DASHBOARD_ID, FigIdMap, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 use fig_os_shim::Context;
 use fig_remote_ipc::figterm::FigtermState;
@@ -26,7 +26,7 @@ pub struct DesktopHost {
     pub fig_id_map: FigIdMap,
     pub figterm_state: Arc<FigtermState>,
     pub platform_state: Arc<PlatformState>,
-    pub notifications_state: Arc<WebviewNotificationsState>,
+    pub notifications_state: Arc<NotificationsState>,
     #[allow(dead_code)]
     pub context: Arc<Context>,
     pub show_dashboard_after_normal_launch: bool,
@@ -34,7 +34,7 @@ pub struct DesktopHost {
     pub window_target: EventLoopWindowTarget,
     pub overlay: OverlayController,
     pub settings: Option<crate::settings_ui::SettingsHandle>,
-    #[allow(dead_code)] // retained for macOS/WebView host; Linux uses linux_tray task
+    #[allow(dead_code)] // retained for macOS/Windows tray; Linux uses linux_tray task
     pub tray: Option<TrayIcon>,
 }
 
@@ -87,7 +87,7 @@ impl DesktopHost {
             Event::MenuClicked(id) => {
                 info!(%id, "Menu Event");
                 let menu_event = MenuEvent { id: muda::MenuId(id) };
-                crate::webview::menu::handle_event(&menu_event, &self.proxy);
+                crate::bootstrap::menu::handle_event(&menu_event, &self.proxy);
                 tray::handle_event(&menu_event, &self.proxy);
             },
             Event::PermissionSnapshot(snapshot) => {
@@ -179,7 +179,7 @@ impl DesktopHost {
     fn dispatch_window_event(&mut self, window_id: WindowId, window_event: WindowEvent, cx: &mut App) {
         match window_id {
             id if id == DASHBOARD_ID => self.dispatch_settings_event(window_event, cx),
-            id if id == crate::webview::AUTOCOMPLETE_ID => match window_event {
+            id if id == AUTOCOMPLETE_ID => match window_event {
                 WindowEvent::Hide | WindowEvent::Close => self.overlay.hide(cx),
                 WindowEvent::SetEnabled(enabled) => self.overlay.set_enabled(enabled, cx),
                 WindowEvent::UpdateWindowGeometry { position, .. } => {
@@ -209,7 +209,7 @@ impl DesktopHost {
                     self.dispatch_settings_event(event, cx);
                 }
             },
-            other => trace!(?other, "Ignoring webview-only event on native settings"),
+            other => trace!(?other, "Ignoring leftover window event on native settings"),
         }
     }
 

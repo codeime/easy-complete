@@ -1,10 +1,11 @@
-//! Standalone GPUI overlay spike.
+//! Standalone GPUI overlay lab binary. Not shipped. Not in `default-members`.
 //!
 //! Run with:
 //! `cargo run -p ec_overlay_spike --bin ec-overlay-spike`
 //!
 //! The window is a transparent, non-activating `PopUp` that stays above other
 //! apps. Click a row or use Up/Down; Esc hides. This does not talk to figterm.
+//! Dist profiles (`build-app.sh`, `build-linux.sh`) do not build this crate.
 
 use ec_gpui::{
     OVERLAY_WINDOW_TITLE, OverlayState, SuggestionItem, open_overlay_window_with_visibility, set_overlay_visible_titled,

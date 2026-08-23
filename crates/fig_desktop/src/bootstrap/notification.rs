@@ -1,3 +1,8 @@
+//! Protobuf notification subscriptions for native windows.
+//!
+//! GPUI overlay does not subscribe. Kept for dump-state and leftover IPC
+//! listeners. Do not wire a WebView back through this.
+
 use anyhow::Result;
 use base64::prelude::*;
 use bytes::BytesMut;
@@ -8,14 +13,14 @@ use fig_proto::prost::Message;
 use fnv::FnvBuildHasher;
 use tracing::debug;
 
+use super::WindowId;
 use crate::EventLoopProxy;
 use crate::event::{EmitEventName, Event, WindowEvent};
-use crate::webview::WindowId;
 
 #[derive(Debug, Default)]
-pub struct WebviewNotificationWindowState(pub DashMap<NotificationType, i64, FnvBuildHasher>);
+pub struct NotificationWindowState(pub DashMap<NotificationType, i64, FnvBuildHasher>);
 
-impl std::ops::Deref for WebviewNotificationWindowState {
+impl std::ops::Deref for NotificationWindowState {
     type Target = DashMap<NotificationType, i64, FnvBuildHasher>;
 
     fn deref(&self) -> &Self::Target {
@@ -24,11 +29,11 @@ impl std::ops::Deref for WebviewNotificationWindowState {
 }
 
 #[derive(Debug, Default)]
-pub struct WebviewNotificationsState {
-    pub subscriptions: DashMap<WindowId, WebviewNotificationWindowState, FnvBuildHasher>,
+pub struct NotificationsState {
+    pub subscriptions: DashMap<WindowId, NotificationWindowState, FnvBuildHasher>,
 }
 
-impl WebviewNotificationsState {
+impl NotificationsState {
     pub async fn broadcast_notification_all(
         &self,
         notification_type: &NotificationType,
@@ -39,7 +44,7 @@ impl WebviewNotificationsState {
             return Ok(());
         }
 
-        debug!(?notification_type, "Broadcasting webview notification");
+        debug!(?notification_type, "Broadcasting window notification");
 
         for sub in self.subscriptions.iter() {
             let message_id = match sub.get(notification_type) {
@@ -68,7 +73,7 @@ impl WebviewNotificationsState {
     }
 }
 
-impl serde::Serialize for WebviewNotificationWindowState {
+impl serde::Serialize for NotificationWindowState {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -83,7 +88,7 @@ impl serde::Serialize for WebviewNotificationWindowState {
     }
 }
 
-impl serde::Serialize for WebviewNotificationsState {
+impl serde::Serialize for NotificationsState {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,

@@ -14,8 +14,8 @@ use x11rb::rust_connection::RustConnection;
 
 use super::{ActiveWindow, PlatformStateImpl};
 use crate::EventLoopProxy;
+use crate::bootstrap::AUTOCOMPLETE_ID;
 use crate::event::{Event as HostEvent, WindowEvent};
-use crate::webview::AUTOCOMPLETE_ID;
 
 pub fn spawn(proxy: EventLoopProxy, state: Arc<PlatformStateImpl>) {
     std::thread::Builder::new()

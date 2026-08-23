@@ -15,10 +15,10 @@ use tao::event_loop::ControlFlow;
 use tracing::error;
 
 use super::{LocalResponse, LocalResult};
+use crate::bootstrap::DASHBOARD_SIZE;
+use crate::bootstrap::notification::NotificationsState;
 use crate::event::{Event, WindowEvent};
 use crate::platform::PlatformState;
-use crate::webview::DASHBOARD_SIZE;
-use crate::webview::notification::WebviewNotificationsState;
 use crate::{AUTOCOMPLETE_ID, DASHBOARD_ID, EventLoopProxy, platform};
 
 pub async fn debug(command: DebugModeCommand, proxy: &EventLoopProxy) -> LocalResult {
@@ -226,15 +226,16 @@ pub async fn logout(proxy: &EventLoopProxy) -> LocalResult {
 pub fn dump_state(
     command: DumpStateCommand,
     figterm_state: &FigtermState,
-    webview_notifications_state: &WebviewNotificationsState,
+    notifications_state: &NotificationsState,
     platform_state: &PlatformState,
 ) -> LocalResult {
     let json = match command.r#type() {
         DumpStateType::DumpStateFigterm => {
             serde_json::to_string_pretty(&figterm_state).unwrap_or_else(|err| format!("unable to dump: {err}"))
         },
-        DumpStateType::DumpStateWebNotifications => serde_json::to_string_pretty(&webview_notifications_state)
-            .unwrap_or_else(|err| format!("unable to dump: {err}")),
+        DumpStateType::DumpStateWebNotifications => {
+            serde_json::to_string_pretty(&notifications_state).unwrap_or_else(|err| format!("unable to dump: {err}"))
+        },
         DumpStateType::DumpStatePlatform => {
             serde_json::to_string_pretty(&platform_state).unwrap_or_else(|err| format!("unable to dump: {err}"))
         },

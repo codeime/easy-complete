@@ -13,9 +13,9 @@ use tao::dpi::Position;
 use tracing::info;
 
 use super::{PlatformBoundEvent, PlatformWindow};
+use crate::bootstrap::notification::NotificationsState;
+use crate::bootstrap::{FigIdMap, WindowId};
 use crate::utils::Rect;
-use crate::webview::notification::WebviewNotificationsState;
-use crate::webview::{FigIdMap, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
 mod atspi;
@@ -75,7 +75,7 @@ impl PlatformStateImpl {
         event: PlatformBoundEvent,
         _window_target: &EventLoopWindowTarget,
         _window_map: &FigIdMap,
-        _notifications_state: &Arc<WebviewNotificationsState>,
+        _notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
         if matches!(event, PlatformBoundEvent::Initialize) {
             info!("linux caret host: X11 focus + IBus + AT-SPI; overlay hidden until a caret arrives");

@@ -17,12 +17,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{PlatformBoundEvent, PlatformWindow};
+use crate::bootstrap::AUTOCOMPLETE_ID;
+use crate::bootstrap::notification::NotificationsState;
+use crate::bootstrap::{FigIdMap, WindowId};
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{CaretOnScreen, caret_from_win32_client_caret};
 use crate::utils::Rect;
-use crate::webview::AUTOCOMPLETE_ID;
-use crate::webview::notification::WebviewNotificationsState;
-use crate::webview::{FigIdMap, WindowId};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
 static SAW_CARET: AtomicBool = AtomicBool::new(false);
@@ -47,7 +47,7 @@ impl PlatformStateImpl {
         event: PlatformBoundEvent,
         _window_target: &EventLoopWindowTarget,
         _window_map: &FigIdMap,
-        _notifications_state: &Arc<WebviewNotificationsState>,
+        _notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
         if matches!(event, PlatformBoundEvent::Initialize) {
             info!("windows caret host: GetGUIThreadInfo; overlay hidden until a caret arrives");

@@ -6,8 +6,8 @@ use tao::event_loop::ControlFlow;
 use tao::window::Theme;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::bootstrap::WindowId;
 use crate::platform::PlatformBoundEvent;
-use crate::webview::WindowId;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
