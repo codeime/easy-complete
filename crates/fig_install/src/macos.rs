@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use fig_util::consts::{APP_BUNDLE_ID, CLI_BINARY_NAME, system_paths};
 use fig_util::macos::BUNDLE_CONTENTS_MACOS_PATH;
 use fig_util::{APP_BUNDLE_NAME, directories};
-use regex::Regex;
 use security_framework::authorization::{Authorization, AuthorizationItemSetBuilder, Flags as AuthorizationFlags};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -49,7 +48,7 @@ pub(crate) async fn update(
 
     // validate the dmg hash
     let expected_hash = update.sha256;
-    if expected_hash != real_hash {
+    if !crate::macos_update_policy::dmg_hash_matches(&expected_hash, &real_hash) {
         return Err(Error::UpdateFailed(format!(
             "dmg hash mismatch. Expected: {expected_hash}, Actual: {real_hash}"
         )));
@@ -75,14 +74,9 @@ pub(crate) async fn update(
 
     let plist = String::from_utf8_lossy(&hdiutil_attach_output.stdout).to_string();
 
-    let regex = Regex::new(r"<key>mount-point</key>\s*<\S+>([^<]+)</\S+>").unwrap();
     let mount_point = PathBuf::from(
-        regex
-            .captures(&plist)
-            .unwrap()
-            .get(1)
-            .expect("mount-point will always exist")
-            .as_str(),
+        crate::macos_update_policy::hdiutil_mount_point(&plist)
+            .ok_or_else(|| Error::UpdateFailed("hdiutil attach did not report a mount-point".into()))?,
     );
 
     let all_entries = std::fs::read_dir(&mount_point)?
@@ -99,21 +93,24 @@ pub(crate) async fn update(
         .iter()
         .filter(|entry| {
             let entry_path = entry.path();
-            entry_path.is_dir() && entry_path.extension() == Some(OsStr::new("app"))
+            entry_path.is_dir() && crate::macos_update_policy::is_app_bundle_name(&entry_path)
         })
         .collect::<Vec<_>>();
 
-    if app_entries.is_empty() {
-        return Err(Error::UpdateFailed(format!(
-            "the update dmg is missing a .app directory: {}",
-            all_entries_name.join(", ")
-        )));
-    }
-    if app_entries.len() > 1 {
-        return Err(Error::UpdateFailed(format!(
-            "the update dmg has more than one .app directory: {}",
-            all_entries_name.join(", ")
-        )));
+    match crate::macos_update_policy::dmg_app_layout(app_entries.len()) {
+        crate::macos_update_policy::DmgAppLayout::One => {},
+        crate::macos_update_policy::DmgAppLayout::Missing => {
+            return Err(Error::UpdateFailed(format!(
+                "the update dmg is missing a .app directory: {}",
+                all_entries_name.join(", ")
+            )));
+        },
+        crate::macos_update_policy::DmgAppLayout::Multiple(_) => {
+            return Err(Error::UpdateFailed(format!(
+                "the update dmg has more than one .app directory: {}",
+                all_entries_name.join(", ")
+            )));
+        },
     }
 
     let mount_app_path = app_entries[0].path();

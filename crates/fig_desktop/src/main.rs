@@ -19,6 +19,7 @@ mod remote_ipc;
 mod settings_ui;
 mod tray;
 mod update;
+mod update_policy;
 mod utils;
 
 #[cfg(target_os = "linux")]

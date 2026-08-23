@@ -18,7 +18,8 @@ use tracing::{debug, warn};
 
 use crate::launch_at_login_policy::{
     LEGACY_LAUNCH_AGENT_LABEL as LEGACY_LABEL, SmAppServiceStatus,
-    UPSTREAM_LEGACY_LAUNCH_AGENT_LABEL as UPSTREAM_LEGACY_LABEL, sm_app_service_already_in_desired_state,
+    UPSTREAM_LEGACY_LAUNCH_AGENT_LABEL as UPSTREAM_LEGACY_LABEL, legacy_launch_agent_keep_alive,
+    legacy_launch_agent_program_arguments, legacy_launch_agent_run_at_load, sm_app_service_already_in_desired_state,
     sm_app_service_counts_as_enabled,
 };
 use crate::{Error, Result};
@@ -148,14 +149,12 @@ fn set_legacy_launch_agent_enabled(enabled: bool) -> Result<()> {
 
 fn legacy_launch_agent(executable: PathBuf) -> LaunchdPlist {
     LaunchdPlist::new(LEGACY_LABEL)
-        .program_arguments([
-            executable.to_string_lossy().to_string(),
-            "--is-startup".to_owned(),
-            "--no-dashboard".to_owned(),
-        ])
+        .program_arguments(legacy_launch_agent_program_arguments(
+            executable.to_string_lossy().into_owned(),
+        ))
         .associated_bundle_identifiers([APP_BUNDLE_ID])
-        .run_at_load(true)
-        .keep_alive(false)
+        .run_at_load(legacy_launch_agent_run_at_load())
+        .keep_alive(legacy_launch_agent_keep_alive())
 }
 
 fn current_app_executable() -> Result<PathBuf> {

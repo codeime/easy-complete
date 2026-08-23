@@ -77,7 +77,11 @@ mod macos {
             _update: id,
             _in_immediate_focus: BOOL,
         ) -> BOOL {
-            YES
+            if crate::update_policy::sparkle_scheduled_update_presents_immediately() {
+                YES
+            } else {
+                NO
+            }
         }
 
         extern "C" fn will_handle_showing(_this: &Object, _cmd: Sel, _handle: BOOL, _update: id, _state: id) {
@@ -176,8 +180,18 @@ mod macos {
         unsafe {
             let updater: id = msg_send![controller, updater];
             if updater != nil {
-                let _: () = msg_send![updater, setAutomaticallyChecksForUpdates: YES];
-                let _: () = msg_send![updater, setAutomaticallyDownloadsUpdates: NO];
+                let checks = if crate::update_policy::sparkle_automatically_checks_for_updates() {
+                    YES
+                } else {
+                    NO
+                };
+                let downloads = if crate::update_policy::sparkle_automatically_downloads_updates() {
+                    YES
+                } else {
+                    NO
+                };
+                let _: () = msg_send![updater, setAutomaticallyChecksForUpdates: checks];
+                let _: () = msg_send![updater, setAutomaticallyDownloadsUpdates: downloads];
                 info!(
                     "Sparkle updater controller ready (automatic checks enabled, auto-download disabled to force a prompt)"
                 );

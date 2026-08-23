@@ -16,14 +16,21 @@ pub struct CaretPosition {
     pub valid: bool,
     pub x: f64,
     pub y: f64,
+    pub width: f64,
     pub height: f64,
+    /// AX selected-range length. Overlay usability (`length > 1` is a
+    /// selection, not a caret) lives in `fig_desktop::platform::caret` so
+    /// Linux CI can pin it. `valid` here is only "the AX calls succeeded".
+    pub selected_length: i64,
 }
 
 const INVALID_CARET_POSITION: CaretPosition = CaretPosition {
     valid: false,
     x: 0.0,
     y: 0.0,
+    width: 0.0,
     height: 0.0,
+    selected_length: 0,
 };
 
 #[allow(clippy::missing_safety_doc)]
@@ -74,12 +81,6 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
         selected_range_value.as_concrete_TypeRef()
     };
 
-    // https://linear.app/fig/issue/ENG-109/ - autocomplete-popup-shows-when-copying-and-pasting-in-terminal
-    if selected_text_range.length > 1 {
-        debug!("selectedRange length > 1");
-        return INVALID_CARET_POSITION;
-    }
-
     let select_bounds_result = ax_call(|x: *mut CFTypeRef| {
         AXUIElementCopyParameterizedAttributeValue(
             focused_element.as_concrete_TypeRef(),
@@ -107,18 +108,16 @@ pub unsafe fn get_caret_position(extend_range: bool) -> CaretPosition {
             return INVALID_CARET_POSITION;
         },
     };
-    // Sanity check: prevents flashing autocomplete in bottom corner
-    if select_rect.size.width == 0.0 && select_rect.size.height == 0.0 {
-        debug!("Prevents flashing autocomplete in bottom corner");
-        return INVALID_CARET_POSITION;
-    }
 
-    // Tauri uses Quartz coordinates (don't need to convert coordinates to Cocoa like macos)
+    // Quartz coordinates. Overlay usability (selection vs caret, 0×0 box)
+    // is `macos_ax_caret_is_usable` in fig_desktop — not live AX.
     let result = CaretPosition {
         valid: true,
         x: select_rect.origin.x,
         y: select_rect.origin.y,
+        width: select_rect.size.width,
         height: select_rect.size.height,
+        selected_length: selected_text_range.length as i64,
     };
     debug!("Got position {result:?}");
     result

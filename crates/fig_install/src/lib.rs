@@ -6,6 +6,9 @@ pub mod index;
 mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
+/// DMG hash / mount-point / `.app` layout. Compiled on every OS so Linux CI
+/// pins them. Live `hdiutil` stays `cfg(macos)`.
+mod macos_update_policy;
 #[cfg(windows)]
 mod windows;
 

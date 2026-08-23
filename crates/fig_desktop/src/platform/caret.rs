@@ -323,6 +323,24 @@ pub(crate) fn overlay_parks_caret_when_screens_empty(os_is_macos: bool, origin: 
     }
 }
 
+/// AX `kAXBoundsForRange` width is ignored for placement. A 0-width insertion
+/// point still needs a box, so the overlay sits on a fixed 10px caret.
+pub(crate) const MACOS_AX_DEFAULT_CARET_WIDTH: f64 = 10.0;
+
+/// A selected range longer than one character is copy/paste, not a caret
+/// (ENG-109). A 0×0 bounds box is what AX returns when the caret is gone —
+/// placing the list there flashes it in the bottom corner. `macos.rs` applies
+/// this; `caret_position.rs` only reports whether the AX calls succeeded.
+/// Not live AX.
+pub(crate) fn macos_ax_caret_is_usable(selected_range_length: i64, width: f64, height: f64) -> bool {
+    selected_range_length <= 1 && !(width == 0.0 && height == 0.0)
+}
+
+/// Desktop posts this so the IME helper re-queries the caret for IME-only
+/// terminals (Otty / Ghostty / Kitty). The name is a leftover Amazon Q
+/// identifier: both processes must keep it in lockstep. Not live IMK.
+pub(crate) const MACOS_IME_CARET_REQUEST_NOTIFICATION: &str = "com.amazon.codewhisperer.edit_buffer_updated";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,6 +476,70 @@ mod tests {
         assert!(
             host.contains("autocomplete_may_run"),
             "ReloadSettings must use the shared disable/AX gate"
+        );
+    }
+
+    #[test]
+    fn macos_ax_caret_rejects_a_selection_and_a_zero_box() {
+        assert!(macos_ax_caret_is_usable(0, 0.0, 16.0));
+        assert!(macos_ax_caret_is_usable(1, 8.0, 16.0));
+        assert!(
+            macos_ax_caret_is_usable(1, 0.0, 16.0),
+            "zero-width insertion point is still a caret"
+        );
+        assert!(
+            !macos_ax_caret_is_usable(2, 8.0, 16.0),
+            "copy/paste selection is not a caret"
+        );
+        assert!(
+            !macos_ax_caret_is_usable(0, 0.0, 0.0),
+            "0×0 AX box flashes the overlay in the corner"
+        );
+        assert_eq!(MACOS_AX_DEFAULT_CARET_WIDTH, 10.0);
+        let macos = include_str!("macos.rs");
+        assert!(
+            macos.contains("macos_ax_caret_is_usable") && macos.contains("MACOS_AX_DEFAULT_CARET_WIDTH"),
+            "AX host must apply the shared caret-usable gate and default width"
+        );
+        assert!(
+            !macos.contains("pub const DEFAULT_CARET_WIDTH"),
+            "do not keep a second default caret width in macos.rs"
+        );
+        let ax = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../macos-utils/src/caret_position.rs"
+        ));
+        assert!(
+            !ax.contains("selected_text_range.length > 1") && !ax.contains("width == 0.0 && height == 0.0"),
+            "caret_position.rs reports AX success; overlay usability lives in caret.rs"
+        );
+        assert!(
+            ax.contains("selected_length") && ax.contains("width: select_rect.size.width"),
+            "AX helper must hand the range length and bounds size to the shared gate"
+        );
+    }
+
+    #[test]
+    fn ime_caret_request_notification_is_shared_with_the_helper() {
+        assert_eq!(
+            MACOS_IME_CARET_REQUEST_NOTIFICATION,
+            "com.amazon.codewhisperer.edit_buffer_updated"
+        );
+        let macos = include_str!("macos.rs");
+        assert!(
+            macos.contains("MACOS_IME_CARET_REQUEST_NOTIFICATION")
+                && macos.contains(MACOS_IME_CARET_REQUEST_NOTIFICATION),
+            "desktop must post the shared IME caret-request name"
+        );
+        let imk = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_input_method/src/imk.rs"));
+        assert!(
+            imk.contains(MACOS_IME_CARET_REQUEST_NOTIFICATION),
+            "IME helper must listen for the same leftover Amazon Q notification"
+        );
+        let wire = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_input_method/src/wire.rs"));
+        assert!(
+            wire.contains("CARET_REQUEST_NOTIFICATION") && wire.contains(MACOS_IME_CARET_REQUEST_NOTIFICATION),
+            "IME wire policy must name the same notification"
         );
     }
 
@@ -777,6 +859,12 @@ mod tests {
         assert!(
             !install.contains("GNOME_SHELL_EXTENSION"),
             "InstallComponents must not keep a GNOME Shell extension bit"
+        );
+        let util_lib = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_util/src/lib.rs"));
+        assert!(
+            util_lib.contains("pub mod launchd_plist")
+                && !util_lib.contains("#[cfg(target_os = \"macos\")]\npub mod launchd_plist"),
+            "LaunchAgent plist XML is compiled on every OS so Linux CI pins --is-startup"
         );
         assert!(
             !workspace.contains("features = [\"full\"]")

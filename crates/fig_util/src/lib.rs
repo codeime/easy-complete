@@ -7,7 +7,9 @@ pub mod system_info;
 pub mod terminal;
 
 pub mod consts;
-#[cfg(target_os = "macos")]
+/// LaunchAgent plist builder. Live `launchctl load` stays in the macOS
+/// login-item module; the XML is compiled on every OS so Linux CI pins
+/// `--is-startup --no-dashboard` / KeepAlive.
 pub mod launchd_plist;
 
 use std::cmp::Ordering;

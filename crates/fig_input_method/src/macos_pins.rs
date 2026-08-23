@@ -61,3 +61,20 @@ fn imk_caret_uses_the_shared_usable_and_coalesce_policy() {
         "do not fork the IMK caret gates back into imk.rs"
     );
 }
+
+#[test]
+fn imk_reports_caret_after_deactivate_when_the_client_is_still_key() {
+    let prod = imk_production();
+    assert!(
+        prod.contains("imk_should_report_caret"),
+        "deactivateServer must not drop a key-window Otty/Ghostty/Kitty caret"
+    );
+    assert!(
+        !prod.contains("if !is_active && !client_is_key_window"),
+        "do not fork the inactive-but-key-window gate back into imk.rs"
+    );
+    assert!(
+        prod.contains(crate::wire::CARET_REQUEST_NOTIFICATION),
+        "IME must listen for the same leftover Amazon Q notification the desktop posts"
+    );
+}

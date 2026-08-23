@@ -12,7 +12,7 @@ use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, sel}
 use objc2_foundation::{NSDistributedNotificationCenter, NSPoint, NSRange, NSRect, NSSize, NSString, ns_string};
 use objc2_input_method_kit::{IMKInputController, IMKServer};
 
-use crate::wire::{self, Origin, caret_rect_is_usable, caret_should_replace};
+use crate::wire::{self, Origin, caret_rect_is_usable, caret_should_replace, imk_should_report_caret};
 use crate::{paths, terminals};
 
 const INPUT_CONTROLLER_CLASS_NAME: &str = env!("InputMethodServerControllerClass");
@@ -282,7 +282,7 @@ declare_class!(
                 return;
             };
             let is_active = self.ivars().is_active.get();
-            if !is_active && !client_is_key_window(client) {
+            if !imk_should_report_caret(is_active, client_is_key_window(client)) {
                 return;
             }
             let bundle_id = bundle_identifier(client);

@@ -330,6 +330,23 @@ pub fn should_figterm_launch(ctx: &Context) -> ExitCode {
     ExitCode::from(should_figterm_launch_exit_status(ctx, false))
 }
 
+/// Win32 `BOOL`: any non-zero is success. `GetConsoleMode` used to be
+/// compared with `== 1`, which would misread a rare non-1 success as MinTTY.
+/// Compiled in tests on every OS so Linux CI pins the mapping; live console
+/// I/O still needs a Windows host.
+#[cfg(any(test, windows))]
+pub(crate) fn win32_console_mode_succeeded(api_return: i32) -> bool {
+    api_return != 0
+}
+
+/// GetConsoleMode success is not a wrap — it is the same "fall back to the
+/// old mechanism" 2 that macOS uses when the grandparent is not special.
+/// Failure means MinTTY / no ConPTY: do not wrap.
+#[cfg(any(test, windows))]
+pub(crate) fn windows_console_wrap_exit_status(console_ok: bool) -> u8 {
+    if console_ok { 2 } else { 1 }
+}
+
 #[cfg(windows)]
 fn windows_console_status() -> u8 {
     use std::os::windows::io::AsRawHandle;
@@ -338,7 +355,7 @@ fn windows_console_status() -> u8 {
 
     let mut mode = 0;
     let stdin_ok = unsafe { GetConsoleMode(std::io::stdin().as_raw_handle() as *mut _, &mut mode) };
-    if stdin_ok == 1 { 2 } else { 1 }
+    windows_console_wrap_exit_status(win32_console_mode_succeeded(stdin_ok))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -596,6 +613,41 @@ mod tests {
         assert!(
             production.contains("Status::DontLaunch(\"unsupported os\".into())"),
             "unknown Os must stand down instead of aborting the wrap helper"
+        );
+    }
+}
+
+#[cfg(test)]
+mod wrap_policy_tests {
+    use super::{win32_console_mode_succeeded, windows_console_wrap_exit_status};
+
+    #[test]
+    fn windows_console_wrap_uses_bool_not_eq_one() {
+        assert!(win32_console_mode_succeeded(1));
+        assert!(win32_console_mode_succeeded(2), "BOOL success is any non-zero");
+        assert!(!win32_console_mode_succeeded(0));
+        assert_eq!(windows_console_wrap_exit_status(true), 2);
+        assert_eq!(windows_console_wrap_exit_status(false), 1);
+        let production = include_str!("should_figterm_launch.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains("windows_console_wrap_exit_status(win32_console_mode_succeeded(stdin_ok))"),
+            "GetConsoleMode must go through the shared BOOL mapper and wrap exit"
+        );
+        assert!(
+            !production.contains("stdin_ok == 1") && !production.contains("stdin_ok != 1"),
+            "do not compare GetConsoleMode with == 1 beside the BOOL mapper"
+        );
+        let doctor = include_str!("../doctor/mod.rs");
+        assert!(
+            doctor.contains("win32_console_mode_succeeded"),
+            "doctor Windows console check must use the same BOOL mapper as wrap"
+        );
+        assert!(
+            !doctor.contains("stdin_ok != 1") && !doctor.contains("stdout_ok != 1"),
+            "do not compare GetConsoleMode with == 1 in doctor either"
         );
     }
 }

@@ -1,3 +1,9 @@
+//! LaunchAgent plist builder. Compiled on every OS so Linux CI pins the XML
+//! (`--is-startup`, `--no-dashboard`, KeepAlive=false). Live `launchctl load`
+//! stays in `fig_integrations::login_item` (`cfg(macos)`).
+
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 use std::fmt::Write;
 

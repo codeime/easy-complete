@@ -1687,7 +1687,9 @@ impl DoctorCheck for WindowsConsoleCheck {
             let stdin_ok = unsafe { GetConsoleMode(std::io::stdin().as_raw_handle() as *mut _, &mut mode) };
             let stdout_ok = unsafe { GetConsoleMode(std::io::stdout().as_raw_handle() as *mut _, &mut mode) };
 
-            if stdin_ok != 1 || stdout_ok != 1 {
+            if !crate::cli::internal::should_figterm_launch::win32_console_mode_succeeded(stdin_ok)
+                || !crate::cli::internal::should_figterm_launch::win32_console_mode_succeeded(stdout_ok)
+            {
                 return Err(
                     DoctorError::Error {
                         reason: "Windows Console APIs are not supported in this terminal".into(),

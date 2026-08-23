@@ -32,14 +32,13 @@ use crate::bootstrap::{GLOBAL_PROXY, WindowId};
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{
-    MACOS_AX_MESSAGING_TIMEOUT_SECS, MacosActivationPolicy, MacosOverlayEnable, hide_overlay_on_element_change,
+    MACOS_AX_DEFAULT_CARET_WIDTH, MACOS_AX_MESSAGING_TIMEOUT_SECS, MACOS_IME_CARET_REQUEST_NOTIFICATION,
+    MacosActivationPolicy, MacosOverlayEnable, hide_overlay_on_element_change, macos_ax_caret_is_usable,
     macos_ns_activation_policy, macos_overlay_enabled_for_focus, macos_settings_activation_policy,
     macos_stores_focused_window_at_level,
 };
 use crate::utils::Rect;
 use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID};
-
-pub const DEFAULT_CARET_WIDTH: f64 = 10.0;
 
 // See for other window level keys
 // https://github.com/phracker/MacOSX-SDKs/blob/master/MacOSX10.8.sdk/System/Library/Frameworks/CoreGraphics.framework/Versions/A/Headers/CGWindowLevel.h
@@ -605,7 +604,7 @@ impl PlatformStateImpl {
         // .unwrap_or(false);
 
         if !is_xterm && supports_ime {
-            tracing::debug!("Sending notif com.amazon.codewhisperer.edit_buffer_updated");
+            tracing::debug!("Sending notif {MACOS_IME_CARET_REQUEST_NOTIFICATION}");
             NotificationCenter::distributed_center().post_notification(
                 ns_string!("com.amazon.codewhisperer.edit_buffer_updated"),
                 &NSDictionary::new(),
@@ -653,10 +652,10 @@ impl PlatformStateImpl {
     pub(super) fn get_cursor_position(&self) -> Option<Rect> {
         let caret: CaretPosition = unsafe { get_caret_position(true) };
 
-        if caret.valid {
+        if caret.valid && macos_ax_caret_is_usable(caret.selected_length, caret.width, caret.height) {
             Some(Rect {
                 position: LogicalPosition::new(caret.x, caret.y).into(),
-                size: LogicalSize::new(DEFAULT_CARET_WIDTH, caret.height).into(),
+                size: LogicalSize::new(MACOS_AX_DEFAULT_CARET_WIDTH, caret.height).into(),
             })
         } else {
             None

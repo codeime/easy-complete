@@ -69,6 +69,29 @@ pub fn win32_run_missing_key_means_disabled() -> bool {
     true
 }
 
+/// macOS 12 LaunchAgent fallback. `SMAppService` does not support custom
+/// argv, so `--is-startup` has to live here. `--no-dashboard` keeps a login
+/// launch from opening settings. Live `launchctl` stays in `login_item.rs`.
+pub const LEGACY_LAUNCH_AGENT_STARTUP_FLAG: &str = "--is-startup";
+pub const LEGACY_LAUNCH_AGENT_SILENT_FLAG: &str = "--no-dashboard";
+
+pub fn legacy_launch_agent_run_at_load() -> bool {
+    true
+}
+
+/// A crashed agent must not respawn in a loop at login.
+pub fn legacy_launch_agent_keep_alive() -> bool {
+    false
+}
+
+pub fn legacy_launch_agent_program_arguments(executable: impl Into<String>) -> Vec<String> {
+    vec![
+        executable.into(),
+        LEGACY_LAUNCH_AGENT_STARTUP_FLAG.to_string(),
+        LEGACY_LAUNCH_AGENT_SILENT_FLAG.to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +177,49 @@ mod tests {
             !src.contains("1 => Self::Enabled"),
             "do not keep a second SMAppService status table in login_item.rs"
         );
+        assert!(
+            src.contains("legacy_launch_agent_program_arguments")
+                && src.contains("legacy_launch_agent_run_at_load")
+                && src.contains("legacy_launch_agent_keep_alive"),
+            "macOS 12 LaunchAgent argv / KeepAlive must use the shared spec"
+        );
+        assert!(
+            !src.contains("\"--is-startup\"") && !src.contains("\"--no-dashboard\""),
+            "do not fork --is-startup / --no-dashboard beside the shared LaunchAgent spec"
+        );
+    }
+
+    #[test]
+    fn legacy_launch_agent_is_a_silent_startup() {
+        let args =
+            legacy_launch_agent_program_arguments("/Applications/easy-complete.app/Contents/MacOS/easy-complete");
+        assert_eq!(
+            args,
+            [
+                "/Applications/easy-complete.app/Contents/MacOS/easy-complete",
+                LEGACY_LAUNCH_AGENT_STARTUP_FLAG,
+                LEGACY_LAUNCH_AGENT_SILENT_FLAG,
+            ]
+        );
+        assert!(legacy_launch_agent_run_at_load());
+        assert!(!legacy_launch_agent_keep_alive());
+        let plist = fig_util::launchd_plist::LaunchdPlist::new(LEGACY_LAUNCH_AGENT_LABEL)
+            .program_arguments(args)
+            .associated_bundle_identifiers([APP_BUNDLE_ID])
+            .run_at_load(legacy_launch_agent_run_at_load())
+            .keep_alive(legacy_launch_agent_keep_alive())
+            .plist();
+        assert!(plist.contains("<string>--is-startup</string>"));
+        assert!(plist.contains("<string>--no-dashboard</string>"));
+        assert!(
+            plist.contains("<key>RunAtLoad</key>") && plist.contains("<true/>"),
+            "{plist}"
+        );
+        assert!(
+            plist.contains("<key>KeepAlive</key>") && plist.contains("<false/>"),
+            "{plist}"
+        );
+        assert!(plist.contains(&format!("<string>{APP_BUNDLE_ID}</string>")));
     }
 
     #[test]

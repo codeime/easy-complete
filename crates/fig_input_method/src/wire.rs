@@ -91,6 +91,18 @@ pub fn caret_should_replace(previous: Option<CaretRect>, next: CaretRect) -> boo
     !previous.is_some_and(|previous| caret_rects_close(previous, next))
 }
 
+/// After `deactivateServer:` the controller is inactive, but Otty / Ghostty /
+/// Kitty stay the key window and still have no AX caret. Dropping the request
+/// here parks the overlay mid-session. Report while active, or while inactive
+/// if the client is still the key window. `imk.rs` is `cfg(macos)`.
+pub fn imk_should_report_caret(is_active: bool, client_is_key_window: bool) -> bool {
+    is_active || client_is_key_window
+}
+
+/// Desktop posts this so we re-query the caret. Leftover Amazon Q identifier:
+/// both processes must keep the string in lockstep. Not live IMK.
+pub const CARET_REQUEST_NOTIFICATION: &str = "com.amazon.codewhisperer.edit_buffer_updated";
+
 /// A complete frame, ready to write to the desktop socket.
 pub fn caret_position_frame(x: f64, y: f64, width: f64, height: f64, origin: Origin) -> Vec<u8> {
     let hook = caret_position_hook(x, y, width, height, origin);
@@ -188,5 +200,25 @@ mod tests {
         assert!(!caret_should_replace(Some(first), first));
         assert!(!caret_should_replace(Some(first), (10.4, 20.0, 8.0, 16.0)));
         assert!(caret_should_replace(Some(first), (11.0, 20.0, 8.0, 16.0)));
+    }
+
+    #[test]
+    fn inactive_ime_still_reports_when_the_client_is_the_key_window() {
+        assert!(imk_should_report_caret(true, false));
+        assert!(imk_should_report_caret(true, true));
+        assert!(imk_should_report_caret(false, true));
+        assert!(!imk_should_report_caret(false, false));
+    }
+
+    #[test]
+    fn caret_request_notification_matches_the_desktop_literal() {
+        assert_eq!(
+            CARET_REQUEST_NOTIFICATION,
+            "com.amazon.codewhisperer.edit_buffer_updated"
+        );
+        assert!(
+            include_str!("imk.rs").contains(CARET_REQUEST_NOTIFICATION),
+            "IMK observer must subscribe to the shared name"
+        );
     }
 }
