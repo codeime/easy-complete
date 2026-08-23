@@ -210,6 +210,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn macos_overlay_sends_do_not_unwrap() {
+        // include_str so Linux CI pins macos.rs without linking AppKit.
+        let macos = include_str!("platform/macos.rs");
+        let enabled = macos.find("WindowEvent::SetEnabled").expect("SetEnabled");
+        assert!(
+            !macos[enabled..enabled + 400].contains(".unwrap()"),
+            "SetEnabled on a closed event loop must log, not panic the focus task"
+        );
+        let caret = macos.find("Sending caret update").expect("caret update");
+        let window = &macos[caret..caret + 2000];
+        assert!(
+            !window.contains(".unwrap()"),
+            "a missing overlay event_sender must skip the caret send, not panic"
+        );
+        assert!(
+            window.contains("if let Some(sender)"),
+            "caret updates should go through Option event_sender"
+        );
+        assert!(
+            macos.contains("GLOBAL_PROXY.get().unwrap()") && macos.contains("CString::new(types).unwrap()"),
+            "OnceLock / CString panics are still the remaining macos unwraps"
+        );
+    }
+
     #[cfg_attr(target_os = "linux", ignore)]
     #[test]
     fn test_icon() {

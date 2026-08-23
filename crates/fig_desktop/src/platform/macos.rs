@@ -291,8 +291,7 @@ impl PlatformStateImpl {
             PlatformBoundEvent::Initialize => {
                 unsafe {
                     if AXIsProcessTrusted() {
-                        // This prevents Fig from becoming unresponsive if one of the applications
-                        // we are tracking becomes unresponsive.
+                        // A short AX timeout so one hung target app cannot freeze the desktop.
                         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25);
                     }
                 }
@@ -439,12 +438,12 @@ impl PlatformStateImpl {
                             && accessibility_is_enabled();
                         // && fig_request::fig_auth::is_logged_in();
 
-                        enabled_proxy
-                            .send_event(Event::WindowEvent {
-                                window_id: AUTOCOMPLETE_ID,
-                                window_event: WindowEvent::SetEnabled(is_enabled),
-                            })
-                            .unwrap();
+                        if let Err(err) = enabled_proxy.send_event(Event::WindowEvent {
+                            window_id: AUTOCOMPLETE_ID,
+                            window_event: WindowEvent::SetEnabled(is_enabled),
+                        }) {
+                            warn!(%err, "Error sending event");
+                        }
                     });
 
                     let mut focused = crate::utils::recover_mutex(&self.focused_window);
@@ -505,8 +504,7 @@ impl PlatformStateImpl {
                         .ok();
                     if enabled {
                         unsafe {
-                            // This prevents Fig from becoming unresponsive if one of the applications
-                            // we are tracking becomes unresponsive.
+                            // A short AX timeout so one hung target app cannot freeze the desktop.
                             AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25);
                         }
                     }
@@ -664,24 +662,26 @@ impl PlatformStateImpl {
             let caret = caret.context("Failed to get cursor position")?;
             debug!("Sending caret update {:?}", caret);
 
-            crate::utils::recover_rwlock_read(&UNMANAGED.event_sender)
-                .clone()
-                .unwrap()
-                .send_event(Event::WindowEvent {
-                    window_id: AUTOCOMPLETE_ID,
-                    window_event: WindowEvent::UpdateWindowGeometry {
-                        position: Some(WindowPosition::RelativeToCaret {
-                            caret_position: caret.position,
-                            caret_size: caret.size,
-                            origin: Origin::TopLeft,
-                        }),
-                        size: None,
-                        anchor: None,
-                        tx: None,
-                        dry_run: false,
-                    },
-                })
-                .ok();
+            if let Some(sender) = crate::utils::recover_rwlock_read(&UNMANAGED.event_sender).clone() {
+                sender
+                    .send_event(Event::WindowEvent {
+                        window_id: AUTOCOMPLETE_ID,
+                        window_event: WindowEvent::UpdateWindowGeometry {
+                            position: Some(WindowPosition::RelativeToCaret {
+                                caret_position: caret.position,
+                                caret_size: caret.size,
+                                origin: Origin::TopLeft,
+                            }),
+                            size: None,
+                            anchor: None,
+                            tx: None,
+                            dry_run: false,
+                        },
+                    })
+                    .ok();
+            } else {
+                warn!("overlay event sender is not initialized");
+            }
         }
 
         Ok(())
