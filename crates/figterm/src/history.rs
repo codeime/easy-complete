@@ -38,12 +38,11 @@ static HISTORY_BUILDER_RUNS: AtomicUsize = AtomicUsize::new(0);
 pub fn spawn_history_task() -> HistorySender {
     HISTORY_SENDER
         .get_or_init(|| {
-            HISTORY_BUILDER_RUNS.fetch_add(1, Ordering::Relaxed);
             trace!("Spawning history task");
 
             let (sender, receiver) = flume::bounded::<HistoryCommand>(64);
 
-            if let Err(err) = std::thread::Builder::new()
+            std::thread::Builder::new()
                 .name("ecterm-history".into())
                 .spawn(move || {
                     let history = fig_settings::history::History::new();
@@ -92,10 +91,11 @@ pub fn spawn_history_task() -> HistorySender {
                         }
                     }
                 })
-            {
-                error!(%err, "Failed to spawn history thread");
-            }
+                // OnceLock stores this sender. Logging a spawn failure and still
+                // caching a disconnected sender would drop every later insert.
+                .expect("failed to spawn ecterm-history thread");
 
+            HISTORY_BUILDER_RUNS.fetch_add(1, Ordering::Relaxed);
             sender
         })
         .clone()
@@ -128,16 +128,24 @@ mod tests {
             "tabs must clone one Sender, not start a history thread per call"
         );
         assert!(body.contains(".clone()"), "callers receive a cloned Sender");
+        assert!(
+            body.contains(".expect(") && !body.contains("Failed to spawn history thread"),
+            "spawn failure must not store a disconnected sender in the OnceLock"
+        );
     }
 
     #[test]
     fn history_thread_builder_runs_once() {
-        let _first = spawn_history_task();
-        let _second = spawn_history_task();
+        let first = spawn_history_task();
+        let second = spawn_history_task();
         assert_eq!(
             HISTORY_BUILDER_RUNS.load(std::sync::atomic::Ordering::Relaxed),
             1,
             "N spawn_history_task calls must start one ecterm-history thread"
+        );
+        assert!(
+            first.receiver_count() > 0 && second.receiver_count() > 0,
+            "OnceLock must keep a live history receiver, not a disconnected sender"
         );
     }
 }

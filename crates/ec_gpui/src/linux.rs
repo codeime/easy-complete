@@ -52,6 +52,13 @@ fn lock_x11() -> std::sync::MutexGuard<'static, X11Cache> {
     X11.lock().unwrap_or_else(|err| err.into_inner())
 }
 
+fn discard_display(cache: &mut X11Cache) {
+    cache.display = None;
+    cache.screens = None;
+    cache.retry_at = Some(Instant::now() + X11_CACHE_TTL);
+    CACHED_X_WINDOW.store(0, Ordering::Relaxed);
+}
+
 fn ensure_connected(cache: &mut X11Cache) -> bool {
     if cache.display.is_some() {
         return true;
@@ -65,6 +72,8 @@ fn ensure_connected(cache: &mut X11Cache) -> bool {
     match RustConnection::connect(None) {
         Ok((conn, screen_num)) => {
             cache.retry_at = None;
+            // A previous failed probe may still hold an empty list inside the TTL.
+            cache.screens = None;
             cache.display = Some(X11Display { conn, screen_num });
             true
         },
@@ -80,8 +89,21 @@ fn with_x11<R>(f: impl FnOnce(&RustConnection, usize) -> R) -> Option<R> {
     if !ensure_connected(&mut cache) {
         return None;
     }
-    let display = cache.display.as_ref()?;
-    Some(f(&display.conn, display.screen_num))
+    let result = {
+        let display = cache.display.as_ref()?;
+        f(&display.conn, display.screen_num)
+    };
+    // RustConnection has no Drop flush. Map+ABOVE used to race the implicit
+    // close of a per-call connection; a cached one would hold the ClientMessage
+    // in the write buffer until the next reply() on this conn.
+    let flush_failed = cache
+        .display
+        .as_ref()
+        .is_some_and(|display| display.conn.flush().is_err());
+    if flush_failed {
+        discard_display(&mut cache);
+    }
+    Some(result)
 }
 
 pub fn harden_overlay_window() {
@@ -95,7 +117,6 @@ pub fn harden_overlay_window_titled(title: &str) {
         };
         CACHED_X_WINDOW.store(window, Ordering::Relaxed);
         apply_overlay_hints(conn, screen_num, window);
-        let _ = conn.flush();
     });
 }
 
@@ -193,9 +214,18 @@ pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f
 /// `apply_position` see the same outputs.
 pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {
     let mut cache = lock_x11();
-    if let Some((fetched_at, screens)) = &cache.screens {
+    let cached = cache.screens.as_ref().and_then(|(fetched_at, screens)| {
         if fetched_at.elapsed() < X11_CACHE_TTL {
-            return screens.clone();
+            Some((screens.clone(), cache.display.is_some()))
+        } else {
+            None
+        }
+    });
+    if let Some((screens, has_display)) = cached {
+        // A failed probe caches an empty list for the retry TTL. Do not keep
+        // serving that once `with_x11` has actually connected.
+        if !screens.is_empty() || !has_display {
+            return screens;
         }
     }
     if !ensure_connected(&mut cache) {
@@ -549,6 +579,17 @@ mod tests {
         assert!(
             production.contains("X11_CACHE_TTL"),
             "overlay_screens must TTL-cache the RandR list so layout and place share it"
+        );
+        let with_x11 = production.find("fn with_x11").expect("with_x11");
+        let with_x11 = &production[with_x11..];
+        let with_x11_end = with_x11.find("\npub fn ").unwrap_or(with_x11.len());
+        assert!(
+            with_x11[..with_x11_end].contains("flush"),
+            "cached connections do not flush on drop; place/map must flush ABOVE ClientMessages"
+        );
+        assert!(
+            production.contains("discard_display"),
+            "a flush/IO failure must drop the cached display so the next place reconnects"
         );
     }
 
