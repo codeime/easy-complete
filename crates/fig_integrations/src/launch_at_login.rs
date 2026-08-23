@@ -140,26 +140,24 @@ StartupWMClass=easy-complete
 mod windows {
     use super::{Result, desktop_executable, startup_command};
     use crate::Error;
-
-    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-    const RUN_VALUE: &str = "EasyComplete";
+    use crate::launch_at_login_policy::{WIN32_RUN_KEY, WIN32_RUN_VALUE, win32_run_delete_not_found_is_ok};
 
     pub(super) fn set_enabled(enabled: bool) -> Result<()> {
         use winreg::RegKey;
         use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let (key, _) = hkcu.create_subkey(RUN_KEY).map_err(winreg_err)?;
+        let (key, _) = hkcu.create_subkey(WIN32_RUN_KEY).map_err(winreg_err)?;
         if enabled {
             let command = startup_command(&desktop_executable());
-            key.set_value(RUN_VALUE, &command).map_err(winreg_err)?;
+            key.set_value(WIN32_RUN_VALUE, &command).map_err(winreg_err)?;
         } else {
-            let Ok(key) = hkcu.open_subkey_with_flags(RUN_KEY, KEY_SET_VALUE) else {
+            let Ok(key) = hkcu.open_subkey_with_flags(WIN32_RUN_KEY, KEY_SET_VALUE) else {
                 return Ok(());
             };
-            match key.delete_value(RUN_VALUE) {
+            match key.delete_value(WIN32_RUN_VALUE) {
                 Ok(()) => {},
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {},
+                Err(err) if win32_run_delete_not_found_is_ok(err.kind()) => {},
                 Err(err) => return Err(winreg_err(err)),
             }
         }
@@ -171,10 +169,10 @@ mod windows {
         use winreg::enums::HKEY_CURRENT_USER;
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let Ok(key) = hkcu.open_subkey(RUN_KEY) else {
+        let Ok(key) = hkcu.open_subkey(WIN32_RUN_KEY) else {
             return Ok(false);
         };
-        let value: std::io::Result<String> = key.get_value(RUN_VALUE);
+        let value: std::io::Result<String> = key.get_value(WIN32_RUN_VALUE);
         Ok(value.is_ok())
     }
 

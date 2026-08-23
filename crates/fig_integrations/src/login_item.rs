@@ -16,34 +16,19 @@ use objc::runtime::{BOOL, Class, Object};
 use objc::{msg_send, sel, sel_impl};
 use tracing::{debug, warn};
 
+use crate::launch_at_login_policy::{
+    LEGACY_LAUNCH_AGENT_LABEL as LEGACY_LABEL, SmAppServiceStatus,
+    UPSTREAM_LEGACY_LAUNCH_AGENT_LABEL as UPSTREAM_LEGACY_LABEL, sm_app_service_already_in_desired_state,
+    sm_app_service_counts_as_enabled,
+};
 use crate::{Error, Result};
-
-const LEGACY_LABEL: &str = "dev.emmmm.easy-complete";
-const UPSTREAM_LEGACY_LABEL: &str = "com.amazon.codewhisperer.launcher";
 
 // Force-load the framework so the dynamic `SMAppService` class lookup works.
 // ServiceManagement itself exists on macOS 12; only SMAppService is 13+.
 #[link(name = "ServiceManagement", kind = "framework")]
 unsafe extern "C" {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServiceStatus {
-    NotRegistered = 0,
-    Enabled = 1,
-    RequiresApproval = 2,
-    NotFound = 3,
-}
-
-impl ServiceStatus {
-    fn from_raw(value: isize) -> Self {
-        match value {
-            1 => Self::Enabled,
-            2 => Self::RequiresApproval,
-            3 => Self::NotFound,
-            _ => Self::NotRegistered,
-        }
-    }
-}
+type ServiceStatus = SmAppServiceStatus;
 
 /// Reconcile the persisted launch preference with the platform integration.
 ///
@@ -67,7 +52,7 @@ pub fn set_enabled(enabled: bool) -> Result<()> {
 /// Return whether launch at login is currently enabled by the system.
 pub fn is_enabled() -> Result<bool> {
     if let Some(service) = sm_app_service() {
-        Ok(sm_app_service_status(service) == ServiceStatus::Enabled)
+        Ok(sm_app_service_counts_as_enabled(sm_app_service_status(service)))
     } else {
         Ok(legacy_launch_agent_path(LEGACY_LABEL)?.exists())
     }
@@ -95,10 +80,7 @@ fn set_sm_app_service_enabled(enabled: bool) -> Result<()> {
     let service = sm_app_service().ok_or_else(|| Error::Custom("SMAppService is unavailable".into()))?;
     let status = sm_app_service_status(service);
 
-    if enabled && status == ServiceStatus::Enabled {
-        return Ok(());
-    }
-    if !enabled && matches!(status, ServiceStatus::NotRegistered | ServiceStatus::NotFound) {
+    if sm_app_service_already_in_desired_state(status, enabled) {
         return Ok(());
     }
 
@@ -231,6 +213,8 @@ mod tests {
         assert_eq!(ServiceStatus::from_raw(1), ServiceStatus::Enabled);
         assert_eq!(ServiceStatus::from_raw(2), ServiceStatus::RequiresApproval);
         assert_eq!(ServiceStatus::from_raw(3), ServiceStatus::NotFound);
+        assert!(sm_app_service_counts_as_enabled(ServiceStatus::Enabled));
+        assert!(!sm_app_service_counts_as_enabled(ServiceStatus::RequiresApproval));
     }
 
     #[test]

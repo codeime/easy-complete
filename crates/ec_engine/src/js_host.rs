@@ -63,9 +63,12 @@ fn empty_shell_context() -> &'static ShellContext {
 
 pub struct JsHost {
     hooks_dir: PathBuf,
-    sources: Mutex<HashMap<String, String>>,
-    suggestion_cache: Mutex<HashMap<String, CacheEntry<Vec<Suggestion>>>>,
-    spec_cache: Mutex<HashMap<String, Spec>>,
+    sources: Mutex<HashMap<String, Arc<str>>>,
+    /// Whether `generate_spec_cache_key` can drop remaining tokens. Cached
+    /// beside the source so `git ch` / `git che` do not re-scan hook JS.
+    hook_ignores_tokens: Mutex<HashMap<String, bool>>,
+    suggestion_cache: Mutex<HashMap<String, CacheEntry<Arc<Vec<Suggestion>>>>>,
+    spec_cache: Mutex<HashMap<String, Arc<Spec>>>,
 }
 
 struct Inner {
@@ -90,6 +93,7 @@ impl JsHost {
         Self {
             hooks_dir,
             sources: Mutex::new(HashMap::new()),
+            hook_ignores_tokens: Mutex::new(HashMap::new()),
             suggestion_cache: Mutex::new(HashMap::new()),
             spec_cache: Mutex::new(HashMap::new()),
         }
@@ -108,6 +112,10 @@ impl JsHost {
             .clear();
         self.spec_cache.lock().unwrap_or_else(|err| err.into_inner()).clear();
         self.sources.lock().unwrap_or_else(|err| err.into_inner()).clear();
+        self.hook_ignores_tokens
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clear();
     }
 
     /// Bind this host for the duration of a completion attempt so generators
@@ -169,18 +177,34 @@ globalThis.console = {
         })
     }
 
-    fn hook_source(&self, id: &str) -> Option<String> {
+    fn hook_source(&self, id: &str) -> Option<Arc<str>> {
         {
             let sources = self.sources.lock().unwrap_or_else(|err| err.into_inner());
             if let Some(source) = sources.get(id) {
-                return Some(source.clone());
+                return Some(Arc::clone(source));
             }
         }
         let path = hook_path(&self.hooks_dir, id);
-        let source = fs::read_to_string(path).ok()?;
+        let source: Arc<str> = fs::read_to_string(path).ok()?.into();
         let mut sources = self.sources.lock().unwrap_or_else(|err| err.into_inner());
-        sources.insert(id.to_string(), source.clone());
+        sources.insert(id.to_string(), Arc::clone(&source));
         Some(source)
+    }
+
+    fn hook_ignores_first_param(&self, hook_id: &str) -> bool {
+        {
+            let cache = self.hook_ignores_tokens.lock().unwrap_or_else(|err| err.into_inner());
+            if let Some(&ignores) = cache.get(hook_id) {
+                return ignores;
+            }
+        }
+        let Some(source) = self.hook_source(hook_id) else {
+            return false;
+        };
+        let ignores = hook_source_ignores_first_param(&source);
+        let mut cache = self.hook_ignores_tokens.lock().unwrap_or_else(|err| err.into_inner());
+        cache.insert(hook_id.to_string(), ignores);
+        ignores
     }
 
     pub fn post_process(&self, hook_id: &str, stdout: &str, tokens: &[String]) -> Option<Vec<Suggestion>> {
@@ -247,10 +271,7 @@ globalThis.console = {
         key.push_str(hook_id);
         key.push('\x1f');
         key.push_str(cwd);
-        if self
-            .hook_source(hook_id)
-            .is_some_and(|source| hook_source_ignores_first_param(&source))
-        {
+        if self.hook_ignores_first_param(hook_id) {
             return key;
         }
         key.push('\x1f');
@@ -478,17 +499,17 @@ fn evict_at_cap<T>(cache: &mut HashMap<String, T>, key: &str) {
     }
 }
 
-pub fn cached_spec(host: &JsHost, cache_key: &str, run: impl FnOnce() -> Option<Spec>) -> Option<Spec> {
+pub fn cached_spec(host: &JsHost, cache_key: &str, run: impl FnOnce() -> Option<Spec>) -> Option<Arc<Spec>> {
     {
         let cache = host.spec_cache.lock().unwrap_or_else(|err| err.into_inner());
         if let Some(spec) = cache.get(cache_key) {
-            return Some(spec.clone());
+            return Some(Arc::clone(spec));
         }
     }
-    let value = run()?;
+    let value = Arc::new(run()?);
     let mut cache = host.spec_cache.lock().unwrap_or_else(|err| err.into_inner());
     evict_at_cap(&mut cache, cache_key);
-    cache.insert(cache_key.to_string(), value.clone());
+    cache.insert(cache_key.to_string(), Arc::clone(&value));
     Some(value)
 }
 
@@ -548,9 +569,9 @@ pub fn cached_suggestions(
     cwd: &str,
     kind: &str,
     run: impl FnOnce() -> Vec<Suggestion>,
-) -> Vec<Suggestion> {
+) -> Arc<Vec<Suggestion>> {
     let Some(policy) = owned_cache_policy(arg) else {
-        return run();
+        return Arc::new(run());
     };
     let key = format!(
         "{kind}:{}",
@@ -563,8 +584,8 @@ pub fn cached_suggestions(
     if let Some(hit) = cache_get(&host.suggestion_cache, &key, lookup) {
         return hit;
     }
-    let value = run();
-    cache_put(&host.suggestion_cache, key, value.clone());
+    let value = Arc::new(run());
+    cache_put(&host.suggestion_cache, key, Arc::clone(&value));
     value
 }
 
@@ -1519,5 +1540,71 @@ mod tests {
             ),
             "demo:help-a"
         );
+    }
+
+    #[test]
+    fn hook_source_is_shared_arc() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("demo_generateSpec_0.js"),
+            "export default async()=>{}\n",
+        )
+        .unwrap();
+        let host = JsHost::new(dir.path().to_path_buf());
+        let first = host.hook_source("demo#generateSpec#0").expect("source");
+        let second = host.hook_source("demo#generateSpec#0").expect("source");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "hook JS must be interned, not cloned, on a cache hit"
+        );
+    }
+
+    #[test]
+    fn generate_spec_cache_key_uses_interned_ignore_flag() {
+        let src = include_str!("js_host.rs");
+        let start = src.find("pub(crate) fn generate_spec_cache_key").expect("cache key");
+        let body = &src[start..];
+        let end = body.find("\n    fn call_hook").expect("call_hook");
+        let body = &body[..end];
+        assert!(
+            body.contains("hook_ignores_first_param(hook_id)"),
+            "cache key must not re-clone hook JS to decide whether tokens matter"
+        );
+        assert!(
+            !body.contains("hook_source(hook_id)"),
+            "generate_spec_cache_key must not call hook_source directly"
+        );
+    }
+
+    #[test]
+    fn cached_spec_returns_the_same_arc_on_hit() {
+        let host = JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
+        let first = cached_spec(&host, "k", || {
+            Some(Spec {
+                names: vec!["demo".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("miss");
+        let second = cached_spec(&host, "k", || panic!("cache hit must not re-run generateSpec")).expect("hit");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.names, vec!["demo".to_string()]);
+    }
+
+    #[test]
+    fn cached_suggestions_return_the_same_arc_on_hit() {
+        let host = JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
+        let arg = ArgSpec {
+            cache_key: Some("demo".into()),
+            ..ArgSpec::default()
+        };
+        let first = cached_suggestions(&host, &arg, &["demo".into()], "/tmp", "script", || {
+            vec![Suggestion::new("alpha", "", "arg")]
+        });
+        let second = cached_suggestions(&host, &arg, &["demo".into()], "/tmp", "script", || {
+            panic!("cache hit must not re-run the generator")
+        });
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first[0].name, "alpha");
     }
 }

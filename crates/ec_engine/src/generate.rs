@@ -346,8 +346,9 @@ fn run_js_generators(
             run_script_or_post_process(host, arg, tokens, cwd, timeout)
         });
         out.extend(
-            raw.into_iter()
-                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy)),
+            raw.iter()
+                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy))
+                .cloned(),
         );
     }
     if let Some(hook_id) = arg.js_custom.as_deref() {
@@ -357,8 +358,9 @@ fn run_js_generators(
         });
         out.extend(
             custom
-                .into_iter()
-                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy)),
+                .iter()
+                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy))
+                .cloned(),
         );
     }
     out
@@ -843,6 +845,23 @@ mod tests {
     use super::*;
     use crate::ir::{ArgSpec, OptionSpec, Spec, SuggestionSeed, Template};
     use std::fs;
+
+    #[test]
+    fn js_generator_cache_hits_clone_only_query_matches() {
+        let src = include_str!("generate.rs");
+        let start = src.find("fn run_js_generators").expect("run_js_generators");
+        let body = &src[start..];
+        let end = body.find("\nfn run_script_or_post_process").expect("next fn");
+        let body = &body[..end];
+        assert!(
+            body.contains("raw.iter()") && body.contains(".cloned()"),
+            "JS generator cache hits must filter by reference, not take the whole vec"
+        );
+        assert!(
+            !body.contains("into_iter()"),
+            "into_iter on an Arc would clone every cached row before the query filter"
+        );
+    }
 
     #[test]
     fn script_generator_filters_prefix() {

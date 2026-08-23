@@ -9,6 +9,10 @@ mod ime_launch;
 #[cfg(target_os = "macos")]
 pub mod input_method;
 pub mod launch_at_login;
+/// SMAppService status / HKCU Run / legacy LaunchAgent labels. Compiled on
+/// every OS so Linux CI pins them. Live register/unregister stays in the OS
+/// modules.
+mod launch_at_login_policy;
 #[cfg(target_os = "macos")]
 pub mod login_item;
 pub mod shell;

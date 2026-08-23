@@ -780,11 +780,14 @@ fn apply_generate_spec(current: &mut Arc<Spec>, tokens: &[String]) {
     };
     let timeout = Duration::from_millis(u64::try_from(crate::generate::DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000));
     let cache_key = host.generate_spec_cache_key(hook_id, current.generate_spec_cache_key.as_deref(), cwd, tokens);
-    let generated = crate::js_host::cached_spec(host, &cache_key, || host.generate_spec(hook_id, tokens, cwd, timeout));
-    let Some(generated) = generated else {
+    let wrapper = Arc::clone(current);
+    let Some(merged) = crate::js_host::cached_spec(host, &cache_key, || {
+        host.generate_spec(hook_id, tokens, cwd, timeout)
+            .map(|generated| crate::js_host::merge_generated_spec(wrapper.as_ref(), generated))
+    }) else {
         return;
     };
-    *current = Arc::new(crate::js_host::merge_generated_spec(current.as_ref(), generated));
+    *current = merged;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2327,6 +2330,14 @@ mod tests {
         assert!(
             body.contains("generate_spec_cache_key") && body.contains("cached_spec"),
             "generateSpec must pick a cache key and go through cached_spec"
+        );
+        assert!(
+            body.contains("merge_generated_spec"),
+            "generateSpec cache stores the merged tree, not a pre-merge clone every keystroke"
+        );
+        assert!(
+            !body.contains("Arc::new(crate::js_host::merge_generated_spec"),
+            "merge must run on the cache miss, not after every cached_spec hit"
         );
         assert!(
             !body.contains("} else {\n        host.generate_spec"),
