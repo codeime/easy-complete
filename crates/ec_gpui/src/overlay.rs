@@ -635,6 +635,27 @@ pub fn overlay_window_options(bounds: Bounds<Pixels>, show: bool) -> WindowOptio
     }
 }
 
+#[cfg(test)]
+mod window_option_tests {
+    use super::*;
+
+    #[test]
+    fn overlay_window_is_a_non_activating_popup() {
+        let bounds = Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(32.), px(32.)),
+        };
+        let hidden = overlay_window_options(bounds, false);
+        assert!(!hidden.focus, "overlay must not steal terminal focus");
+        assert!(!hidden.show);
+        assert!(matches!(hidden.kind, gpui::WindowKind::PopUp));
+        let shown = overlay_window_options(bounds, true);
+        assert!(!shown.focus);
+        assert!(shown.show);
+        assert!(matches!(shown.kind, gpui::WindowKind::PopUp));
+    }
+}
+
 pub fn open_overlay_window(cx: &mut App, state: Entity<OverlayState>) -> anyhow::Result<OverlayHandle> {
     // Create shown so AppKit attaches an `NSWindow`, then `orderOut` like the old
     // tao `set_visible(false)` — keep the last size, do not shrink to 1×1.

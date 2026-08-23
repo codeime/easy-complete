@@ -4,6 +4,9 @@
 mod icons;
 #[cfg(target_os = "linux")]
 mod linux;
+/// X11 overlay hint policy. Compiled on every OS so Linux CI pins D3;
+/// `linux.rs` is still `cfg(linux)` and talks to the X server.
+mod linux_overlay;
 mod list;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -25,6 +28,7 @@ pub use linux::{
     set_overlay_frame_handle, set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled,
     set_overlay_window_level, set_overlay_window_level_for_title, system_appearance_is_dark,
 };
+pub use linux_overlay::{OverlayX11Hints, overlay_x11_activates, overlay_x11_hints, overlay_x11_place_changes_size};
 pub use list::{
     ClickInsert, DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_ROW_HEIGHT, DEFAULT_WIDTH, DESCRIPTION_HEIGHT,
     DEV_BANNER_HEIGHT, OverlayTheme, POPOUT_WIDTH, SuggestionItem, SuggestionList, TabPrefix, common_prefix_for,
