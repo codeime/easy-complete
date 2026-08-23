@@ -95,8 +95,7 @@ impl PidExt for Pid {
 
             // Get the terminal name
             let mut len = MAX_PATH;
-            let mut process_name = [0; MAX_PATH as usize + 1];
-            process_name[MAX_PATH as usize] = u8::try_from('\0').unwrap();
+            let mut process_name = [0u8; MAX_PATH as usize + 1];
 
             if QueryFullProcessImageNameA(
                 *handle,
@@ -109,10 +108,13 @@ impl PidExt for Pid {
                 return None;
             }
 
-            let title = CStr::from_bytes_with_nul(&process_name[0..=len as usize])
-                .ok()?
-                .to_str()
-                .ok()?;
+            let title = CStr::from_bytes_with_nul(super::windows_policy::win32_process_image_nul_terminated(
+                &process_name,
+                len,
+            )?)
+            .ok()?
+            .to_str()
+            .ok()?;
 
             Some(PathBuf::from(title))
         }

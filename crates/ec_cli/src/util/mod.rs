@@ -193,7 +193,7 @@ pub fn app_not_running_message() -> String {
 pub fn match_regex(regex: impl AsRef<str>, input: impl AsRef<str>) -> Option<String> {
     Some(
         Regex::new(regex.as_ref())
-            .unwrap()
+            .ok()?
             .captures(input.as_ref())?
             .get(1)?
             .as_str()
@@ -299,6 +299,20 @@ mod tests {
         regex_test(r"foo=(\S+)", "bar=foo", None);
         regex_test(r"foo=(\S+)", "foo=bar baz", Some("bar"));
         regex_test(r"foo=(\S+)", "foo=", None);
+        regex_test("(", "foo", None);
+    }
+
+    #[test]
+    fn match_regex_does_not_unwrap_a_bad_pattern() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        let start = production.find("pub fn match_regex").expect("match_regex");
+        let body = &production[start..];
+        let end = body.find("\npub fn").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains(".unwrap()") && body.contains(".ok()?"),
+            "an invalid regex must return None, not panic the CLI"
+        );
     }
 
     #[test]

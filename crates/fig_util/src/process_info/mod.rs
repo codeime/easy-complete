@@ -3,6 +3,9 @@ use std::{fmt, str};
 
 use cfg_if::cfg_if;
 
+/// `QueryFullProcessImageNameA` length bound. Live Win32 stays `cfg(windows)`.
+mod windows_policy;
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]

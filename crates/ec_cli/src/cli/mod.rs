@@ -57,8 +57,14 @@ impl OutputFormat {
     {
         match self {
             OutputFormat::Plain => println!("{}", text_fn()),
-            OutputFormat::Json => println!("{}", serde_json::to_string(&json_fn()).unwrap()),
-            OutputFormat::JsonPretty => println!("{}", serde_json::to_string_pretty(&json_fn()).unwrap()),
+            OutputFormat::Json => match serde_json::to_string(&json_fn()) {
+                Ok(json) => println!("{json}"),
+                Err(err) => eprintln!("failed to serialize JSON: {err}"),
+            },
+            OutputFormat::JsonPretty => match serde_json::to_string_pretty(&json_fn()) {
+                Ok(json) => println!("{json}"),
+                Err(err) => eprintln!("failed to serialize JSON: {err}"),
+            },
         }
     }
 }
@@ -288,6 +294,19 @@ mod test {
     #[test]
     fn debug_assert() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn json_output_does_not_unwrap_serialize() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        let start = production.find("impl OutputFormat").expect("OutputFormat");
+        let body = &production[start..];
+        let end = body.find("\n#[derive").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains(".unwrap()") && body.contains("failed to serialize JSON"),
+            "a Serialize impl that fails must not panic `ec diagnostic --format json`"
+        );
     }
 
     #[test]

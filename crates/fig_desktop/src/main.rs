@@ -56,14 +56,19 @@ fn main() -> ExitCode {
     // The desktop process is I/O bound: GPUI owns the UI thread, and the
     // completion engine has its own worker. A worker per core just parks
     // stacks — the same waste ecterm already stopped.
-    tokio::runtime::Builder::new_multi_thread()
+    match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(8)
         .thread_name("ec-tokio")
         .enable_all()
         .build()
-        .expect("tokio runtime")
-        .block_on(async_main())
+    {
+        Ok(runtime) => runtime.block_on(async_main()),
+        Err(err) => {
+            eprintln!("{PRODUCT_NAME} failed to start runtime: {err}");
+            ExitCode::FAILURE
+        },
+    }
 }
 
 async fn async_main() -> ExitCode {
@@ -485,6 +490,22 @@ mod tests {
 
 #[cfg(test)]
 mod panic_safety {
+    #[test]
+    fn desktop_tokio_runtime_does_not_panic() {
+        let production = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains(".expect(\"tokio runtime\")"),
+            "a failed tokio runtime build must return ExitCode::FAILURE, not panic"
+        );
+        assert!(
+            production.contains("failed to start runtime") && production.contains("worker_threads(2)"),
+            "the desktop still builds a two-worker runtime"
+        );
+    }
+
     #[test]
     fn desktop_run_does_not_unwrap_the_event_loop() {
         let src = include_str!("main.rs");

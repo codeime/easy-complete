@@ -65,7 +65,11 @@ impl DiagnosticArgs {
         }
 
         self.format.print(
-            || diagnostics.user_readable().expect("Failed to run user_readable()"),
+            || {
+                diagnostics
+                    .user_readable()
+                    .unwrap_or_else(|err| format!("Failed to render diagnostics: {err}"))
+            },
             || &diagnostics,
         );
 
@@ -99,4 +103,23 @@ pub async fn verify_integration(integration: impl Into<String>) -> Result<String
     };
 
     message.context("No message found")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn diagnostic_render_does_not_unwrap() {
+        let production = include_str!("diagnostics.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains("expect(\"Failed to run user_readable()\")"),
+            "a toml serialize failure must not panic `ec diagnostic`"
+        );
+        assert!(
+            production.contains("Failed to render diagnostics") && production.contains("user_readable()"),
+            "diagnostics still try to render the user-readable form"
+        );
+    }
 }

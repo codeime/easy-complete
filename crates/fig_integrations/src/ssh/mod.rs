@@ -89,7 +89,7 @@ impl SshIntegration {
     }
 
     fn check_regex_is_match(&self, contents: &str) -> Result<()> {
-        let filtered_contents = Regex::new(r"^\s*(#.*)?\n").unwrap().replace_all(contents, "");
+        let filtered_contents = Regex::new(r"^\s*(#.*)?\n")?.replace_all(contents, "");
         if !self.source_regex()?.is_match(&filtered_contents) {
             return Err(Error::NotInstalled(
                 format!("{:?} does not source {PRODUCT_NAME}'s ssh integration", self.path).into(),
@@ -201,6 +201,21 @@ impl Integration for SshIntegration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_comment_strip_does_not_unwrap_the_regex() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        let start = production
+            .find("fn check_regex_is_match")
+            .expect("check_regex_is_match");
+        let body = &production[start..];
+        let end = body.find("\n    pub async fn").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains(".unwrap()") && body.contains("Regex::new(r\"^\\s*(#.*)?\\n\")?"),
+            "a comment-strip regex failure must not panic ssh is_installed"
+        );
+    }
 
     #[test]
     fn test_file_integration() {

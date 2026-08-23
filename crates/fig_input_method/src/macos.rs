@@ -150,7 +150,10 @@ pub fn main() {
     imk::register_controller();
     log_info!("Registered imk controller");
 
-    let mtm = MainThreadMarker::new().expect("must be on the main thread");
+    let Some(mtm) = MainThreadMarker::new() else {
+        log_error!("IME must start on the AppKit main thread");
+        return;
+    };
 
     autoreleasepool(|_pool| {
         let app = NSApp(mtm);

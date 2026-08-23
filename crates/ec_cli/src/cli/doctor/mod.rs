@@ -926,7 +926,7 @@ impl DoctorCheck<Option<Shell>> for DotfileCheck {
                 let message = err.verbose_message();
                 Err(DoctorError::Error {
                     reason: message.title.into(),
-                    info: vec![message.message.unwrap().into(), "".into()],
+                    info: vec![message.message.unwrap_or_default().into(), "".into()],
                     fix: None,
                     error: None,
                 })
@@ -1144,12 +1144,10 @@ impl DoctorCheck<DiagnosticsResponse> for CliPathCheck {
         }
 
         let local_bin_path = directories::home_dir()
-            .unwrap()
-            .join(".local")
-            .join("bin")
-            .join(CLI_BINARY_NAME);
+            .ok()
+            .map(|home| home.join(".local").join("bin").join(CLI_BINARY_NAME));
 
-        if path == local_bin_path
+        if local_bin_path.as_ref() == Some(&path)
             || path == Path::new(system_paths::USR_LOCAL_BIN).join(CLI_BINARY_NAME)
             || path == Path::new(system_paths::OPT_HOMEBREW_BIN).join(CLI_BINARY_NAME)
         {
@@ -1167,7 +1165,10 @@ impl DoctorCheck<DiagnosticsResponse> for CliPathCheck {
             Err(doctor_error!(
                 "CLI ({}) must be in {}",
                 path.display(),
-                local_bin_path.display()
+                local_bin_path.as_ref().map_or_else(
+                    || format!("~/.local/bin/{CLI_BINARY_NAME}"),
+                    |p| p.display().to_string()
+                )
             ))
         }
     }
@@ -1392,13 +1393,24 @@ impl DoctorCheck<SupportedTerminalCheckContext> for ItermBashIntegrationCheck {
     }
 
     async fn check(&self, _: &SupportedTerminalCheckContext) -> Result<(), DoctorError> {
-        let integration_file = directories::home_dir().unwrap().join(".iterm2_shell_integration.bash");
+        let integration_file = directories::home_dir()
+            .context("Could not get home dir")?
+            .join(".iterm2_shell_integration.bash");
         let integration = read_to_string(integration_file).context("Could not read .iterm2_shell_integration.bash")?;
 
-        match Regex::new(r"V(\d*\.\d*\.\d*)").unwrap().captures(&integration) {
+        match Regex::new(r"V(\d*\.\d*\.\d*)")
+            .ok()
+            .and_then(|re| re.captures(&integration))
+        {
             Some(captures) => {
-                let version = captures.get(1).unwrap().as_str();
-                if Version::new(0, 4, 0) > Version::parse(version).unwrap() {
+                let Some(version) = captures.get(1).and_then(|cap| Version::parse(cap.as_str()).ok()) else {
+                    return Err(doctor_warning!(
+                        "iTerm's Bash Integration is installed, but we could not check the version in \
+                         ~/.iterm2_shell_integration.bash. Integration may be out of date. You can try updating in \
+                         iTerm's menu by selecting \"Install Shell Integration\"",
+                    ));
+                };
+                if Version::new(0, 4, 0) > version {
                     return Err(doctor_error!(
                         "iTerm Bash Integration is out of date. Please update in iTerm's menu by selecting \"Install \
                          Shell Integration\". For more details see https://iterm2.com/documentation-shell-integration.html"
@@ -1533,7 +1545,8 @@ impl DoctorCheck<Option<Terminal>> for VSCodeIntegrationCheck {
                     .join(dir)
                     .join("extensions");
 
-                let glob_set = glob([extensions.join("withfig.fig-").to_string_lossy()]).unwrap();
+                let glob_set = glob([extensions.join("withfig.fig-").to_string_lossy()])
+                    .context("Could not build VSCode extension glob")?;
 
                 let extensions = extensions.as_path();
                 if let Ok(fig_extensions) = glob_dir(&glob_set, extensions) {
@@ -2146,6 +2159,25 @@ mod product_name_tests {
         assert!(
             !production.contains("Let's check if you're logged in"),
             "doctor no longer has an auth section"
+        );
+    }
+
+    #[test]
+    fn doctor_home_and_version_checks_do_not_unwrap() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("directories::home_dir().unwrap()")
+                && !production.contains("Version::parse(version).unwrap()")
+                && !production.contains("captures.get(1).unwrap()")
+                && !production.contains("message.message.unwrap()")
+                && !production.contains("to_string_lossy()]).unwrap()"),
+            "missing HOME, a malformed iTerm version, or a glob error must not panic doctor"
+        );
+        assert!(
+            production.contains("Could not get home dir")
+                && production.contains("Version::parse(cap.as_str()).ok()")
+                && production.contains("unwrap_or_default()"),
+            "doctor still reports a missing home dir and still parses the iTerm version"
         );
     }
 }

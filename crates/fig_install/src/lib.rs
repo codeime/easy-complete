@@ -123,7 +123,7 @@ pub fn get_max_channel() -> Channel {
     [state_channel, manifest_channel, settings_channel]
         .into_iter()
         .max()
-        .unwrap()
+        .unwrap_or(Channel::Stable)
 }
 
 pub async fn check_for_updates(_ignore_rollout: bool, _is_auto_update: bool) -> Result<Option<UpdatePackage>, Error> {
@@ -158,4 +158,20 @@ pub async fn update(
     _opts: UpdateOptions,
 ) -> Result<bool, Error> {
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn get_max_channel_does_not_unwrap_an_empty_iterator() {
+        let production = include_str!("lib.rs").split("#[cfg(test)]").next().expect("production");
+        let start = production.find("pub fn get_max_channel").expect("get_max_channel");
+        let body = &production[start..];
+        let end = body.find("\npub async fn").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains(".unwrap()") && body.contains("unwrap_or(Channel::Stable)"),
+            "max of the three channel sources must not panic if the iterator is empty"
+        );
+    }
 }

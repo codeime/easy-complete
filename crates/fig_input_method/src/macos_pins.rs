@@ -24,6 +24,19 @@ fn imk_production() -> String {
 }
 
 #[test]
+fn ime_main_does_not_unwrap_the_main_thread_marker() {
+    let prod = macos_production();
+    assert!(
+        !prod.contains(".expect(\"must be on the main thread\")"),
+        "a missing MainThreadMarker must log and return, not panic the helper"
+    );
+    assert!(
+        prod.contains("IME must start on the AppKit main thread") && prod.contains("MainThreadMarker::new()"),
+        "IME still requires the AppKit main thread to construct NSApp"
+    );
+}
+
+#[test]
 fn startup_never_disables_the_input_source() {
     let prod = macos_production();
     assert!(

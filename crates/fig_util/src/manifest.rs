@@ -123,7 +123,7 @@ impl Os {
             "macos" => Os::Macos,
             "linux" => Os::Linux,
             "windows" => Os::Windows,
-            _ => panic!("Unsupported OS: {}", std::env::consts::OS),
+            other => Os::Other(other.to_string()),
         }
     }
 
@@ -314,6 +314,22 @@ mod tests {
             assert_eq!($variant, $ty::from_str($text).unwrap());
             assert_eq!($text, $variant.to_string());
         };
+    }
+
+    #[test]
+    fn os_current_does_not_panic_on_an_unknown_os() {
+        let production = include_str!("manifest.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        let start = production.find("impl Os").expect("impl Os");
+        let body = &production[start..];
+        let end = body.find("\nimpl Channel").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains("panic!(\"Unsupported OS:") && body.contains("Os::Other(other.to_string())"),
+            "freebsd and other unknown OS names must map to Other, not abort the process"
+        );
     }
 
     #[test]

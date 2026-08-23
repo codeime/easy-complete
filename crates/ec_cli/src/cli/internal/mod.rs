@@ -355,9 +355,9 @@ impl InternalSubcommand {
                 let message = fig_proto::FigMessage::json(serde_json::from_str::<serde_json::Value>(&json)?)?;
 
                 let socket = if app {
-                    directories::desktop_socket_path().expect("Failed to get socket path")
+                    directories::desktop_socket_path()?
                 } else if let Some(ref figterm) = figterm {
-                    directories::figterm_socket_path(figterm).expect("Failed to get socket path")
+                    directories::figterm_socket_path(figterm)?
                 } else {
                     bail!("No destination for message");
                 };
@@ -616,10 +616,10 @@ impl InternalSubcommand {
                 match InputMethod::finish_input_method_installation(bundle_path) {
                     Ok(_) => Ok(ExitCode::SUCCESS),
                     Err(err) => {
-                        println!(
-                            "{}",
-                            serde_json::to_string(&err).expect("InputMethodError should be serializable")
-                        );
+                        match serde_json::to_string(&err) {
+                            Ok(json) => println!("{json}"),
+                            Err(_) => println!("{err}"),
+                        }
                         Ok(ExitCode::FAILURE)
                     },
                 }
@@ -811,6 +811,22 @@ mod tests {
     pub struct MockCli {
         #[command(subcommand)]
         pub subcommand: InternalSubcommand,
+    }
+
+    #[test]
+    fn internal_ipc_and_ime_errors_do_not_unwrap() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("desktop_socket_path().expect(\"Failed to get socket path\")")
+                && !production.contains("figterm_socket_path(figterm).expect(\"Failed to get socket path\")")
+                && !production.contains("expect(\"InputMethodError should be serializable\")"),
+            "a missing HOME or a serialize failure must not panic `ec internal`"
+        );
+        assert!(
+            production.contains("directories::desktop_socket_path()?")
+                && production.contains("serde_json::to_string(&err)"),
+            "internal ipc still resolves the desktop socket and still prints IME errors"
+        );
     }
 
     #[test]

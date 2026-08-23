@@ -35,11 +35,12 @@ impl std::fmt::Display for When {
     }
 }
 
+fn integration_stem(dotfile_name: &str) -> &str {
+    dotfile_name.strip_prefix('.').unwrap_or(dotfile_name)
+}
+
 fn integration_file_name(dotfile_name: &str, when: &When, shell: &Shell) -> String {
-    format!(
-        "{}.{when}.{shell}",
-        Regex::new(r"^\.").unwrap().replace_all(dotfile_name, ""),
-    )
+    format!("{}.{when}.{shell}", integration_stem(dotfile_name),)
 }
 
 pub trait ShellExt {
@@ -330,12 +331,7 @@ impl DotfileShellIntegration {
     }
 
     fn legacy_script_integration(&self, when: When) -> Result<ShellScriptShellIntegration> {
-        let integration_file_name = format!(
-            "{}.{}.{}",
-            Regex::new(r"^\.").unwrap().replace_all(self.dotfile_name, ""),
-            when,
-            self.shell
-        );
+        let integration_file_name = format!("{}.{}.{}", integration_stem(self.dotfile_name), when, self.shell);
         Ok(ShellScriptShellIntegration {
             shell: self.shell,
             when,
@@ -346,12 +342,7 @@ impl DotfileShellIntegration {
     }
 
     fn script_integration(&self, when: When) -> Result<ShellScriptShellIntegration> {
-        let integration_file_name = format!(
-            "{}.{}.{}",
-            Regex::new(r"^\.").unwrap().replace_all(self.dotfile_name, ""),
-            when,
-            self.shell
-        );
+        let integration_file_name = format!("{}.{}.{}", integration_stem(self.dotfile_name), when, self.shell);
         Ok(ShellScriptShellIntegration {
             shell: self.shell,
             when,
@@ -491,12 +482,9 @@ impl DotfileShellIntegration {
     fn remove_from_text(&self, text: impl Into<String>, when: When) -> Result<String> {
         let source_regex = self.source_regex(when, false)?;
         let mut regexes = vec![source_regex];
-        regexes.extend(
-            self.legacy_regexes(when)?
-                .patterns()
-                .iter()
-                .map(|r| Regex::new(r).unwrap()),
-        );
+        for pattern in self.legacy_regexes(when)?.patterns() {
+            regexes.push(Regex::new(pattern)?);
+        }
         Ok(regexes
             .iter()
             .fold::<String, _>(text.into(), |acc, reg| reg.replace_all(&acc, "").into()))
@@ -663,17 +651,11 @@ impl Integration for DotfileShellIntegration {
             // Remove comments and empty lines.
             Ok(contents) => {
                 // Check for existence of ignore flag
-                if Regex::new(r"(?mi)^\s*#\s*fig ignore\s?.*$")
-                    .unwrap()
-                    .is_match(&contents)
-                {
+                if Regex::new(r"(?mi)^\s*#\s*fig ignore\s?.*$")?.is_match(&contents) {
                     return Ok(());
                 }
 
-                Regex::new(r"(?m)^\s*(#.*)?\n")
-                    .unwrap()
-                    .replace_all(&contents, "")
-                    .into()
+                Regex::new(r"(?m)^\s*(#.*)?\n")?.replace_all(&contents, "").into()
             },
             Err(Error::Io(err)) if err.kind() == ErrorKind::NotFound => {
                 return Err(Error::FileDoesNotExist(dotfile.into()));
@@ -761,7 +743,7 @@ fn trailing_foreign_integration_patterns() -> &'static [&'static str] {
 fn foreign_integration_regexes() -> Vec<Regex> {
     trailing_foreign_integration_patterns()
         .iter()
-        .map(|p| Regex::new(p).expect("foreign integration regex"))
+        .filter_map(|p| Regex::new(p).ok())
         .collect()
 }
 
@@ -827,6 +809,33 @@ mod test {
     use fig_util::directories::{home_dir, old_fig_data_dir};
 
     use super::*;
+
+    #[test]
+    fn integration_stem_strips_a_leading_dot() {
+        assert_eq!(integration_stem(".zshrc"), "zshrc");
+        assert_eq!(integration_stem("zshrc"), "zshrc");
+        assert_eq!(
+            integration_file_name(".bashrc", &When::Post, &Shell::Bash),
+            "bashrc.post.bash"
+        );
+    }
+
+    #[test]
+    fn shell_install_regexes_do_not_unwrap() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("Regex::new(r\"^\\.\").unwrap()")
+                && !production.contains(".map(|r| Regex::new(r).unwrap())")
+                && !production.contains("expect(\"foreign integration regex\")"),
+            "dotfile install/uninstall must not panic on a regex"
+        );
+        assert!(
+            production.contains("integration_stem")
+                && production.contains("Regex::new(pattern)?")
+                && production.contains("filter_map(|p| Regex::new(p).ok())"),
+            "legacy patterns still compile; a bad static trailer is skipped"
+        );
+    }
 
     fn run_shellcheck(source: String) {
         if skip_shellcheck_tests() {

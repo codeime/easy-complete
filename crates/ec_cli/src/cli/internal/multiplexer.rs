@@ -43,14 +43,22 @@ async fn accept_connection(
     hostbound_tx: mpsc::Sender<Bytes>,
     mut clientbound_rx: broadcast::Receiver<Bytes>,
 ) {
-    let addr = tcp_stream
-        .peer_addr()
-        .expect("connected streams should have a peer address");
+    let addr = match tcp_stream.peer_addr() {
+        Ok(addr) => addr,
+        Err(err) => {
+            error!(%err, "websocket peer address");
+            return;
+        },
+    };
     info!("Peer address: {addr}");
 
-    let ws_stream = tokio_tungstenite::accept_async(tcp_stream)
-        .await
-        .expect("Error during the websocket handshake occurred");
+    let ws_stream = match tokio_tungstenite::accept_async(tcp_stream).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            error!(%err, "websocket handshake");
+            return;
+        },
+    };
 
     info!("New WebSocket connection: {addr}");
 
@@ -86,7 +94,10 @@ async fn accept_connection(
                         _ => continue,
                     };
                     if let Some(bytes) = bytes {
-                        hostbound_tx.send(bytes).await.unwrap();
+                        if hostbound_tx.send(bytes).await.is_err() {
+                            error!("hostbound send");
+                            return Err(());
+                        }
                     }
                 },
                 Some(Err(err)) => {
@@ -545,6 +556,28 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn websocket_accept_does_not_unwrap() {
+        let production = include_str!("multiplexer.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        let start = production
+            .find("async fn accept_connection")
+            .expect("accept_connection");
+        let body = &production[start..];
+        let end = body.find("\nasync fn").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains(".unwrap()") && !body.contains(".expect("),
+            "a dropped mux client or a failed handshake must not panic the SSH multiplexer"
+        );
+        assert!(
+            body.contains("websocket handshake") && body.contains("hostbound send"),
+            "accept still handshakes and still forwards hostbound bytes"
+        );
+    }
 
     #[tokio::test]
     async fn test_handle_client_bound_message() {

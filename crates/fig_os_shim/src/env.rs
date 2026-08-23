@@ -39,6 +39,10 @@ mod inner {
     }
 }
 
+fn fake_lock(fake: &Mutex<inner::Fake>) -> std::sync::MutexGuard<'_, inner::Fake> {
+    fake.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 impl Env {
     pub fn new() -> Self {
         Self::default()
@@ -62,9 +66,7 @@ impl Env {
         use inner::Inner;
         match &self.0 {
             Inner::Real => env::var(key.as_ref()),
-            Inner::Fake(fake) => fake
-                .lock()
-                .unwrap()
+            Inner::Fake(fake) => fake_lock(fake)
                 .vars
                 .get(key.as_ref())
                 .cloned()
@@ -76,9 +78,7 @@ impl Env {
         use inner::Inner;
         match &self.0 {
             Inner::Real => env::var_os(key.as_ref()),
-            Inner::Fake(fake) => fake
-                .lock()
-                .unwrap()
+            Inner::Fake(fake) => fake_lock(fake)
                 .vars
                 .get(key.as_ref().to_str()?)
                 .cloned()
@@ -98,10 +98,13 @@ impl Env {
             match &self.0 {
                 Inner::Real => std::env::set_var(key, value),
                 Inner::Fake(fake) => {
-                    fake.lock().unwrap().vars.insert(
-                        key.as_ref().to_str().expect("key must be valid str").to_string(),
-                        value.as_ref().to_str().expect("key must be valid str").to_string(),
-                    );
+                    let Some(key) = key.as_ref().to_str() else {
+                        return;
+                    };
+                    let Some(value) = value.as_ref().to_str() else {
+                        return;
+                    };
+                    fake_lock(fake).vars.insert(key.to_string(), value.to_string());
                 },
             }
         }
@@ -110,7 +113,7 @@ impl Env {
     pub fn home(&self) -> Option<PathBuf> {
         match &self.0 {
             inner::Inner::Real => dirs::home_dir(),
-            inner::Inner::Fake(fake) => fake.lock().unwrap().vars.get("HOME").map(PathBuf::from),
+            inner::Inner::Fake(fake) => fake_lock(fake).vars.get("HOME").map(PathBuf::from),
         }
     }
 
@@ -118,7 +121,7 @@ impl Env {
         use inner::Inner;
         match &self.0 {
             Inner::Real => std::env::current_dir(),
-            Inner::Fake(fake) => Ok(fake.lock().unwrap().cwd.clone()),
+            Inner::Fake(fake) => Ok(fake_lock(fake).cwd.clone()),
         }
     }
 
@@ -126,7 +129,7 @@ impl Env {
         use inner::Inner;
         match &self.0 {
             Inner::Real => std::env::current_exe(),
-            Inner::Fake(fake) => Ok(fake.lock().unwrap().current_exe.clone()),
+            Inner::Fake(fake) => Ok(fake_lock(fake).current_exe.clone()),
         }
     }
 
@@ -250,5 +253,49 @@ mod tests {
     fn test_default_current_dir() {
         let env = Env::new_fake();
         assert_eq!(env.current_dir().unwrap(), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn fake_env_lock_recovers_from_poison() {
+        let env = Env::new_fake();
+        let inner::Inner::Fake(fake) = &env.0 else {
+            panic!("expected fake env");
+        };
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = fake.lock().unwrap();
+            panic!("poison");
+        }));
+        assert!(env.get("MISSING").is_err());
+        assert_eq!(env.current_dir().unwrap(), PathBuf::from("/"));
+        assert_eq!(env.home(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fake_set_var_non_utf8_does_not_panic() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let env = Env::new_fake();
+        unsafe {
+            env.set_var(OsStr::from_bytes(b"\xff"), "v");
+            env.set_var("k", OsStr::from_bytes(b"\xff"));
+        }
+        assert!(env.get("k").is_err());
+    }
+
+    #[test]
+    fn fake_env_does_not_unwrap_the_lock() {
+        let production = include_str!("env.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains(".lock().unwrap()")
+                && production.contains("fake_lock")
+                && production.contains("into_inner"),
+            "a poisoned Fake env mutex must recover, not panic doctor/install tests"
+        );
+        assert!(
+            !production.contains("expect(\"key must be valid str\")"),
+            "non-UTF8 Fake set_var must skip, not panic"
+        );
     }
 }

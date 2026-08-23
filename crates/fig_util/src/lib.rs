@@ -119,13 +119,12 @@ pub fn partitioned_compare(lhs: &str, rhs: &str, by: char) -> Ordering {
         .zip(rhs.split(by).filter(|x| !x.is_empty()));
 
     for (lhs, rhs) in sides {
-        match if lhs.chars().all(|x| x.is_numeric()) && rhs.chars().all(|x| x.is_numeric()) {
-            // perform a numerical comparison
-            let lhs: u64 = lhs.parse().unwrap();
-            let rhs: u64 = rhs.parse().unwrap();
-            lhs.cmp(&rhs)
+        match if lhs.chars().all(|x| x.is_ascii_digit()) && rhs.chars().all(|x| x.is_ascii_digit()) {
+            match (lhs.parse::<u64>(), rhs.parse::<u64>()) {
+                (Ok(lhs), Ok(rhs)) => lhs.cmp(&rhs),
+                _ => lhs.cmp(rhs),
+            }
         } else {
-            // perform a lexical comparison
             lhs.cmp(rhs)
         } {
             Ordering::Equal => (),
@@ -148,6 +147,25 @@ mod tests {
         assert_eq!(partitioned_compare("1.2.3", "1.2.2", '.'), Ordering::Greater);
         assert_eq!(partitioned_compare("4-a-b", "4-a-c", '-'), Ordering::Less);
         assert_eq!(partitioned_compare("0?0?0", "0?0", '?'), Ordering::Greater);
+        assert_eq!(
+            partitioned_compare("99999999999999999999.1", "1.1", '.'),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn partitioned_compare_does_not_unwrap_u64_parse() {
+        let production = include_str!("lib.rs").split("#[cfg(test)]").next().expect("production");
+        let start = production
+            .find("pub fn partitioned_compare")
+            .expect("partitioned_compare");
+        let body = &production[start..];
+        let end = body.find("\npub fn").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains(".unwrap()") && body.contains("parse::<u64>()"),
+            "a digit string wider than u64 must fall back to lexical compare"
+        );
     }
 
     #[test]

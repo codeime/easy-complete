@@ -27,8 +27,10 @@ pub struct Spinner {
 impl Drop for Spinner {
     fn drop(&mut self) {
         if self.join.is_some() {
-            self.sender.send(Some("\x1b[2K\r".into())).unwrap();
-            self.join.take().unwrap().join().unwrap();
+            let _ = self.sender.send(Some("\x1b[2K\r".into()));
+            if let Some(join) = self.join.take() {
+                let _ = join.join();
+            }
         }
     }
 }
@@ -67,7 +69,7 @@ impl Spinner {
 
                     print!("\r{line}");
 
-                    stdout.flush().unwrap();
+                    let _ = stdout.flush();
 
                     if do_stop {
                         stdout.execute(crossterm::cursor::Show).ok();
@@ -86,8 +88,10 @@ impl Spinner {
     }
 
     fn stop_inner(&mut self, stop_symbol: Option<String>) {
-        self.sender.send(stop_symbol).expect("Could not stop spinner thread.");
-        self.join.take().unwrap().join().unwrap();
+        let _ = self.sender.send(stop_symbol);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
     }
 
     pub fn stop(&mut self) {
@@ -112,5 +116,21 @@ mod tests {
         ]);
         thread::sleep(Duration::from_secs(1));
         spinner.stop_with_message("Done".into());
+    }
+
+    #[test]
+    fn spinner_stop_and_drop_do_not_unwrap() {
+        let production = include_str!("spinner.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains(".unwrap();") && !production.contains("expect(\"Could not stop spinner thread.\")"),
+            "a disconnected spinner thread must not panic Drop or stop"
+        );
+        assert!(
+            production.contains("let _ = self.sender.send") && production.contains("let _ = join.join()"),
+            "stop and Drop still join the spinner thread"
+        );
     }
 }
