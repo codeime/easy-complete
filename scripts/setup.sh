@@ -6,7 +6,11 @@ OS="$(uname -s)"
 
 install_linux_deps() {
   # Source of truth for compile deps is `.github/workflows/ci.yml` `rust-linux`.
-  # Do not install WebKit: the UI is GPUI.
+  # Do not install WebKit: the overlay and settings UI are GPUI.
+  # GTK here is tray-icon/muda at compile time, not the completion list.
+  # Runtime overlay: a Vulkan ICD (lavapipe or a GPU) plus X11 (DISPLAY).
+  # Runtime caret: IBus and/or AT-SPI. Missing caret ⇒ the overlay parks;
+  # there is no window-rect fallback. Do not apt-install those here.
   if [ -f /etc/debian_version ]; then
     echo "Detected Debian/Ubuntu"
     sudo apt update

@@ -158,6 +158,9 @@ pub const ATSPI_PROP_PARENT: &str = "Parent";
 pub const ATSPI_METHOD_GET_NAME: &str = "GetName";
 pub const ATSPI_METHOD_GET_CARET_OFFSET: &str = "GetCaretOffset";
 pub const ATSPI_METHOD_GET_PARENT: &str = "GetParent";
+/// atspi `GetCharacterExtents` / `GetExtents` coord type: screen, not window.
+pub const ATSPI_COORD_TYPE_SCREEN: u32 = 0;
+pub const ATSPI_COORD_TYPE_WINDOW: u32 = 1;
 
 /// Bottom-left caret origins need a primary-screen height to convert into the
 /// overlay's top-left space. Top-left (IBus / X11) does not.
@@ -290,6 +293,12 @@ mod tests {
         assert_eq!(ATSPI_METHOD_GET_NAME, "GetName");
         assert_eq!(ATSPI_METHOD_GET_CARET_OFFSET, "GetCaretOffset");
         assert_eq!(ATSPI_METHOD_GET_PARENT, "GetParent");
+        assert_eq!(ATSPI_COORD_TYPE_SCREEN, 0);
+        assert_eq!(ATSPI_COORD_TYPE_WINDOW, 1);
+        assert_ne!(
+            ATSPI_COORD_TYPE_SCREEN, ATSPI_COORD_TYPE_WINDOW,
+            "GetCharacterExtents must ask for screen coords, not a window box"
+        );
     }
 
     #[test]

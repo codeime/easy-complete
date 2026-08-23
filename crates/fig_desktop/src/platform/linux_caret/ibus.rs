@@ -239,6 +239,10 @@ mod tests {
             !IBUS_EAVESDROP_MATCH_RULE.contains("BecomeMonitor"),
             "eavesdrop AddMatch must not require Monitoring"
         );
+        assert!(
+            !IBUS_EAVESDROP_MATCH_RULE.contains("destination="),
+            "eavesdrop must see other clients' SetCursorLocation, not only our own"
+        );
     }
 
     #[test]

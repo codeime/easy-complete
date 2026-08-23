@@ -48,4 +48,22 @@ mod tests {
         assert!(name.len() < 256);
         assert!(!name.contains(':'));
     }
+
+    #[test]
+    fn empty_or_relative_path_still_stays_on_the_pipe_prefix() {
+        let empty = pipe_name_from_path("");
+        assert_eq!(empty, r"\\.\pipe\ec_");
+        let relative = pipe_name_from_path("desktop.sock");
+        assert!(relative.starts_with(r"\\.\pipe\ec_"));
+        assert!(
+            relative.ends_with("desktop_sock"),
+            "'.' in the path must be slugged, got {relative}"
+        );
+        let already = pipe_name_from_path(r"\\.\pipe\already");
+        assert!(already.starts_with(r"\\.\pipe\ec_"));
+        assert!(
+            !already[r"\\.\pipe\ec_".len()..].contains('\\'),
+            "backslash after the prefix must be slugged, got {already}"
+        );
+    }
 }

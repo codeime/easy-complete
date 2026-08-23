@@ -17,14 +17,12 @@ use super::PlatformStateImpl;
 use crate::EventLoopProxy;
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{
-    ATSPI_IFACE_ACCESSIBLE, ATSPI_IFACE_TEXT, ATSPI_METHOD_GET_CARET_OFFSET, ATSPI_METHOD_GET_NAME,
-    ATSPI_METHOD_GET_PARENT, ATSPI_PROP_CARET_OFFSET, ATSPI_PROP_NAME, ATSPI_PROP_PARENT, ATSPI_ROLE_APPLICATION,
-    ATSPI_ROLE_FRAME, ATSPI_ROLE_WINDOW, atspi_state_changed_is_focus_gained, atspi_yields_to_ibus,
-    caret_from_atspi_extents,
+    ATSPI_COORD_TYPE_SCREEN, ATSPI_IFACE_ACCESSIBLE, ATSPI_IFACE_TEXT, ATSPI_METHOD_GET_CARET_OFFSET,
+    ATSPI_METHOD_GET_NAME, ATSPI_METHOD_GET_PARENT, ATSPI_PROP_CARET_OFFSET, ATSPI_PROP_NAME, ATSPI_PROP_PARENT,
+    ATSPI_ROLE_APPLICATION, ATSPI_ROLE_FRAME, ATSPI_ROLE_WINDOW, atspi_state_changed_is_focus_gained,
+    atspi_yields_to_ibus, caret_from_atspi_extents,
 };
 use crate::webview::AUTOCOMPLETE_ID;
-
-const COORD_TYPE_SCREEN: u32 = 0;
 
 pub fn spawn(proxy: EventLoopProxy, state: Arc<PlatformStateImpl>) {
     tokio::spawn(async move {
@@ -183,7 +181,7 @@ async fn handle_accessible(
             path,
             Some(ATSPI_IFACE_TEXT),
             "GetCharacterExtents",
-            &(offset, COORD_TYPE_SCREEN),
+            &(offset, ATSPI_COORD_TYPE_SCREEN),
         )
         .await?
         .body()
@@ -265,7 +263,7 @@ pub(crate) async fn accessible_name(conn: &zbus::Connection, dest: &str, path: &
     .await
 }
 
-async fn parent_ref(conn: &zbus::Connection, dest: &str, path: &str) -> Option<(String, OwnedObjectPath)> {
+pub(crate) async fn parent_ref(conn: &zbus::Connection, dest: &str, path: &str) -> Option<(String, OwnedObjectPath)> {
     if let Ok(pair) =
         dbus_property::<(String, OwnedObjectPath)>(conn, dest, path, ATSPI_IFACE_ACCESSIBLE, ATSPI_PROP_PARENT).await
     {
@@ -324,7 +322,7 @@ async fn window_extents(conn: &zbus::Connection, dest: &str, start_path: &str) -
                     current.as_str(),
                     Some("org.a11y.atspi.Component"),
                     "GetExtents",
-                    &COORD_TYPE_SCREEN,
+                    &ATSPI_COORD_TYPE_SCREEN,
                 )
                 .await
                 .ok()?
@@ -421,6 +419,31 @@ mod tests {
         #[zbus(property)]
         fn name(&self) -> String {
             self.name.clone()
+        }
+    }
+
+    struct PropertyParent {
+        dest: String,
+        path: OwnedObjectPath,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl PropertyParent {
+        #[zbus(property)]
+        fn parent(&self) -> (String, OwnedObjectPath) {
+            (self.dest.clone(), self.path.clone())
+        }
+    }
+
+    struct MethodParent {
+        dest: String,
+        path: OwnedObjectPath,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl MethodParent {
+        async fn get_parent(&self) -> (String, OwnedObjectPath) {
+            (self.dest.clone(), self.path.clone())
         }
     }
 
@@ -524,5 +547,73 @@ mod tests {
         .await
         .expect("Name property");
         assert_eq!(name, "xfce4-terminal");
+    }
+
+    #[tokio::test]
+    async fn parent_reads_property_when_get_parent_is_absent() {
+        let Some(bus) = crate::platform::spawn_test_bus() else {
+            eprintln!("skip: dbus-daemon not available");
+            return;
+        };
+        let parent_path: OwnedObjectPath = "/org/a11y/atspi/accessible/root".try_into().unwrap();
+        let _server = zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .name("dev.emmmm.easy-complete.atspi-parent-prop")
+            .unwrap()
+            .serve_at(
+                "/org/a11y/atspi/accessible/child",
+                PropertyParent {
+                    dest: ":1.9".into(),
+                    path: parent_path.clone(),
+                },
+            )
+            .unwrap()
+            .build()
+            .await
+            .expect("atspi parent property server");
+        let client = connect(&bus.address).await.expect("client");
+        let parent = parent_ref(
+            &client,
+            "dev.emmmm.easy-complete.atspi-parent-prop",
+            "/org/a11y/atspi/accessible/child",
+        )
+        .await
+        .expect("Parent property");
+        assert_eq!(parent.0, ":1.9");
+        assert_eq!(parent.1.as_str(), parent_path.as_str());
+    }
+
+    #[tokio::test]
+    async fn parent_falls_back_to_get_parent_method() {
+        let Some(bus) = crate::platform::spawn_test_bus() else {
+            eprintln!("skip: dbus-daemon not available");
+            return;
+        };
+        let parent_path: OwnedObjectPath = "/org/a11y/atspi/accessible/frame".try_into().unwrap();
+        let _server = zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .name("dev.emmmm.easy-complete.atspi-parent-method")
+            .unwrap()
+            .serve_at(
+                "/org/a11y/atspi/accessible/text",
+                MethodParent {
+                    dest: ":1.4".into(),
+                    path: parent_path.clone(),
+                },
+            )
+            .unwrap()
+            .build()
+            .await
+            .expect("atspi parent method server");
+        let client = connect(&bus.address).await.expect("client");
+        let parent = parent_ref(
+            &client,
+            "dev.emmmm.easy-complete.atspi-parent-method",
+            "/org/a11y/atspi/accessible/text",
+        )
+        .await
+        .expect("GetParent method");
+        assert_eq!(parent.0, ":1.4");
+        assert_eq!(parent.1.as_str(), parent_path.as_str());
     }
 }

@@ -73,6 +73,12 @@ mod win32_bool_tests {
         assert!(!win32_hresult_succeeded(1));
         assert_ne!(win32_hresult_succeeded(0), win32_bool_succeeded(0));
         assert_ne!(win32_hresult_succeeded(1), win32_bool_succeeded(1));
+        // S_FALSE is 1, E_FAIL is 0x80004005. Neither is CreatePseudoConsole success.
+        const S_FALSE: i32 = 1;
+        const E_FAIL: i32 = 0x8000_4005_u32 as i32;
+        assert!(!win32_hresult_succeeded(S_FALSE));
+        assert!(!win32_hresult_succeeded(E_FAIL));
+        assert!(win32_bool_succeeded(S_FALSE), "BOOL would misread S_FALSE as success");
     }
 }
 
