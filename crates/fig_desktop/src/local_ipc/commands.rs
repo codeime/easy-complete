@@ -26,16 +26,16 @@ pub async fn debug(command: DebugModeCommand, proxy: &EventLoopProxy) -> LocalRe
 
     let debug_mode = match command.set_debug_mode {
         Some(b) => {
-            *DEBUG_MODE.lock().unwrap() = b;
+            *crate::utils::recover_mutex(&DEBUG_MODE) = b;
             b
         },
         None => match command.toggle_debug_mode {
             Some(true) => {
-                let mut locked_debug = DEBUG_MODE.lock().unwrap();
+                let mut locked_debug = crate::utils::recover_mutex(&DEBUG_MODE);
                 *locked_debug = !*locked_debug;
                 *locked_debug
             },
-            _ => *DEBUG_MODE.lock().unwrap(),
+            _ => *crate::utils::recover_mutex(&DEBUG_MODE),
         },
     };
 

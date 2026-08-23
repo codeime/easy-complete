@@ -491,7 +491,7 @@ impl PlatformStateImpl {
                     }
                 };
 
-                let mut policy_lock = ACTIVATION_POLICY.lock().unwrap();
+                let mut policy_lock = crate::utils::recover_mutex(&ACTIVATION_POLICY);
                 if *policy_lock != policy {
                     debug!(?policy, "Setting application policy");
                     *policy_lock = policy;

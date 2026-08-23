@@ -297,7 +297,9 @@ pub fn start_application(
                 info!("{PRODUCT_NAME} has started");
                 #[cfg(target_os = "macos")]
                 {
-                    crate::platform::set_activation_policy(*crate::platform::ACTIVATION_POLICY.lock().unwrap());
+                    crate::platform::set_activation_policy(*crate::utils::recover_mutex(
+                        &crate::platform::ACTIVATION_POLICY,
+                    ));
                     let show_settings = (host.show_dashboard_after_normal_launch
                         && !crate::platform::launched_as_login_item())
                         || crate::permissions::accessibility_is_missing();

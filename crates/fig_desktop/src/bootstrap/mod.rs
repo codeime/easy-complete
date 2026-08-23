@@ -77,7 +77,7 @@ impl AppRuntime {
 
             use crate::platform::ACTIVATION_POLICY;
 
-            *ACTIVATION_POLICY.lock().unwrap() = ActivationPolicy::Accessory;
+            *crate::utils::recover_mutex(&ACTIVATION_POLICY) = ActivationPolicy::Accessory;
             crate::platform::set_activation_policy(ActivationPolicy::Accessory);
         }
 

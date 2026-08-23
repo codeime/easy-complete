@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn match_buckets_follow_webview_exact_prefix_order() {
+    fn match_score_buckets_exact_then_prefix() {
         assert_eq!(match_score("git", "git", true).unwrap().kind, MatchKind::ExactCase);
         assert_eq!(
             match_score("Git", "git", true).unwrap().kind,
@@ -336,6 +336,15 @@ mod tests {
         assert_eq!(
             match_score("Git-status", "git", true).unwrap().kind,
             MatchKind::PrefixInsensitive
+        );
+    }
+
+    #[test]
+    fn ranking_tests_do_not_use_webview_fn_names() {
+        let old = ["match", "buckets", "follow", "webview", "exact", "prefix", "order"].join("_");
+        assert!(
+            !include_str!("query.rs").contains(&old),
+            "ranking tests should use native-era names"
         );
     }
 

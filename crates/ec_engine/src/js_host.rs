@@ -1115,6 +1115,8 @@ mod tests {
             include_str!("js_host.rs"),
             include_str!("generate.rs"),
             include_str!("runtime.rs"),
+            include_str!("query.rs"),
+            include_str!("rank.rs"),
         ] {
             assert!(
                 !src.contains(&matches) && !src.contains(&like),
