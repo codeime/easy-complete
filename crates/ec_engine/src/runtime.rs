@@ -533,14 +533,16 @@ impl Engine {
             };
             let host = &self.js_host;
             let registry = &mut self.registry;
-            host.enter_with_context(&request.cwd, &shell, || lookup::complete(registry, &request, &flags))
+            host.enter_with_context(&request.cwd, &shell, || {
+                lookup::complete(registry, &request, &flags, &tokens, ends_with_space, buffer)
+            })
         };
         if should_merge_history(request.include_history, history_disabled) {
             let effective_fuzzy = result.fuzzy;
             rank::merge_history(&mut result, &tokens, &self.frecency, effective_fuzzy);
         }
         let alphabetical = flags.alphabetical;
-        let root_command = ranking_root_command(&request.buffer, request.cursor);
+        let root_command = tokens.first().cloned().unwrap_or_default();
         {
             let acceptance = self.acceptance.lock().unwrap_or_else(|err| err.into_inner());
             if history_disabled {
@@ -625,6 +627,28 @@ mod tests {
         assert_eq!(query_term_for("foo", Some("/")), "foo");
         assert_eq!(query_term_for("foo", None), "foo");
         assert_eq!(query_term_for("foo", Some("")), "");
+    }
+
+    #[test]
+    fn complete_tokenizes_the_buffer_once() {
+        let src = include_str!("runtime.rs");
+        let start = src.find("pub fn complete(&mut self").expect("Engine::complete");
+        let body = &src[start..];
+        let end = body.find("#[cfg(test)]").unwrap_or(body.len());
+        let body = &body[..end];
+        assert_eq!(
+            body.matches("lookup::tokenize(").count(),
+            1,
+            "Engine::complete must tokenize the completion buffer once"
+        );
+        assert!(
+            !body.contains("ranking_root_command"),
+            "root command must reuse the already-parsed tokens"
+        );
+        assert!(
+            body.contains("lookup::complete("),
+            "Engine::complete must pass tokens into lookup"
+        );
     }
 
     #[test]

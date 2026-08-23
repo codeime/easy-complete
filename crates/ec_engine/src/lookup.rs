@@ -1362,10 +1362,19 @@ fn first_token_result(
     }
 }
 
-pub fn complete(registry: &mut Registry, request: &CompleteRequest, flags: &AutocompleteFlags) -> CompleteResult {
+/// Walk the spec for a pre-parsed [`completion_buffer`].
+///
+/// `Engine::complete` tokenizes once and passes `tokens`, `ends_with_space`,
+/// and that buffer so this path does not tokenize again.
+pub fn complete(
+    registry: &mut Registry,
+    request: &CompleteRequest,
+    flags: &AutocompleteFlags,
+    tokens: &[String],
+    ends_with_space: bool,
+    buffer: &str,
+) -> CompleteResult {
     let raw = buffer_before_cursor(&request.buffer, request.cursor);
-    let buffer = completion_buffer(&request.buffer, request.cursor);
-    let (tokens, ends_with_space) = tokenize(buffer);
     if tokens.is_empty() {
         if is_fresh_command_position(raw) {
             return first_token_result(registry, request, String::new(), String::new(), flags);
@@ -1408,7 +1417,7 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest, flags: &Auto
     let Some(root) = registry.get_arc(command) else {
         return CompleteResult {
             suggestions: filter_query(
-                crate::cobra::complete(&tokens, &request.cwd, request.fuzzy),
+                crate::cobra::complete(tokens, &request.cwd, request.fuzzy),
                 &query,
                 request.fuzzy,
             ),
@@ -1419,7 +1428,7 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest, flags: &Auto
         };
     };
 
-    let context = resolve_context(root, &tokens, ends_with_space, &query, &raw_search_term, Some(registry));
+    let context = resolve_context(root, tokens, ends_with_space, &query, &raw_search_term, Some(registry));
     let fuzzy = effective_fuzzy(
         request.fuzzy,
         Some(context.spec.as_ref()),
@@ -1490,7 +1499,7 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest, flags: &Auto
         }
         let mut active_suggestions = crate::generate::generate_for_arg_with_search_term(
             &active.arg,
-            &tokens,
+            tokens,
             &query,
             &search_term,
             &request.cwd,
@@ -1564,7 +1573,7 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest, flags: &Auto
 
     if suggestions.is_empty() && context.active_arg.is_none() {
         suggestions.extend(filter_query(
-            crate::cobra::complete(&tokens, &request.cwd, fuzzy),
+            crate::cobra::complete(tokens, &request.cwd, fuzzy),
             &query,
             fuzzy,
         ));
@@ -2201,7 +2210,16 @@ mod tests {
     use std::fs;
 
     fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteResult {
-        super::complete(registry, request, &AutocompleteFlags::default())
+        let buffer = completion_buffer(&request.buffer, request.cursor);
+        let (tokens, ends_with_space) = tokenize(buffer);
+        super::complete(
+            registry,
+            request,
+            &AutocompleteFlags::default(),
+            &tokens,
+            ends_with_space,
+            buffer,
+        )
     }
 
     fn load_git() -> (tempfile::TempDir, Registry) {
@@ -2267,6 +2285,23 @@ mod tests {
         assert!(
             !body[..end].contains("get_bool_or"),
             "lookup::complete must use AutocompleteFlags, not get_bool_or"
+        );
+    }
+
+    #[test]
+    fn complete_reuses_preparsed_tokens() {
+        let src = include_str!("lookup.rs");
+        let start = src.find("pub fn complete(").expect("complete");
+        let rest = &src[start..];
+        let end = rest.find("\npub fn ").expect("next item after lookup::complete");
+        let body = &rest[..end];
+        assert!(
+            !body.contains("tokenize("),
+            "lookup::complete must reuse Engine tokens, not tokenize again"
+        );
+        assert!(
+            body.contains("tokens") && body.contains("ends_with_space") && body.contains("buffer"),
+            "lookup::complete takes the pre-parsed completion buffer"
         );
     }
 

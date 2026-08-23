@@ -96,19 +96,20 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
                 };
 
                 let mut encoded = BytesMut::new();
-                message.encode(&mut encoded).unwrap();
+                if let Err(err) = message.encode(&mut encoded) {
+                    error!(%err, "Failed to encode edit buffer change notification");
+                    continue;
+                }
 
                 debug!(%message_id, "Sending edit buffer change notification");
 
-                self.proxy
-                    .send_event(Event::WindowEvent {
-                        window_id: sub.key().clone(),
-                        window_event: WindowEvent::Emit {
-                            event_name: EmitEventName::Notification,
-                            payload: BASE64_STANDARD.encode(encoded).into(),
-                        },
-                    })
-                    .unwrap();
+                self.proxy.send_event_or_warn(Event::WindowEvent {
+                    window_id: sub.key().clone(),
+                    window_event: WindowEvent::Emit {
+                        event_name: EmitEventName::Notification,
+                        payload: BASE64_STANDARD.encode(encoded).into(),
+                    },
+                });
             }
         }
 
@@ -292,5 +293,26 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
         })?;
 
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn send_event_and_encode_do_not_unwrap() {
+        let src = include_str!("mod.rs");
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains(".unwrap()"),
+            "remote_ipc must not unwrap send_event or protobuf encode"
+        );
+        assert!(
+            production.contains("send_event_or_warn"),
+            "closed event loop must match EventLoopProxy::send_event_or_warn"
+        );
+        assert!(
+            production.contains("Failed to encode edit buffer change notification"),
+            "encode failure must log instead of panicking"
+        );
     }
 }
