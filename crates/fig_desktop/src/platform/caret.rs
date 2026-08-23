@@ -302,7 +302,16 @@ mod tests {
     }
 
     #[test]
-    fn archaeological_linux_and_windows_backends_are_not_in_the_module_tree() {
+    fn archaeological_linux_and_windows_backends_are_gone() {
+        let platform = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/platform");
+        assert!(
+            !platform.join("linux").exists(),
+            "pre-GPUI platform/linux/ was deleted; do not restore it"
+        );
+        assert!(
+            !platform.join("windows.rs").exists(),
+            "pre-GPUI platform/windows.rs was deleted; do not restore it"
+        );
         let platform_mod = include_str!("mod.rs");
         assert!(platform_mod.contains("mod linux_caret;"));
         assert!(platform_mod.contains("mod windows_caret;"));
@@ -313,15 +322,6 @@ mod tests {
         assert!(
             !platform_mod.contains("mod windows;\n") && !platform_mod.contains("mod windows; "),
             "old platform/windows.rs must stay uncompiled"
-        );
-        let archaeological = include_str!("windows.rs");
-        assert!(
-            archaeological.contains("Not compiled"),
-            "fork-era windows.rs must stay labelled as archaeology"
-        );
-        assert!(
-            archaeological.contains("PositionRelativeToRect") || archaeological.contains("RelativeDirection"),
-            "the leftover file is the pre-GPUI API; do not revive it"
         );
     }
 

@@ -23,10 +23,10 @@ mod windows_overlay;
 #[cfg(target_os = "linux")]
 pub use linux::{
     OVERLAY_WINDOW_TITLE, harden_overlay_window, harden_overlay_window_handle, harden_overlay_window_titled,
-    invalidate_cached_overlay_x_window, overlay_placement_scale, park_overlay_window_handle,
-    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, screens_quartz,
-    set_overlay_frame_handle, set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled,
-    set_overlay_window_level, set_overlay_window_level_for_title, system_appearance_is_dark,
+    invalidate_cached_overlay_x_window, overlay_placement_scale, overlay_screens, park_overlay_window_handle,
+    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, set_overlay_frame_handle,
+    set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled, set_overlay_window_level,
+    set_overlay_window_level_for_title, system_appearance_is_dark,
 };
 pub use linux_overlay::{OverlayX11Hints, overlay_x11_activates, overlay_x11_hints, overlay_x11_place_changes_size};
 pub use list::{
@@ -38,10 +38,10 @@ pub use list::{
 #[cfg(target_os = "macos")]
 pub use macos::{
     OVERLAY_WINDOW_TITLE, harden_overlay_window, harden_overlay_window_handle, harden_overlay_window_titled,
-    invalidate_cached_overlay_x_window, overlay_placement_scale, park_overlay_window_handle,
-    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, screens_quartz,
-    set_overlay_frame_handle, set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled,
-    set_overlay_window_level, set_overlay_window_level_for_title, system_appearance_is_dark,
+    invalidate_cached_overlay_x_window, overlay_placement_scale, overlay_screens, park_overlay_window_handle,
+    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, set_overlay_frame_handle,
+    set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled, set_overlay_window_level,
+    set_overlay_window_level_for_title, system_appearance_is_dark,
 };
 pub use overlay::{
     OverlayHandle, OverlayState, open_overlay_window, open_overlay_window_with_visibility, overlay_window_options,
@@ -50,17 +50,17 @@ pub use overlay::{
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub use platform_stub::{
     OVERLAY_WINDOW_TITLE, harden_overlay_window, harden_overlay_window_handle, harden_overlay_window_titled,
-    invalidate_cached_overlay_x_window, overlay_placement_scale, park_overlay_window_handle,
-    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, screens_quartz,
-    set_overlay_frame_handle, set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled,
-    set_overlay_window_level, set_overlay_window_level_for_title, system_appearance_is_dark,
+    invalidate_cached_overlay_x_window, overlay_placement_scale, overlay_screens, park_overlay_window_handle,
+    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, set_overlay_frame_handle,
+    set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled, set_overlay_window_level,
+    set_overlay_window_level_for_title, system_appearance_is_dark,
 };
 pub use theme::{parse_color, theme_from_json};
 #[cfg(target_os = "windows")]
 pub use windows::{
     OVERLAY_WINDOW_TITLE, harden_overlay_window, harden_overlay_window_handle, harden_overlay_window_titled,
-    invalidate_cached_overlay_x_window, overlay_placement_scale, park_overlay_window_handle,
-    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, screens_quartz,
-    set_overlay_frame_handle, set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled,
-    set_overlay_window_level, set_overlay_window_level_for_title, system_appearance_is_dark,
+    invalidate_cached_overlay_x_window, overlay_placement_scale, overlay_screens, park_overlay_window_handle,
+    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, set_overlay_frame_handle,
+    set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled, set_overlay_window_level,
+    set_overlay_window_level_for_title, system_appearance_is_dark,
 };

@@ -40,8 +40,20 @@ pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f
     primary_origin_y + primary_height - quartz_y - height
 }
 
-pub fn screens_quartz() -> Vec<(f64, f64, f64, f64)> {
+pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stub_overlay_screens_are_empty() {
+        assert!(super::overlay_screens().is_empty());
+        let src = include_str!("platform_stub.rs");
+        let start = src.find("pub fn overlay_screens()").expect("overlay_screens");
+        let body = &src[start..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        assert!(!body.contains("screens_quartz"));
+    }
 }
 
 pub fn set_overlay_frame_titled(_title: &str, _x: f64, _y: f64, _width: f64, _height: f64) {}

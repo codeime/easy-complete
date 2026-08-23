@@ -12,8 +12,8 @@ use std::time::Duration;
 use ec_engine::{CompleteRequest, CompleteResult, EngineClient, ranking_root_command, ui_completion_deadline};
 use ec_gpui::{
     ClickInsert, DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_WIDTH, OverlayHandle, OverlayState, OverlayTheme,
-    SuggestionItem, TabPrefix, open_overlay_window, overlay_content_size_with_context, park_overlay_handle,
-    position_overlay, screens_quartz, tab_prefix_insertion, theme_from_json,
+    SuggestionItem, TabPrefix, open_overlay_window, overlay_content_size_with_context, overlay_screens,
+    park_overlay_handle, position_overlay, tab_prefix_insertion, theme_from_json,
 };
 use fig_proto::figterm::Action;
 use fig_proto::local::caret_position_hook::Origin;
@@ -279,7 +279,7 @@ impl OverlayController {
 
     pub fn apply_position(&mut self, position: WindowPosition, platform_state: &PlatformState, cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
-        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens_quartz().is_empty() {
+        if matches!(position, WindowPosition::RelativeToCaret { .. }) && overlay_screens().is_empty() {
             debug!("no screen list; refusing caret placement");
             *self.last_position.lock().unwrap_or_else(|err| err.into_inner()) = None;
             self.park_window(cx);
@@ -1392,7 +1392,7 @@ fn layout_overlay(
     }
     if let Some(position) = *last_position.lock().unwrap_or_else(|err| err.into_inner()) {
         #[cfg(not(target_os = "macos"))]
-        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens_quartz().is_empty() {
+        if matches!(position, WindowPosition::RelativeToCaret { .. }) && overlay_screens().is_empty() {
             let _ = park_overlay_slot(window_slot, cx);
             return false;
         }
@@ -1967,7 +1967,7 @@ fn overlay_bounds(
                 tao::dpi::Size::Logical(s) => LogicalSize::new(s.width, s.height),
                 tao::dpi::Size::Physical(s) => s.to_logical(1.0),
             };
-            let screens = screens_quartz();
+            let screens = overlay_screens();
             caret.y = caret_y_in_quartz_space(caret.y, caret_size.height, origin, screens.first().copied());
             let mut edges = screen_edges_containing(&screens, caret.x, caret.y);
             let mut flip_bottom = edges.map(|(_, _, _, bottom)| bottom);
@@ -2428,7 +2428,7 @@ mod tests {
     #[test]
     fn stub_screens_are_empty_so_a_caret_cannot_be_placed() {
         assert!(
-            screens_quartz().is_empty(),
+            overlay_screens().is_empty(),
             "platform_stub must not invent a screen list; overlay placement parks instead"
         );
     }

@@ -610,7 +610,7 @@ fn cocoa_screen_to_quartz(frame: (f64, f64, f64, f64), primary_top: f64) -> (f64
 
 /// Screens as Quartz rects `(x, y, width, height)` with origin at the top-left of
 /// the primary display — the same space Accessibility caret coordinates use.
-pub fn screens_quartz() -> Vec<(f64, f64, f64, f64)> {
+pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {
     #[cfg(target_os = "macos")]
     unsafe {
         autoreleasepool(|| {

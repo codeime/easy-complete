@@ -721,12 +721,13 @@ impl<T> Term<T> {
                     let mut buffer = self.get_text_region(&rect, Column(*cmd_cursor.column))?;
 
                     if let Some(cursor_idx) = buffer.cursor_idx {
-                        buffer.buffer = buffer.buffer.trim_end().to_string();
+                        let trimmed = buffer.buffer.trim_end().len();
+                        buffer.buffer.truncate(trimmed);
 
                         if buffer.buffer.len() < cursor_idx {
                             buffer
                                 .buffer
-                                .push_str(&" ".repeat(cursor_idx.saturating_sub(buffer.buffer.len())));
+                                .extend(std::iter::repeat_n(' ', cursor_idx - buffer.buffer.len()));
                         }
                     }
 
@@ -2064,7 +2065,33 @@ mod tests {
     use crate::ansi::{self, CharsetIndex, Handler, StandardCharset};
     use crate::event::VoidListener;
     use crate::grid::Scroll;
-    use crate::index::{Column, Point};
+    use crate::index::{Column, Line, Point};
+
+    #[test]
+    fn get_current_buffer_trims_in_place() {
+        let content = "git checkout   ";
+        let size = SizeInfo::new(1, content.chars().count());
+        let mut term = Term::new_test(size, VoidListener, 1);
+        for (index, c) in content.chars().enumerate() {
+            term.grid[Line(0)][Column(index)].c = c;
+        }
+        term.shell_state.cmd_cursor = Some(Point::new(Line(0), Column(0)));
+        let buffer = term.get_current_buffer().expect("buffer");
+        assert_eq!(buffer.buffer, "git checkout");
+        let src = include_str!("mod.rs");
+        let start = src.find("pub fn get_current_buffer").expect("get_current_buffer");
+        let body = &src[start..];
+        let end = body.find("pub fn set_windows_delay").unwrap_or(800);
+        let body = &body[..end];
+        assert!(
+            !body.contains("to_string()"),
+            "get_current_buffer must truncate, not allocate a second String"
+        );
+        assert!(
+            !body.contains(".repeat("),
+            "cursor padding must reuse the existing buffer"
+        );
+    }
 
     #[test]
     fn scroll_display_page_up() {

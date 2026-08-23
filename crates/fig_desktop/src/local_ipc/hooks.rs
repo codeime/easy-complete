@@ -29,33 +29,29 @@ pub async fn caret_position(
         return Ok(());
     }
 
-    proxy
-        .send_event(Event::WindowEvent {
-            window_id: AUTOCOMPLETE_ID,
-            window_event: WindowEvent::UpdateWindowGeometry {
-                position: Some(WindowPosition::RelativeToCaret {
-                    caret_position: LogicalPosition::new(x, y).into(),
-                    caret_size: LogicalSize::new(width, height).into(),
-                    origin: hook.origin(),
-                }),
-                size: None,
-                anchor: None,
-                tx: None,
-                dry_run: false,
-            },
-        })
-        .ok();
+    proxy.send_event_or_warn(Event::WindowEvent {
+        window_id: AUTOCOMPLETE_ID,
+        window_event: WindowEvent::UpdateWindowGeometry {
+            position: Some(WindowPosition::RelativeToCaret {
+                caret_position: LogicalPosition::new(x, y).into(),
+                caret_size: LogicalSize::new(width, height).into(),
+                origin: hook.origin(),
+            }),
+            size: None,
+            anchor: None,
+            tx: None,
+            dry_run: false,
+        },
+    });
 
     Ok(())
 }
 
 pub async fn focus_change(proxy: &EventLoopProxy) -> Result<()> {
-    proxy
-        .send_event(Event::WindowEvent {
-            window_id: AUTOCOMPLETE_ID.clone(),
-            window_event: WindowEvent::Hide,
-        })
-        .unwrap();
+    proxy.send_event_or_warn(Event::WindowEvent {
+        window_id: AUTOCOMPLETE_ID.clone(),
+        window_event: WindowEvent::Hide,
+    });
 
     Ok(())
 }
@@ -83,15 +79,13 @@ pub async fn event(hook: EventHook, proxy: &EventLoopProxy) -> Result<()> {
     };
 
     if hook.apps.is_empty() {
-        proxy.send_event(Event::WindowEventAll { window_event }).unwrap();
+        proxy.send_event_or_warn(Event::WindowEventAll { window_event });
     } else {
         for app in hook.apps {
-            proxy
-                .send_event(Event::WindowEvent {
-                    window_id: WindowId(app.into()),
-                    window_event: window_event.clone(),
-                })
-                .unwrap();
+            proxy.send_event_or_warn(Event::WindowEvent {
+                window_id: WindowId(app.into()),
+                window_event: window_event.clone(),
+            });
         }
     }
 

@@ -39,12 +39,10 @@ pub async fn debug(command: DebugModeCommand, proxy: &EventLoopProxy) -> LocalRe
         },
     };
 
-    proxy
-        .send_event(Event::WindowEvent {
-            window_id: AUTOCOMPLETE_ID.clone(),
-            window_event: WindowEvent::DebugMode(debug_mode),
-        })
-        .unwrap();
+    proxy.send_event_or_warn(Event::WindowEvent {
+        window_id: AUTOCOMPLETE_ID.clone(),
+        window_event: WindowEvent::DebugMode(debug_mode),
+    });
 
     Ok(LocalResponse::Success(None))
 }
@@ -103,17 +101,15 @@ pub async fn diagnostic(_: DiagnosticsCommand, figterm_state: &FigtermState) -> 
 pub async fn open_ui_element(command: OpenUiElementCommand, proxy: &EventLoopProxy) -> LocalResult {
     match command.element() {
         UiElement::Settings => {
-            proxy
-                .send_event(Event::WindowEvent {
-                    window_id: DASHBOARD_ID.clone(),
-                    window_event: WindowEvent::Batch(vec![
-                        WindowEvent::NavigateRelative {
-                            path: "/preferences".into(),
-                        },
-                        WindowEvent::Show,
-                    ]),
-                })
-                .unwrap();
+            proxy.send_event_or_warn(Event::WindowEvent {
+                window_id: DASHBOARD_ID.clone(),
+                window_event: WindowEvent::Batch(vec![
+                    WindowEvent::NavigateRelative {
+                        path: "/preferences".into(),
+                    },
+                    WindowEvent::Show,
+                ]),
+            });
         },
         UiElement::MissionControl => {
             let events = if let Some(path) = command.route {
@@ -122,12 +118,10 @@ pub async fn open_ui_element(command: OpenUiElementCommand, proxy: &EventLoopPro
                 vec![WindowEvent::Show]
             };
 
-            proxy
-                .send_event(Event::WindowEvent {
-                    window_id: DASHBOARD_ID.clone(),
-                    window_event: WindowEvent::Batch(events),
-                })
-                .unwrap();
+            proxy.send_event_or_warn(Event::WindowEvent {
+                window_id: DASHBOARD_ID.clone(),
+                window_event: WindowEvent::Batch(events),
+            });
         },
         UiElement::MenuBar => error!("Opening menu bar is unimplemented"),
         UiElement::InputMethodPrompt => error!("Opening input method prompt is unimplemented"),

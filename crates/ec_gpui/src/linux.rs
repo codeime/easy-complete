@@ -6,7 +6,7 @@
 //!
 //! Native Wayland has no placement API in GPUI 0.2.2 (no layer-shell).
 //! GNOME Wayland still has XWayland (`DISPLAY`); the overlay uses that.
-//! `screens_quartz` is empty without an X11 connection and the overlay parks.
+//! `overlay_screens` is empty without an X11 connection and the overlay parks.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -128,7 +128,7 @@ pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f
 
 /// X11 / XWayland outputs in top-left screen space. Empty when there is no
 /// display connection, so a caret without screens still parks (see overlay).
-pub fn screens_quartz() -> Vec<(f64, f64, f64, f64)> {
+pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {
     let Ok((conn, screen_num)) = RustConnection::connect(None) else {
         return Vec::new();
     };
@@ -330,6 +330,20 @@ mod tests {
     use super::{RustConnection, announce_overlay_above, apply_overlay_properties, intern, scale_from_xft_dpi_text};
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt, CreateWindowAux, EventMask, WindowClass};
+
+    #[test]
+    fn overlay_screens_is_the_non_mac_screen_list_name() {
+        let src = include_str!("linux.rs");
+        let start = src.find("pub fn overlay_screens()").expect("overlay_screens");
+        let body = &src[start..];
+        let end = body.find("#[cfg(test)]").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(body.contains("pub fn overlay_screens()"));
+        assert!(
+            !body.contains("screens_quartz"),
+            "non-Mac screen list must not keep the Quartz name"
+        );
+    }
 
     #[test]
     fn xft_dpi_192_is_scale_two() {

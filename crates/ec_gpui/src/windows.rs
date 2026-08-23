@@ -96,7 +96,7 @@ pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f
     primary_origin_y + primary_height - quartz_y - height
 }
 
-pub fn screens_quartz() -> Vec<(f64, f64, f64, f64)> {
+pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {
     unsafe {
         screens_from_virtual_metrics(
             GetSystemMetrics(SM_XVIRTUALSCREEN),

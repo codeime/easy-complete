@@ -35,6 +35,13 @@ impl EventLoopProxy {
     pub fn send_event(&self, event: Event) -> Result<(), EventLoopClosed> {
         self.tx.send(event).map_err(|_err| EventLoopClosed)
     }
+
+    /// Post an event, logging if the GPUI host has already shut down.
+    pub fn send_event_or_warn(&self, event: Event) {
+        if let Err(err) = self.send_event(event) {
+            tracing::warn!(%err, "dropped event; event loop is closed");
+        }
+    }
 }
 
 /// Stand-in for tao's window-target. Dashboard windows are created with AppKit directly; this
@@ -53,4 +60,19 @@ impl EventLoopWindowTarget {
 pub(crate) fn channel() -> (EventLoopProxy, flume::Receiver<Event>) {
     let (tx, rx) = flume::unbounded();
     (EventLoopProxy::new(tx), rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Event;
+    use tao::event_loop::ControlFlow;
+
+    #[test]
+    fn send_event_or_warn_does_not_panic_after_disconnect() {
+        let (proxy, rx) = channel();
+        drop(rx);
+        proxy.send_event_or_warn(Event::ControlFlow(ControlFlow::Exit));
+        assert!(proxy.send_event(Event::ControlFlow(ControlFlow::Exit)).is_err());
+    }
 }

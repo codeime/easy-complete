@@ -57,6 +57,13 @@ pub struct WebviewManager {
 /// their own. Everything else is threaded through [`WebviewManager`].
 pub static GLOBAL_PROXY: OnceLock<EventLoopProxy> = OnceLock::new();
 
+fn diagnostic_exit(message: &str) -> ! {
+    error!("{message}");
+    eprintln!("easy-complete: {message}");
+    #[allow(clippy::exit)]
+    std::process::exit(1);
+}
+
 impl WebviewManager {
     #[allow(unused_variables)]
     #[allow(unused_mut)]
@@ -72,7 +79,9 @@ impl WebviewManager {
         }
 
         let (proxy, event_rx) = crate::event_loop::channel();
-        GLOBAL_PROXY.set(proxy.clone()).unwrap();
+        if GLOBAL_PROXY.set(proxy.clone()).is_err() {
+            diagnostic_exit("event loop proxy already initialized");
+        }
 
         let figterm_state = Arc::new(FigtermState::default());
         let platform_state = Arc::new(PlatformState::new(proxy.clone()));
@@ -185,11 +194,17 @@ impl WebviewManager {
         #[cfg(target_os = "macos")]
         menu_bar.init_for_nsapp();
 
-        self.proxy
+        if let Err(err) = self
+            .proxy
             .send_event(Event::PlatformBoundEvent(PlatformBoundEvent::InitializePostRun))
-            .expect("Failed to send post init event");
+        {
+            diagnostic_exit(&format!("failed to send post-init event: {err}"));
+        }
 
-        let engine = crate::gpui_host::spawn_engine().expect("completion engine");
+        let engine = match crate::gpui_host::spawn_engine() {
+            Ok(engine) => engine,
+            Err(err) => diagnostic_exit(&format!("failed to start completion engine: {err:#}")),
+        };
         let event_rx = self.event_rx;
         let proxy = self.proxy.clone();
         let fig_id_map = self.fig_id_map;
@@ -269,12 +284,10 @@ async fn init_webview_notification_listeners(proxy: EventLoopProxy) {
             |notification: JsonNotification, proxy: &EventLoopProxy| {
                 let enabled = !notification.into_bool().unwrap_or(false);
                 debug!(%enabled, "Autocomplete");
-                proxy
-                    .send_event(Event::WindowEvent {
-                        window_id: AUTOCOMPLETE_ID,
-                        window_event: WindowEvent::SetEnabled(enabled),
-                    })
-                    .unwrap();
+                proxy.send_event_or_warn(Event::WindowEvent {
+                    window_id: AUTOCOMPLETE_ID,
+                    window_event: WindowEvent::SetEnabled(enabled),
+                });
             }
         );
         watcher!(
@@ -321,11 +334,9 @@ async fn init_webview_notification_listeners(proxy: EventLoopProxy) {
         |notification: JsonNotification, proxy: &EventLoopProxy| {
             let theme = notification.into_string().as_deref().and_then(map_theme);
             debug!(?theme, "Theme changed");
-            proxy
-                .send_event(Event::WindowEventAll {
-                    window_event: WindowEvent::SetTheme(theme),
-                })
-                .unwrap();
+            proxy.send_event_or_warn(Event::WindowEventAll {
+                window_event: WindowEvent::SetTheme(theme),
+            });
         }
     );
 
@@ -335,7 +346,7 @@ async fn init_webview_notification_listeners(proxy: EventLoopProxy) {
         |notification: JsonNotification, proxy: &EventLoopProxy| {
             let enabled = !notification.into_bool().unwrap_or(false);
             debug!(%enabled, "Tray icon");
-            proxy.send_event(Event::SetTrayVisible(enabled)).unwrap();
+            proxy.send_event_or_warn(Event::SetTrayVisible(enabled));
         }
     );
 }

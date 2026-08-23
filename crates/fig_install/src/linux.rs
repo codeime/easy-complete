@@ -4,7 +4,7 @@ use fig_integrations::Integration;
 use fig_integrations::desktop_entry::{AutostartIntegration, DesktopEntryIntegration};
 use fig_os_shim::Context;
 use fig_util::PRODUCT_NAME;
-use fig_util::directories::{fig_data_dir_ctx, local_webview_data_dir};
+use fig_util::directories::fig_data_dir_ctx;
 use fig_util::manifest::manifest;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, warn};
@@ -198,13 +198,6 @@ pub(crate) async fn uninstall_desktop(ctx: &Context) -> Result<(), Error> {
             .map_err(|err| warn!(?err, "Failed to remove data dir"))
             .ok();
     }
-    let webview_dir_path = local_webview_data_dir(ctx)?;
-    if fs.exists(&webview_dir_path) {
-        fs.remove_dir_all(&webview_dir_path)
-            .await
-            .map_err(|err| warn!(?err, "Failed to remove webview data dir"))
-            .ok();
-    }
     Ok(())
 }
 
@@ -250,6 +243,29 @@ mod tests {
         uninstall_desktop(&ctx).await.unwrap();
 
         assert!(!fs.exists(&data_dir_path));
+    }
+
+    #[tokio::test]
+    async fn test_uninstall_desktop_does_not_clear_webview_era_paths() {
+        let ctx = Context::builder()
+            .with_test_home()
+            .await
+            .unwrap()
+            .with_os(Os::Linux)
+            .build_fake();
+        let fs = ctx.fs();
+        let data_dir_path = fig_data_dir_ctx(fs).unwrap();
+        fs.create_dir_all(&data_dir_path).await.unwrap();
+        let webview_era = fig_util::directories::local_data_dir(&ctx).unwrap().join("q-desktop");
+        fs.create_dir_all(&webview_era).await.unwrap();
+
+        uninstall_desktop(&ctx).await.unwrap();
+
+        assert!(!fs.exists(&data_dir_path));
+        assert!(
+            fs.exists(&webview_era),
+            "Linux uninstall must not sweep WebView-era sibling directories"
+        );
     }
 
     #[tokio::test]

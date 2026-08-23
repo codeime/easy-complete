@@ -541,16 +541,6 @@ pub fn appimage_desktop_entry_icon_path<Ctx: EnvProvider>(ctx: &Ctx) -> Result<P
         .join("share/icons/hicolor/128x128/apps/q-desktop.png"))
 }
 
-/// The path to the data directory auto-created by the Linux windowing application.
-#[cfg(target_os = "linux")]
-pub fn local_webview_data_dir<Ctx: FsProvider + EnvProvider + PlatformProvider>(ctx: &Ctx) -> Result<PathBuf> {
-    let os = ctx.platform().os();
-    if os != Os::Linux {
-        return Err(DirectoryError::UnsupportedOs(os));
-    }
-    Ok(local_data_dir(ctx)?.join(crate::consts::linux::DESKTOP_APP_WM_CLASS))
-}
-
 utf8_dir!(home_dir);
 #[cfg(unix)]
 utf8_dir!(home_local_bin);
@@ -634,6 +624,12 @@ mod linux_tests {
             temp.join(DATA_DIR_NAME).join("sockets")
         );
         assert_eq!(windows_temp_child(&temp, "logs"), temp.join(DATA_DIR_NAME).join("logs"));
+    }
+
+    #[test]
+    fn linux_data_prefix_is_easy_complete_not_a_webview_path() {
+        assert_eq!(DATA_DIR_NAME, "easy-complete");
+        assert_eq!(crate::consts::linux::PACKAGE_NAME, DATA_DIR_NAME);
     }
 }
 

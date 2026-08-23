@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use crate::ir::{ArgSpec, OptionSpec, ParserDirectives, Registry, Spec, SuggestionMeta};
 use crate::query::matches_query;
-use crate::runtime::{CompleteRequest, CompleteResult, CurrentArg, Suggestion, query_term_for, suggestion_query_term};
+use crate::runtime::{
+    AutocompleteFlags, CompleteRequest, CompleteResult, CurrentArg, Suggestion, query_term_for, suggestion_query_term,
+};
 
 pub fn tokenize(buffer: &str) -> (Vec<String>, bool) {
     let mut tokens = Vec::new();
@@ -428,13 +430,6 @@ fn skip_leading_assignments(slice: &str) -> &str {
 /// every command.
 fn command_is_disabled_from(commands: &[String], command: &str) -> bool {
     commands.iter().any(|disabled| disabled == command)
-}
-
-pub(crate) fn command_is_disabled(command: &str) -> bool {
-    fig_settings::settings::get::<Vec<String>>("autocomplete.disableForCommands")
-        .ok()
-        .flatten()
-        .is_some_and(|commands| command_is_disabled_from(&commands, command))
 }
 
 #[derive(Debug)]
@@ -1329,6 +1324,7 @@ fn first_token_result(
     request: &CompleteRequest,
     raw_search_term: String,
     normalized_search_term: String,
+    flags: &AutocompleteFlags,
 ) -> CompleteResult {
     if !request.suggest_first_token {
         return CompleteResult {
@@ -1353,9 +1349,9 @@ fn first_token_result(
     add_exact_auto_execute(
         &mut suggestions,
         &normalized_search_term,
-        fig_settings::settings::get_bool_or("autocomplete.hideAutoExecuteSuggestion", false),
-        fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false),
-        fig_settings::settings::get_bool_or("autocomplete.immediatelyRunDangerousCommands", false),
+        flags.hide_auto_execute,
+        flags.only_show_on_tab,
+        flags.immediately_run_dangerous,
     );
     CompleteResult {
         suggestions,
@@ -1366,13 +1362,13 @@ fn first_token_result(
     }
 }
 
-pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteResult {
+pub fn complete(registry: &mut Registry, request: &CompleteRequest, flags: &AutocompleteFlags) -> CompleteResult {
     let raw = buffer_before_cursor(&request.buffer, request.cursor);
     let buffer = completion_buffer(&request.buffer, request.cursor);
     let (tokens, ends_with_space) = tokenize(buffer);
     if tokens.is_empty() {
         if is_fresh_command_position(raw) {
-            return first_token_result(registry, request, String::new(), String::new());
+            return first_token_result(registry, request, String::new(), String::new(), flags);
         }
         return CompleteResult {
             fuzzy: request.fuzzy,
@@ -1391,9 +1387,9 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
     } else {
         tokens.last().cloned().unwrap_or_default()
     };
-    let prefer_verbose = fig_settings::settings::get_bool_or("autocomplete.preferVerboseSuggestions", false);
+    let prefer_verbose = flags.prefer_verbose;
 
-    if command_is_disabled(command) {
+    if command_is_disabled_from(&flags.disable_for_commands, command) {
         return CompleteResult {
             suggestions: Vec::new(),
             fuzzy: request.fuzzy,
@@ -1404,7 +1400,7 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
     }
 
     if tokens.len() == 1 && !ends_with_space {
-        return first_token_result(registry, request, raw_search_term, normalized_search_term);
+        return first_token_result(registry, request, raw_search_term, normalized_search_term, flags);
     }
 
     let query = normalized_search_term.clone();
@@ -1577,27 +1573,24 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
     add_exact_auto_execute(
         &mut suggestions,
         &query,
-        fig_settings::settings::get_bool_or("autocomplete.hideAutoExecuteSuggestion", false),
-        fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false),
-        fig_settings::settings::get_bool_or("autocomplete.immediatelyRunDangerousCommands", false),
+        flags.hide_auto_execute,
+        flags.only_show_on_tab,
+        flags.immediately_run_dangerous,
     );
     add_current_token_auto_execute(
         &mut suggestions,
         &normalized_search_term,
-        suggest_current_token_for(
-            context.active_arg.as_ref(),
-            fig_settings::settings::get_bool_or("autocomplete.alwaysSuggestCurrentToken", false),
-        ),
-        fig_settings::settings::get_bool_or("autocomplete.hideAutoExecuteSuggestion", false),
-        fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false),
-        fig_settings::settings::get_bool_or("autocomplete.immediatelyRunDangerousCommands", false),
+        suggest_current_token_for(context.active_arg.as_ref(), flags.always_suggest_current_token),
+        flags.hide_auto_execute,
+        flags.only_show_on_tab,
+        flags.immediately_run_dangerous,
     );
     add_space_auto_execute(
         &mut suggestions,
         &normalized_search_term,
-        fig_settings::settings::get_bool_or("autocomplete.immediatelyExecuteAfterSpace", false),
-        fig_settings::settings::get_bool_or("autocomplete.hideAutoExecuteSuggestion", false),
-        fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false),
+        flags.immediately_execute_after_space,
+        flags.hide_auto_execute,
+        flags.only_show_on_tab,
     );
 
     CompleteResult {
@@ -2207,6 +2200,10 @@ mod tests {
     use crate::ir::Registry;
     use std::fs;
 
+    fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteResult {
+        super::complete(registry, request, &AutocompleteFlags::default())
+    }
+
     fn load_git() -> (tempfile::TempDir, Registry) {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -2259,6 +2256,18 @@ mod tests {
         assert!(!is_fresh_command_position(""));
         assert!(!is_fresh_command_position("FOO=1 "));
         assert!(!is_fresh_command_position("echo x && FOO=1 "));
+    }
+
+    #[test]
+    fn complete_reads_snapshotted_flags_not_settings() {
+        let src = include_str!("lookup.rs");
+        let start = src.find("pub fn complete(").expect("complete");
+        let body = &src[start..];
+        let end = body.find("#[cfg(test)]").unwrap_or(body.len());
+        assert!(
+            !body[..end].contains("get_bool_or"),
+            "lookup::complete must use AutocompleteFlags, not get_bool_or"
+        );
     }
 
     #[test]

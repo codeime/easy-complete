@@ -38,13 +38,13 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
 
 - **不**重新引入 `wry` / WKWebView / `packages/autocomplete-app` / `packages/dashboard-app`。
 - **不**在 caret 缺失时用窗口矩形摆放列表（比没有更糟）。`overlay.rs` 已写明：没收到 caret 就停在上次有效位置或保持隐藏。
-- **不**把 `crates/fig_desktop/src/platform/{linux,windows.rs}` 当可修复的现成后端；要对着现行 `event.rs` / `overlay.rs` / GPUI 宿主**重写**。
+- **不**把已删除的 `crates/fig_desktop/src/platform/{linux,windows.rs}` 考古树恢复进仓库；Linux/Windows 表面对着现行 `event.rs` / `overlay.rs` / GPUI 宿主**重写**，不要翻 `cfg` 复活。
 - **不**从 v2.0.45 删掉的 universal / Linux / Windows Makefile 或 Linux 打包资源「恢复发行」。
 - **不**把 IME / IBus / UI Automation 当成 v1 的硬依赖。Linux / Windows v1 先走 **PTY + 编辑缓冲**；caret 是浮层的前置，不是引擎的前置。
 - **不**为了重连而去 disable/enable 输入源（macOS IME 的已知坑；别复制到别的平台）。
 - **不**把 AppKit / `objc2-app-kit` / `macos-utils` 链进 `fig_util`（会拖进每个 `ecterm` 标签页）。
 - **不**在本计划里重做 Intel Mac / universal 二进制。
-- **不**把 Sway / 任意 Wayland compositor 列入 v1（`linux/mod.rs` 已标 Sway “Not supported”）。
+- **不**把 Sway / 任意 Wayland compositor 列入 v1。
 - **不**把 `scripts/setup.sh` 里的 WebKit/GTK/IBus 依赖表当成现行桌面构建的真源。
 
 ---
@@ -71,7 +71,7 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
 | 开机启动 | macOS 13+ `SMAppService`；12 为 LaunchAgent | Linux：XDG Autostart（`fig_integrations::desktop_entry` 已有草稿）。Windows：以后再说 |
 | 打包 | Darwin arm64 `.app` + Sparkle | Linux：`.desktop` + 前缀布局，不是 App 包。Windows：zip/MSI，不是 DMG |
 
-`ec_gpui`：macOS 窗口模块已 `cfg(target_os = "macos")`。Linux 走 `linux.rs`（按标题 find + X11 configure/map），Windows 走 `windows.rs`（GPUI HWND + `SetWindowPos`）；HWND/标志策略在 `windows_overlay.rs`，每 OS 可单测。考古 `platform/linux/` 与 `platform/windows.rs` **仍不编译**。
+`ec_gpui`：macOS 窗口模块已 `cfg(target_os = "macos")`。Linux 走 `linux.rs`（按标题 find + X11 configure/map），Windows 走 `windows.rs`（GPUI HWND + `SetWindowPos`）；HWND/标志策略在 `windows_overlay.rs`，每 OS 可单测。考古 `platform/linux/` 与 `platform/windows.rs` **已删除，勿恢复**。
 
 ### 2.3 已可复用的底座
 
@@ -97,12 +97,10 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
   - `APP_PROCESS_NAME` 只在 `macos` / `windows` 下定义，Linux 桌面入口会再踩一次。
 - `fig_settings` / `ec_engine`：交叉编译卡在 `libsqlite3-sys` 找不到 `aarch64-linux-gnu-gcc`。这**不能**当成源码错误；验证必须放到 **ubuntu-latest 原生** job。
 
-读码确认、尚未在 Linux 原生 runner 上编：
+读码确认、尚未在 Linux 原生 runner 上编（考古 `platform/linux/` 与 `platform/windows.rs` **已删除，勿恢复**）：
 
 | 位置 | 问题 |
 | --- | --- |
-| `fig_desktop/src/platform/windows.rs` | 导入已删除的 `RelativeDirection`、`FigWindowMap`，发送不存在的 `WindowEvent::PositionRelativeToRect`。现行 API 是 `FigIdMap` + `WindowPosition::RelativeToCaret` |
-| `fig_desktop/src/platform/linux/` | 依赖未声明的 `x11rb`、`zbus`、`dbus`；`fig_desktop` 的 Linux 依赖只有 `sysinfo` |
 | `fig_install` / `fig_integrations` / `ec_cli` 的 GNOME 路径 | 调用不存在的 crate `dbus::gnome_shell`（工作区里没有 `dbus` 包） |
 | `fig_install/src/linux.rs` | 还用未声明的 `tar` / `zstd` |
 | `ec_cli/Cargo.toml` | **无条件**依赖 `appkit-nsworkspace-bindings`，源码里 **零引用** |
@@ -110,7 +108,7 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
 | `fig_input_method` / `ec_hitoolbox` | 非 macOS 可编，但是打印失败退出或空操作 |
 | `scripts/setup.sh` | 编译依赖对齐 `rust-linux`：GTK 托盘、X11、Vulkan **头文件**。不装 WebKit。运行时浮层要 Vulkan ICD + X11；caret 要 IBus/AT-SPI（不写进 apt 列表） |
 
-**Linux IBus 残留的修正：** `platform/linux/ibus.rs` 已经发 `WindowEvent::UpdateWindowGeometry { RelativeToCaret }`，不是完全停留在 WebView 几何。但它仍依赖缺失的 `dbus`/`zbus`，也没有接到 `overlay.rs` 的 GPUI 路径。当作**草稿**，不是实现。
+**Linux IBus：** 活路是 `platform/linux_caret/ibus.rs`。WebView 时代的 `platform/linux/ibus.rs` 草稿**已删除，勿恢复**。
 
 ---
 
@@ -319,7 +317,7 @@ Windows CI 用 `windows-latest`，与 macos / ubuntu 并列，互不 `continue-o
 5. **交叉编译不是证据。** sqlite 缺 `aarch64-linux-gnu-gcc` 只说明本机无交叉工具链。A2 必须用 Ubuntu 原生 job。
 6. **Linux 先行是现写进本文件的决策**，不是仓库里已有的官方顺序。依据是 POSIX PTY + Unix socket 已存在，Windows 要先长 IPC。
 7. **`setup.sh` 的 WebKit 包是错误路标。** 现行 UI 是 GPUI。E 阶段的系统依赖从 GPUI/GTK/X11 重新列，不从 setup.sh 抄。
-8. **`local_webview_data_dir` 这种名字不带进 Linux 安装布局。** 那是 WebView 时代的数据目录。
+8. **`local_webview_data_dir` 这种名字不带进 Linux 安装布局。** 那是 WebView 时代的数据目录。**已关（2026-08-23）：** 函数已删；Linux uninstall 只清 `fig_data_dir`（`easy-complete` 前缀），不再扫 `q-desktop` 一类 webview 旁路。
 
 **仍开放、必须用后续 PR 关闭的问题：**
 
@@ -353,7 +351,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 
 ## 8. 当前执行指针
 
-- 分支：`feat/cross-platform`（从 `main` @ `55b043ff` 切出）；审计修复见 `fix/cross-platform-audit-1`
+- 分支：`fix/cross-platform-audit-1`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
 - **发运：** 仍只有 macOS Apple Silicon DMG。Linux / Windows 是 WIP，不是产品（无 Linux 包、无 Windows 安装器）。
 - 本文件就是 M0 的文档交付物
 - 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `clippy -D warnings`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
@@ -362,7 +360,8 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - 2026-08-23 续 2（本机 Ubuntu `DISPLAY=:2`）：`scripts/build-linux.sh` **真的打出了** `dist/linux/easy-complete-2.2.2-x86_64.tar.gz`（`--locked`，IR 840/734/1480）。`install-linux.sh --prefix` 装进临时目录后，前缀里的 `ec engine complete --buffer "git ch"` 含 `checkout`（不设 `EC_SPECS_DIR`）；`--uninstall` 只清该前缀，**不会**删掉指向别的 PREFIX 的 autostart。D3 浮层：无 Vulkan ICD 时 GPUI 0.2.2 在创建窗口前 panic（`NoSupportedDeviceFound`）；装 lavapipe 后进程能住，`--no-dashboard` 且**不注入 caret** 时 xwininfo/xdotool 看不到 `Fig Autocomplete`（浮层只在 show 时才建窗）。没有用窗口矩形兜底。tarball / README 标明 Linux 未发运。
 - 2026-08-23 续 3（`DISPLAY=:2` 真终端 caret）：IBus 1.5.32 私有总线没有 `org.freedesktop.DBus.Monitoring`，监听改为 BecomeMonitor 失败则 `AddMatch` `eavesdrop='true'`（与 `dbus-monitor` 相同）。at-spi2 2.56 的 `Name` / `CaretOffset` / `Parent` 走属性，方法作回退。D2：X11 分类终端只在 IBus **已经订阅**时让 AT-SPI 让路。手测：`GTK_IM_MODULE=ibus` 的 xfce4-terminal → `bash (ecterm)` → `git ch`，`Fig Autocomplete` **IsViewable**，再打一个字母浮层 X +10（字符宽）。无窗口矩形兜底。GNOME Wayland 上的 AT-SPI 路径未手测。
 - 2026-08-23 续 4（M2 + D3）：泛 `CI=true` **不再**挡住 wrap（只拦 `GITHUB_ACTIONS` / `Q_CI`；不要把 `Q_FORCE_FIGTERM_LAUNCH` 写进 rc）。本机 `ecterm` + bash/zsh/fish OSC 697 钩子把 `git ch` 送到 mock `remote.sock`，引擎 stdout 含 `checkout`（无 caret、无浮层）。D3：map 后再发 `_NET_WM_STATE_ABOVE`；`ec-overlay-spike` 在 `:2` 上 `_NET_WM_WINDOW_TYPE_NOTIFICATION` + ABOVE，且不是 `_NET_ACTIVE_WINDOW`。`setup.sh` 仍只装编译依赖（GTK 托盘 / X11 / Vulkan 头），不装 WebKit；caret 运行时依赖 IBus/AT-SPI 不写进 apt。
-- 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要把 `mesa-vulkan-drivers` 写进 rust-linux job，不要复活考古 `platform/linux/` / `platform/windows.rs`。
+- 2026-08-23 续 5（审计收口）：`platform/mod.rs` 活路是 macos / linux_caret / windows_caret / stub。考古 `platform/linux/**` 与 `platform/windows.rs` **已删除，勿恢复、勿翻 cfg**。`local_webview_data_dir` 已去掉；Linux uninstall 只清 `easy-complete` 数据前缀。figterm history SQLite 走 `spawn_blocking`。desktop IPC `send_event` 关闭环时 warn 而不是 unwrap。`get_current_buffer` 原地 truncate。同一次 complete 快照 `AutocompleteFlags`。非 Mac 屏幕列表改名 `overlay_screens`。`GLOBAL_PROXY.set` / `spawn_engine` 失败走可诊断退出。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。
+- 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要把 `mesa-vulkan-drivers` 写进 rust-linux job，**不要复活考古 `platform/linux/` / `platform/windows.rs`**。
 
 进度勾选：
 
@@ -372,9 +371,9 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - [x] PR-A3（切断 `dbus` 编译图；`ec engine complete --buffer "git ch"` 本机成功含 `checkout`；Linux CI 扩到 `ec_cli`）
 - [x] PR-B1（`fig_ipc` Linux 目标 `cargo check` 过；`figterm` scrollback 钉死为 1、tokio 2 worker 未改；socket 路径测试 + Linux CI 扩到 `fig_ipc`/`figterm`）
 - [x] PR-B2（无桌面 `ec init` 与 macOS 同策略；zsh hook 在临时 HOME 可装可卸；IME 不进入 Linux `integrations install all`）
-- [x] PR-C1（`ec_gpui` 的 AppKit 模块 `cfg(macos)`；非 Mac 走 `platform_stub`，`screens_quartz` 为空所以无 caret 则无法摆放；本机交叉编译卡在缺 linux gcc，Ubuntu 原生 gpui 仍待 CI）
-- [x] PR-C2（`fig_desktop` 非 macOS 走 `platform/stub.rs`：`accessibility_is_enabled → None`、`get_cursor_position → None`、无 caret 则 park；`linux/` 与 `windows.rs` 不再编译；GNOME/IBus 安装路径切断；Linux CI 扩到 `ec_gpui`/`fig_desktop` clippy，系统依赖是 GTK/X11/Vulkan **不含 WebKit**。Ubuntu 原生 gpui 首次绿灯仍待推送后验证）
-- [x] PR-D1（新建 `platform/linux_caret/`：X11 焦点跟踪 + zbus IBus；几何换算在 `platform/caret.rs` 单测钉死；无 caret 不摆放；旧 `platform/linux/` 仍不编译）
+- [x] PR-C1（`ec_gpui` 的 AppKit 模块 `cfg(macos)`；非 Mac 走 `platform_stub`，`overlay_screens` 为空所以无 caret 则无法摆放；本机交叉编译卡在缺 linux gcc，Ubuntu 原生 gpui 仍待 CI）
+- [x] PR-C2（`fig_desktop` 非 macOS 走 `platform/stub.rs`：`accessibility_is_enabled → None`、`get_cursor_position → None`、无 caret 则 park；考古 `linux/` 与 `windows.rs` **已删除，勿恢复**；GNOME/IBus 安装路径切断；Linux CI 扩到 `ec_gpui`/`fig_desktop` clippy，系统依赖是 GTK/X11/Vulkan **不含 WebKit**。Ubuntu 原生 gpui 首次绿灯仍待推送后验证）
+- [x] PR-D1（新建 `platform/linux_caret/`：X11 焦点跟踪 + zbus IBus；几何换算在 `platform/caret.rs` 单测钉死；无 caret 不摆放；旧 `platform/linux/` **已删除，勿恢复**）
 - [x] PR-D2（GPUI 0.2.2 无 layer-shell，浮层仍走 X11/XWayland。GNOME Wayland 终端 caret 走 AT-SPI `GetCharacterExtents(SCREEN)`，不用 Shell 扩展；窗口 `GetExtents` 只给 IBus relative 当原点，不当列表位置。无 a11y 总线或非终端 focus 则隐藏）
 - [x] PR-D3（`ec_gpui/src/linux.rs`：按标题找 overlay，`unmap` park、`configure`+`map` 显示；启动时若有 `DISPLAY` 则清掉 `WAYLAND_DISPLAY` 让 GPUI 走 X11，`EC_GPUI_BACKEND=wayland` 可退出；无屏幕列表则 park，不用窗口矩形当 edges。`linux_overlay` 钉死 NOTIFICATION + ABOVE、不发 `_NET_ACTIVE_WINDOW`；map 后再 ClientMessage。本机 xfwm4 手测浮层不是 `_NET_ACTIVE_WINDOW`。）
 - [x] PR-E1 / PR-E2（`scripts/build-linux.sh` 前缀布局 + tar.gz；`scripts/install-linux.sh --prefix`；`.desktop` + hicolor 图标；不装 WebKit，不改 `build-app.sh`）

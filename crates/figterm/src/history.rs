@@ -19,15 +19,17 @@ pub enum HistoryCommand {
 
 pub type HistorySender = Sender<HistoryCommand>;
 
-pub async fn spawn_history_task() -> HistorySender {
+/// History SQLite runs on the blocking pool so it cannot occupy one of
+/// figterm's two Tokio workers for a disk stall.
+pub fn spawn_history_task() -> HistorySender {
     trace!("Spawning history task");
 
     let (sender, receiver) = flume::bounded::<HistoryCommand>(64);
 
-    tokio::task::spawn(async move {
+    tokio::task::spawn_blocking(move || {
         let history = fig_settings::history::History::new();
 
-        while let Ok(command) = receiver.recv_async().await {
+        while let Ok(command) = receiver.recv() {
             match command {
                 HistoryCommand::Insert(command) => {
                     let command_info = fig_settings::history::CommandInfo {
@@ -74,4 +76,22 @@ pub async fn spawn_history_task() -> HistorySender {
     });
 
     sender
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn history_sqlite_runs_on_spawn_blocking() {
+        let src = include_str!("history.rs");
+        let start = src.find("pub fn spawn_history_task").expect("spawn_history_task");
+        let body = &src[start..];
+        let end = body.find("#[cfg(test)]").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            body.contains("spawn_blocking"),
+            "history SQLite must not run on figterm's two Tokio workers"
+        );
+        assert!(!body.contains("recv_async"), "the history loop is a blocking recv");
+        assert!(body.contains("receiver.recv()"), "SQLite runs on a blocking recv loop");
+    }
 }

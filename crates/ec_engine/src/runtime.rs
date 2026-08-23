@@ -82,6 +82,47 @@ impl Default for CompleteRequest {
     }
 }
 
+/// Settings consumed on one `complete`. Snapshotted once so lookup/runtime
+/// do not call `get_bool_or` for the same keys on every auto-execute path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AutocompleteFlags {
+    pub hide_auto_execute: bool,
+    pub only_show_on_tab: bool,
+    pub immediately_run_dangerous: bool,
+    pub prefer_verbose: bool,
+    pub always_suggest_current_token: bool,
+    pub immediately_execute_after_space: bool,
+    pub history_disable_loading: bool,
+    pub history_all_shells: bool,
+    pub history_custom_command: Option<String>,
+    pub alphabetical: bool,
+    pub disable_for_commands: Vec<String>,
+}
+
+impl AutocompleteFlags {
+    pub(crate) fn snapshot() -> Self {
+        let settings = fig_settings::settings::Settings::new();
+        let custom = settings.get_string_or("beta.history.customCommand", String::new());
+        Self {
+            hide_auto_execute: settings.get_bool_or("autocomplete.hideAutoExecuteSuggestion", false),
+            only_show_on_tab: settings.get_bool_or("autocomplete.onlyShowOnTab", false),
+            immediately_run_dangerous: settings.get_bool_or("autocomplete.immediatelyRunDangerousCommands", false),
+            prefer_verbose: settings.get_bool_or("autocomplete.preferVerboseSuggestions", false),
+            always_suggest_current_token: settings.get_bool_or("autocomplete.alwaysSuggestCurrentToken", false),
+            immediately_execute_after_space: settings.get_bool_or("autocomplete.immediatelyExecuteAfterSpace", false),
+            history_disable_loading: settings.get_bool_or("autocomplete.history.disableLoading", false),
+            history_all_shells: settings.get_bool_or("beta.history.allShells", false),
+            history_custom_command: (!custom.is_empty()).then_some(custom),
+            alphabetical: settings.get_string_or("autocomplete.sortMethod", "default".into()) == "alphabetical",
+            disable_for_commands: settings
+                .get::<Vec<String>>("autocomplete.disableForCommands")
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Suggestion {
     pub name: String,
@@ -416,13 +457,10 @@ impl Engine {
         }
     }
 
-    fn ensure_frecency(&mut self, request: &CompleteRequest) {
-        let custom_command = fig_settings::settings::get_string_or("beta.history.customCommand", String::new());
-        let custom_command = (!custom_command.is_empty()).then_some(custom_command);
-        let all_shells = fig_settings::settings::get_bool_or("beta.history.allShells", false);
+    fn ensure_frecency(&mut self, request: &CompleteRequest, flags: &AutocompleteFlags) {
         let source = rank::history_source_config(
-            custom_command,
-            all_shells,
+            flags.history_custom_command.clone(),
+            flags.history_all_shells,
             request.current_shell.as_deref(),
             request.current_process.as_deref(),
         );
@@ -438,9 +476,10 @@ impl Engine {
         let buffer = lookup::completion_buffer(&request.buffer, request.cursor);
         let (tokens, ends_with_space) = lookup::tokenize(buffer);
 
-        let history_disabled = fig_settings::settings::get_bool_or("autocomplete.history.disableLoading", false);
+        let flags = AutocompleteFlags::snapshot();
+        let history_disabled = flags.history_disable_loading;
         if history_loading_enabled(history_disabled) {
-            self.ensure_frecency(&request);
+            self.ensure_frecency(&request, &flags);
         }
         if request.history_only {
             let history_search_term = if ends_with_space {
@@ -494,14 +533,13 @@ impl Engine {
             };
             let host = &self.js_host;
             let registry = &mut self.registry;
-            host.enter_with_context(&request.cwd, &shell, || lookup::complete(registry, &request))
+            host.enter_with_context(&request.cwd, &shell, || lookup::complete(registry, &request, &flags))
         };
         if should_merge_history(request.include_history, history_disabled) {
             let effective_fuzzy = result.fuzzy;
             rank::merge_history(&mut result, &tokens, &self.frecency, effective_fuzzy);
         }
-        let alphabetical =
-            fig_settings::settings::get_string_or("autocomplete.sortMethod", "default".into()) == "alphabetical";
+        let alphabetical = flags.alphabetical;
         let root_command = ranking_root_command(&request.buffer, request.cursor);
         {
             let acceptance = self.acceptance.lock().unwrap_or_else(|err| err.into_inner());
@@ -539,6 +577,22 @@ mod tests {
 
     fn write_spec(dir: &std::path::Path, name: &str, body: &str) {
         fs::write(dir.join(format!("{name}.json")), body).unwrap();
+    }
+
+    #[test]
+    fn autocomplete_flags_default_matches_documented_settings_defaults() {
+        let flags = AutocompleteFlags::default();
+        assert!(!flags.hide_auto_execute);
+        assert!(!flags.only_show_on_tab);
+        assert!(!flags.immediately_run_dangerous);
+        assert!(!flags.prefer_verbose);
+        assert!(!flags.always_suggest_current_token);
+        assert!(!flags.immediately_execute_after_space);
+        assert!(!flags.history_disable_loading);
+        assert!(!flags.history_all_shells);
+        assert!(flags.history_custom_command.is_none());
+        assert!(!flags.alphabetical);
+        assert!(flags.disable_for_commands.is_empty());
     }
 
     #[test]

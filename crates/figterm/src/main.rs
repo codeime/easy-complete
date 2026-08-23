@@ -572,7 +572,7 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
 
         let (main_loop_tx, main_loop_rx) = flume::bounded::<MainLoopEvent>(16);
 
-        let history_sender = history::spawn_history_task().await;
+        let history_sender = history::spawn_history_task();
 
         // Spawn thread to handle figterm ipc
         let incoming_receiver = spawn_figterm_ipc(&session_id).await?;
