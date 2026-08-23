@@ -787,6 +787,7 @@ pub fn spec_from_fig_json(value: &JsonValue) -> Option<Spec> {
         subcommands: json_array(object.get("subcommands"))
             .iter()
             .filter_map(spec_from_fig_json)
+            .map(Arc::new)
             .collect(),
         options: json_array(object.get("options"))
             .iter()
@@ -842,7 +843,7 @@ pub fn merge_generated_spec(wrapper: &Spec, generated: Spec) -> Spec {
     merged
 }
 
-fn merge_specs(mut dest: Vec<Spec>, incoming: Vec<Spec>) -> Vec<Spec> {
+fn merge_specs(mut dest: Vec<Arc<Spec>>, incoming: Vec<Arc<Spec>>) -> Vec<Arc<Spec>> {
     for spec in incoming {
         if let Some(existing) = dest
             .iter_mut()
@@ -1305,10 +1306,10 @@ mod tests {
         };
         let generated = Spec {
             names: vec!["generated".into()],
-            subcommands: vec![Spec {
+            subcommands: vec![Arc::new(Spec {
                 names: vec!["artisan".into()],
                 ..Spec::default()
-            }],
+            })],
             args: vec![ArgSpec {
                 name: "other".into(),
                 ..ArgSpec::default()

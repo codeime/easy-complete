@@ -349,29 +349,37 @@ pub fn apply_with_acceptance(
         root_command
     };
 
+    // Score match + priority once per row. `sort_by` would otherwise re-run
+    // `match_score` and `effective_priority_score` (history HashMap +
+    // acceptance lookup) on every comparison.
+    let use_acceptance = !alphabetical;
+    let mut scored: Vec<(Option<MatchScore>, f64, Suggestion)> = std::mem::take(&mut result.suggestions)
+        .into_iter()
+        .map(|suggestion| {
+            let match_score = (!query.is_empty()).then(|| best_match(&suggestion, &query)).flatten();
+            let priority =
+                effective_priority_score(&suggestion, history_counts, acceptance, root_command, use_acceptance);
+            (match_score, priority, suggestion)
+        })
+        .collect();
     if query.is_empty() {
-        result.suggestions.sort_by(|a, b| {
-            compare_auto_execute(a, b)
-                .then_with(|| compare_priority(b, a, history_counts, acceptance, root_command, !alphabetical))
+        scored.sort_by(|(_, left_priority, left), (_, right_priority, right)| {
+            compare_auto_execute(left, right).then_with(|| cmp_priority_desc(*left_priority, *right_priority))
         });
     } else {
         // `lookup` has already filtered rows with the request's fuzzy flag.
         // Running the scorer with fuzzy enabled here is safe for both modes:
         // non-fuzzy results contain no scattered matches, while fuzzy results
         // retain the old exact/prefix/fuzzy ordering.
-        // Score once per row: `sort_by` would otherwise re-run `match_score`
-        // (and its lowercase work) on every comparison.
-        let mut scored: Vec<(Option<MatchScore>, Suggestion)> = std::mem::take(&mut result.suggestions)
-            .into_iter()
-            .map(|suggestion| (best_match(&suggestion, &query), suggestion))
-            .collect();
-        scored.sort_by(|(left_score, left), (right_score, right)| {
-            compare_auto_execute(left, right)
-                .then_with(|| compare_precomputed_match(*left_score, *right_score))
-                .then_with(|| compare_priority(right, left, history_counts, acceptance, root_command, !alphabetical))
-        });
-        result.suggestions = scored.into_iter().map(|(_, suggestion)| suggestion).collect();
+        scored.sort_by(
+            |(left_score, left_priority, left), (right_score, right_priority, right)| {
+                compare_auto_execute(left, right)
+                    .then_with(|| compare_precomputed_match(*left_score, *right_score))
+                    .then_with(|| cmp_priority_desc(*left_priority, *right_priority))
+            },
+        );
     }
+    result.suggestions = scored.into_iter().map(|(_, _, suggestion)| suggestion).collect();
 
     // This mirrors the old `deduplicateSuggestions` guard. It intentionally
     // stays off for large result sets so a generator cannot pay an O(n²) cost
@@ -393,23 +401,8 @@ pub fn apply_with_acceptance(
     }
 }
 
-fn compare_priority(
-    left: &Suggestion,
-    right: &Suggestion,
-    history_counts: &HashMap<String, usize>,
-    acceptance: &AcceptanceIndex,
-    root_command: &str,
-    use_acceptance: bool,
-) -> Ordering {
-    effective_priority_score(left, history_counts, acceptance, root_command, use_acceptance)
-        .partial_cmp(&effective_priority_score(
-            right,
-            history_counts,
-            acceptance,
-            root_command,
-            use_acceptance,
-        ))
-        .unwrap_or(Ordering::Equal)
+fn cmp_priority_desc(left: f64, right: f64) -> Ordering {
+    right.partial_cmp(&left).unwrap_or(Ordering::Equal)
 }
 
 fn compare_auto_execute(left: &Suggestion, right: &Suggestion) -> Ordering {
@@ -685,6 +678,29 @@ mod tests {
         apply(&mut result, &["ch".into()], &frecency);
         assert_eq!(result.suggestions[0].name, "cherry-pick");
         assert_eq!(result.suggestions[1].name, "checkout");
+    }
+
+    #[test]
+    fn ranking_precomputes_match_and_priority_before_sort() {
+        let src = include_str!("rank.rs");
+        let start = src
+            .find("pub fn apply_with_acceptance(")
+            .expect("apply_with_acceptance");
+        let body = &src[start..];
+        let end = body.find("\nfn cmp_priority_desc").expect("cmp_priority_desc");
+        let body = &body[..end];
+        assert!(
+            body.contains("best_match(") && body.contains("effective_priority_score("),
+            "ranking must score each row before sort_by"
+        );
+        assert!(
+            !body.contains("compare_priority("),
+            "sort_by must not re-run effective_priority_score per comparison"
+        );
+        assert!(
+            body.contains("compare_precomputed_match(") && body.contains("cmp_priority_desc("),
+            "comparisons must use the precomputed match and priority keys"
+        );
     }
 
     #[test]

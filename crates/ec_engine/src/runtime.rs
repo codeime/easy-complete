@@ -102,13 +102,13 @@ pub(crate) struct AutocompleteFlags {
 impl AutocompleteFlags {
     pub(crate) fn snapshot() -> Self {
         use fig_settings::JsonStore;
-        // One `OldSettings::load` + one map, not a `get_*` (and its RwLock /
-        // file read) per flag. CLI never `init_global`, so the old path
+        // One `OldSettings::load` + read through the guard. Do not clone the
+        // whole settings JSON map; CLI never `init_global`, so the old path
         // re-read settings.json ~10 times each complete.
-        let map = fig_settings::OldSettings::load()
-            .map(|settings| settings.map().clone())
-            .unwrap_or_default();
-        Self::from_map(&map)
+        match fig_settings::OldSettings::load() {
+            Ok(settings) => Self::from_map(&settings.map()),
+            Err(_) => Self::default(),
+        }
     }
 
     fn from_map(map: &fig_settings::Map) -> Self {
@@ -621,8 +621,12 @@ mod tests {
         let end = rest.find("\n    fn from_map").expect("from_map");
         let body = &rest[..end];
         assert!(
-            body.contains("OldSettings::load") && body.contains("settings.map().clone()"),
+            body.contains("OldSettings::load") && body.contains("Self::from_map(&settings.map())"),
             "snapshot must load one settings map, not one get_* per flag"
+        );
+        assert!(
+            !body.contains("map().clone()"),
+            "snapshot must read flags through the settings guard, not clone the JSON map"
         );
         assert!(
             !body.contains("Settings::new") && !body.contains("get_bool_or") && !body.contains("get_string_or"),

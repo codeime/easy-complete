@@ -165,9 +165,10 @@ pub struct ArgSpec {
     /// Resolved static argument spec.  Keep the source `load_spec` in the
     /// deserialized IR (so dynamic/unsupported forms remain observable), but
     /// expose a native-ready tree for the lookup state machine without
-    /// serializing a second copy back into the bundle.
+    /// serializing a second copy back into the bundle. `Arc` so a walk can
+    /// enter the loaded node without cloning the tree.
     #[serde(skip)]
-    pub resolved_spec: Option<Box<Spec>>,
+    pub resolved_spec: Option<Arc<Spec>>,
     #[serde(default, alias = "isOptional")]
     pub is_optional: bool,
     #[serde(default, alias = "isVariadic")]
@@ -256,8 +257,9 @@ pub struct Spec {
     pub names: Vec<String>,
     #[serde(default)]
     pub description: String,
+    /// Shared so listing and walk clone pointers, not the nested tree.
     #[serde(default)]
-    pub subcommands: Vec<Spec>,
+    pub subcommands: Vec<Arc<Spec>>,
     #[serde(default)]
     pub options: Vec<OptionSpec>,
     /// Effective persistent options for this node. For a lazy `loadSpec`, the
@@ -292,7 +294,10 @@ impl Spec {
     }
 
     pub fn find_subcommand(&self, name: &str) -> Option<&Spec> {
-        self.subcommands.iter().find(|spec| spec.has_name(name))
+        self.subcommands
+            .iter()
+            .find(|spec| spec.has_name(name))
+            .map(Arc::as_ref)
     }
 }
 
@@ -686,7 +691,7 @@ fn resolve_spec_references(spec: &mut Spec, root: &Path, files: &HashMap<Arc<str
     }
 
     for child in &mut spec.subcommands {
-        resolve_spec_references(child, root, files, stack);
+        resolve_spec_references(Arc::make_mut(child), root, files, stack);
     }
 
     for arg in &mut spec.args {
@@ -713,13 +718,13 @@ fn resolve_arg_spec(arg: &mut ArgSpec, root: &Path, files: &HashMap<Arc<str>, Pa
                 return;
             }
             if let Ok(loaded) = load_spec_file_inner(&target_path, root, files, stack) {
-                arg.resolved_spec = Some(Box::new(loaded));
+                arg.resolved_spec = Some(Arc::new(loaded));
             }
         },
         LoadSpec::Inline(target) => {
             let mut loaded = (**target).clone();
             resolve_spec_references(&mut loaded, root, files, stack);
-            arg.resolved_spec = Some(Box::new(loaded));
+            arg.resolved_spec = Some(Arc::new(loaded));
         },
     }
 }
@@ -779,6 +784,28 @@ mod tests {
         assert!(git.find_subcommand("cherry-pick").is_some());
         assert!(git.find_subcommand("status").is_none());
         assert_eq!(git.options[0].names, vec!["--help"]);
+        let cloned = git.clone();
+        assert!(
+            Arc::ptr_eq(&cloned.subcommands[0], &git.subcommands[0]),
+            "cloning a spec must share nested subcommand trees"
+        );
+    }
+
+    #[test]
+    fn nested_subcommands_are_shared_arcs() {
+        let checkout = Arc::new(Spec {
+            names: vec!["checkout".into()],
+            description: "switch".into(),
+            ..Spec::default()
+        });
+        let git = Spec {
+            names: vec!["git".into()],
+            subcommands: vec![Arc::clone(&checkout)],
+            ..Spec::default()
+        };
+        let found = git.find_subcommand("checkout").expect("child");
+        assert!(std::ptr::eq(found, checkout.as_ref()));
+        assert!(Arc::ptr_eq(&git.clone().subcommands[0], &checkout));
     }
 
     #[test]

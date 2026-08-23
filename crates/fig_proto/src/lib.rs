@@ -145,72 +145,105 @@ impl FigMessage {
 
     pub fn encode(message_type: FigMessageType, body: Bytes) -> Result<Bytes, FigMessageEncodeError> {
         let msg = Self {
-            inner: Bytes::from(body.to_vec()),
+            inner: body,
             message_type,
         };
-
-        let mut inner: BytesMut = BytesMut::new();
-        msg.encode_buf(&mut inner)?;
-
-        Ok(inner.freeze())
+        msg.to_encoded()
     }
 
-    pub fn parse(src: &mut impl bytes::Buf) -> Result<(usize, FigMessage), FigMessageParseError> {
-        if src.remaining() < 10 {
+    /// Magic + type tag + body length. Body bytes follow.
+    pub const FRAME_PREFIX_LEN: usize = 2 + 8 + size_of::<u64>();
+
+    /// Inspect a contiguous prefix without consuming. Incomplete errors leave
+    /// the caller's buffer untouched; header errors still consume 10 bytes at
+    /// the parse/take site, matching the old Cursor behavior.
+    fn inspect_frame(bytes: &[u8]) -> Result<(usize, FigMessageType), FigMessageParseError> {
+        if bytes.len() < 10 {
             return Err(FigMessageParseError::Incomplete(
                 FigMessageComponent::Header,
-                10 - src.remaining(),
+                10 - bytes.len(),
             ));
         }
-
-        let mut header = [0; 2];
-        src.copy_to_slice(&mut header);
-        if header[0] != b'\x1b' || header[1] != b'@' {
+        if bytes[0] != b'\x1b' || bytes[1] != b'@' {
+            let header = [bytes[0], bytes[1]];
             let mut message_type_buf = [0; 8];
-            src.copy_to_slice(&mut message_type_buf);
+            message_type_buf.copy_from_slice(&bytes[2..10]);
             return Err(FigMessageParseError::InvalidHeader(
                 hex::encode(header),
                 hex::encode(message_type_buf),
             ));
         }
-
         let mut message_type_buf = [0; 8];
-        src.copy_to_slice(&mut message_type_buf);
+        message_type_buf.copy_from_slice(&bytes[2..10]);
         let message_type = match &message_type_buf {
             b"fig-pbuf" => FigMessageType::Protobuf,
             b"fig-json" => FigMessageType::Json,
             b"fig-mpak" => FigMessageType::MessagePack,
             _ => return Err(FigMessageParseError::InvalidMessageType(message_type_buf)),
         };
-
-        if src.remaining() < size_of::<u64>() {
+        if bytes.len() < Self::FRAME_PREFIX_LEN {
             return Err(FigMessageParseError::Incomplete(
                 FigMessageComponent::BodySize,
-                size_of::<u64>() - src.remaining(),
+                Self::FRAME_PREFIX_LEN - bytes.len(),
             ));
         }
-
-        let len: usize = src.get_u64().try_into()?;
-
-        if src.remaining() < len {
+        let body_len = u64::from_be_bytes(bytes[10..Self::FRAME_PREFIX_LEN].try_into().expect("8 bytes"));
+        let body_len: usize = body_len.try_into()?;
+        let total = Self::FRAME_PREFIX_LEN + body_len;
+        if bytes.len() < total {
             return Err(FigMessageParseError::Incomplete(
                 FigMessageComponent::Body,
-                len - src.remaining(),
+                total - bytes.len(),
             ));
         }
+        Ok((total, message_type))
+    }
 
-        let mut inner = vec![0; len];
-        src.copy_to_slice(&mut inner);
-
-        let message_len = 10 + size_of::<u64>() + len;
-
-        Ok((
-            message_len,
-            FigMessage {
-                inner: Bytes::from(inner),
-                message_type,
+    pub fn parse(src: &mut impl bytes::Buf) -> Result<(usize, FigMessage), FigMessageParseError> {
+        match Self::inspect_frame(src.chunk()) {
+            Ok((total, message_type)) => {
+                src.advance(Self::FRAME_PREFIX_LEN);
+                let inner = src.copy_to_bytes(total - Self::FRAME_PREFIX_LEN);
+                Ok((total, FigMessage { inner, message_type }))
             },
-        ))
+            Err(err @ FigMessageParseError::Incomplete(_, _)) => Err(err),
+            Err(err @ (FigMessageParseError::InvalidHeader(_, _) | FigMessageParseError::InvalidMessageType(_))) => {
+                src.advance(10.min(src.remaining()));
+                Err(err)
+            },
+            Err(err @ FigMessageParseError::TryFromInt(_)) => {
+                src.advance(Self::FRAME_PREFIX_LEN.min(src.remaining()));
+                Err(err)
+            },
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Split a complete frame off `buf`. Incomplete leaves `buf` untouched.
+    /// Header errors advance 10 bytes, same as [`Self::parse`].
+    pub fn take_from_bytes_mut(buf: &mut BytesMut) -> Result<Self, FigMessageParseError> {
+        match Self::inspect_frame(buf) {
+            Ok((total, message_type)) => {
+                let mut frame = buf.split_to(total);
+                let _ = frame.split_to(Self::FRAME_PREFIX_LEN);
+                Ok(Self {
+                    inner: frame.freeze(),
+                    message_type,
+                })
+            },
+            Err(err @ FigMessageParseError::Incomplete(_, _)) => Err(err),
+            Err(err @ (FigMessageParseError::InvalidHeader(_, _) | FigMessageParseError::InvalidMessageType(_))) => {
+                let skip = 10.min(buf.len());
+                let _ = buf.split_to(skip);
+                Err(err)
+            },
+            Err(err @ FigMessageParseError::TryFromInt(_)) => {
+                let skip = Self::FRAME_PREFIX_LEN.min(buf.len());
+                let _ = buf.split_to(skip);
+                Err(err)
+            },
+            Err(err) => Err(err),
+        }
     }
 
     pub fn decode<T>(self) -> Result<T, FigMessageDecodeError>
@@ -249,7 +282,18 @@ pub trait FigProtobufEncodable: Debug + Send + Sync {
 
 impl<T: Message + Debug> FigProtobufEncodable for T {
     fn encode_fig_protobuf(&self) -> Result<Bytes, FigMessageEncodeError> {
-        FigMessage::encode(FigMessageType::Protobuf, self.encode_to_vec().into())
+        // One buffer: header + length + protobuf. Framing used to encode the
+        // body separately, wrap it, then copy it into the framed buffer.
+        let body_len = self.encoded_len();
+        let message_len: u64 = body_len.try_into()?;
+        let mut buf = BytesMut::with_capacity(FigMessage::FRAME_PREFIX_LEN + body_len);
+        buf.extend_from_slice(b"\x1b@");
+        buf.extend_from_slice(FigMessageType::Protobuf.header());
+        buf.extend_from_slice(&message_len.to_be_bytes());
+        self.encode(&mut buf)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::WriteZero, err))?;
+        debug_assert_eq!(buf.len(), FigMessage::FRAME_PREFIX_LEN + body_len);
+        Ok(buf.freeze())
     }
 }
 
@@ -283,7 +327,74 @@ mod tests {
     #[test]
     fn test_to_fig_pbuf() {
         let message = test_message();
-        assert_eq!(&message.encode_fig_protobuf().unwrap()[..10], b"\x1b@fig-pbuf");
+        let framed = message.encode_fig_protobuf().unwrap();
+        assert_eq!(&framed[..10], b"\x1b@fig-pbuf");
+        let legacy = FigMessage::encode(FigMessageType::Protobuf, message.encode_to_vec().into()).unwrap();
+        assert_eq!(framed, legacy, "direct encode must match header-plus-body framing");
+    }
+
+    #[test]
+    fn protobuf_encode_writes_the_body_once() {
+        let src = include_str!("lib.rs");
+        let start = src.find("let body_len = self.encoded_len()").expect("encoded_len");
+        let body = &src[start..];
+        let end = body.find("Ok(buf.freeze())").expect("freeze");
+        let body = &body[..end];
+        assert!(
+            body.contains("self.encode(&mut buf)"),
+            "protobuf frames must encode into the framed buffer"
+        );
+        let encode_to_vec = ["encode", "to_vec"].join("_");
+        assert!(
+            !body.contains(&encode_to_vec) && !body.contains("to_vec"),
+            "protobuf frames must not copy the body through an intermediate vec"
+        );
+    }
+
+    #[test]
+    fn encode_reuses_body_bytes_without_to_vec() {
+        let src = include_str!("lib.rs");
+        let start = src.find("pub fn encode(").expect("encode");
+        let body = &src[start..];
+        let end = body.find("\n    pub const FRAME_PREFIX_LEN").expect("FRAME_PREFIX_LEN");
+        let body = &body[..end];
+        assert!(
+            !body.contains("to_vec"),
+            "FigMessage::encode must frame the caller's Bytes, not copy them"
+        );
+    }
+
+    #[test]
+    fn incomplete_header_does_not_consume() {
+        let mut buf: &[u8] = b"\x1b@fig";
+        let err = FigMessage::parse(&mut buf).expect_err("short header");
+        assert!(matches!(
+            err,
+            FigMessageParseError::Incomplete(FigMessageComponent::Header, _)
+        ));
+        assert_eq!(buf, b"\x1b@fig");
+    }
+
+    #[test]
+    fn take_from_bytes_mut_splits_a_complete_frame() {
+        let framed = test_message().encode_fig_protobuf().unwrap();
+        let mut buf = BytesMut::from(framed.as_ref());
+        let message = FigMessage::take_from_bytes_mut(&mut buf).expect("complete frame");
+        assert!(buf.is_empty());
+        let decoded: local::LocalMessage = message.decode().unwrap();
+        assert_eq!(decoded, test_message());
+    }
+
+    #[test]
+    fn take_from_bytes_mut_leaves_incomplete_bytes() {
+        let framed = test_message().encode_fig_protobuf().unwrap();
+        let mut buf = BytesMut::from(&framed[..10]);
+        let err = FigMessage::take_from_bytes_mut(&mut buf).expect_err("incomplete");
+        assert!(matches!(
+            err,
+            FigMessageParseError::Incomplete(FigMessageComponent::BodySize, _)
+        ));
+        assert_eq!(&buf[..], &framed[..10]);
     }
 
     #[test]

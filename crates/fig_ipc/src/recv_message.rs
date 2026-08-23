@@ -1,7 +1,6 @@
 use std::io;
 
 use async_trait::async_trait;
-use bytes::Buf;
 use fig_proto::prost::Message;
 use fig_proto::{FigMessage, ReflectMessage};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -26,15 +25,11 @@ where
         M: Message + ReflectMessage + Default,
     {
         loop {
-            // Try to parse the message until the buffer is a valid message
-            let mut cursor = io::Cursor::new(&self.buffer);
-            match FigMessage::parse(&mut cursor) {
-                // If the parsed message is valid, return it
-                Ok((len, message)) => {
-                    self.buffer.advance(len);
-                    return Ok(Some(message.decode()?));
-                },
-                // If the message is incomplete, read more into the buffer
+            // Split a complete frame off the BytesMut. Incomplete leaves the
+            // buffer in place so the next read can append; a header error
+            // advances 10 bytes the same way the old Cursor parse did.
+            match FigMessage::take_from_bytes_mut(&mut self.buffer) {
+                Ok(message) => return Ok(Some(message.decode()?)),
                 Err(fig_proto::FigMessageParseError::Incomplete(_, _)) => {
                     let bytes = self.inner.read_buf(&mut self.buffer).await?;
 
@@ -56,11 +51,7 @@ where
                 // die with the socket. Scanning for the next magic would keep a
                 // desynced connection alive and can false-match payload bytes
                 // (`\x1b@` is legal in protobuf). See CROSS_PLATFORM_PLAN §8.
-                Err(err) => {
-                    let position = cursor.position() as usize;
-                    self.buffer.advance(position);
-                    return Err(err.into());
-                },
+                Err(err) => return Err(err.into()),
             }
         }
     }
@@ -171,6 +162,26 @@ mod tests {
     /// fails: there is no scan-for-magic. This is the desync the TODO named;
     /// fixing it would change "drop the socket" into "keep reading", which is
     /// not clearly compatible (magic can appear in protobuf bodies).
+    #[test]
+    fn recv_splits_frames_from_the_bytesmut() {
+        let src = include_str!("recv_message.rs");
+        let start = src
+            .find("FigMessage::take_from_bytes_mut")
+            .expect("take_from_bytes_mut call");
+        let body = &src[start..];
+        let end = body.find("Err(err) => return Err(err.into())").expect("error arm");
+        let body = &src[..start + end];
+        assert!(
+            body.contains("take_from_bytes_mut"),
+            "recv must split a complete frame off BytesMut instead of copying the body"
+        );
+        let cursor = ["Cursor", "new"].join("::");
+        assert!(
+            !body.contains(&cursor) && !body.contains("buffer.advance"),
+            "recv must not parse through a Cursor and then advance the original buffer"
+        );
+    }
+
     #[tokio::test]
     async fn one_byte_desync_does_not_resync_to_next_frame() {
         let mut writer = mock(vec![]);

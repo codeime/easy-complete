@@ -708,8 +708,8 @@ fn walk_spec(
             continue;
         }
         if !after_double_dash && subcommands_allowed && !token.starts_with('-') {
-            if let Some(next) = current.find_subcommand(token) {
-                current = Arc::new(next.clone());
+            if let Some(next) = current.subcommands.iter().find(|spec| spec.has_name(token)) {
+                current = Arc::clone(next);
                 apply_generate_spec(&mut current, tokens);
                 index += 1;
                 path_end = index;
@@ -773,7 +773,7 @@ fn walk_spec(
 }
 
 fn apply_generate_spec(current: &mut Arc<Spec>, tokens: &[String]) {
-    let Some(hook_id) = current.js_generate_spec.clone() else {
+    let Some(hook_id) = current.js_generate_spec.as_deref() else {
         return;
     };
     let Some((host, cwd)) = crate::js_host::current() else {
@@ -782,9 +782,9 @@ fn apply_generate_spec(current: &mut Arc<Spec>, tokens: &[String]) {
     let timeout = Duration::from_millis(u64::try_from(crate::generate::DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000));
     let generated = if let Some(key) = current.generate_spec_cache_key.as_deref() {
         let cache_key = format!("{}:{key}", tokens.first().cloned().unwrap_or_default());
-        crate::js_host::cached_spec(host, &cache_key, || host.generate_spec(&hook_id, tokens, cwd, timeout))
+        crate::js_host::cached_spec(host, &cache_key, || host.generate_spec(hook_id, tokens, cwd, timeout))
     } else {
-        host.generate_spec(&hook_id, tokens, cwd, timeout)
+        host.generate_spec(hook_id, tokens, cwd, timeout)
     };
     let Some(generated) = generated else {
         return;
@@ -823,10 +823,10 @@ fn enter_loaded_spec(
 /// do `isCommand` / `isScript` / `isModule` load another bundled spec.
 fn next_spec_after_arg(registry: Option<&mut Registry>, arg: &ArgSpec, token: &str) -> Option<Arc<Spec>> {
     if arg.load_spec.is_some() {
-        return arg.resolved_spec.as_deref().map(|spec| Arc::new(spec.clone()));
+        return arg.resolved_spec.clone();
     }
-    if let Some(resolved) = arg.resolved_spec.as_deref() {
-        return Some(Arc::new(resolved.clone()));
+    if let Some(resolved) = arg.resolved_spec.clone() {
+        return Some(resolved);
     }
     let name = dynamic_spec_name(arg, token)?;
     if name.is_empty() || name == "?" {
@@ -1465,8 +1465,7 @@ pub fn complete(
     });
 
     let completing_exclusive_arg = context.active_arg.as_ref().is_some_and(|active| active.exclusive);
-    let mut subcommands = current.subcommands.clone();
-    subcommands.sort_by(|left, right| cmp_named_names(&left.names, &right.names));
+    let subcommands = sorted_by_names(&current.subcommands, |spec| spec.names.as_slice());
     let mut suggestions = if completing_exclusive_arg || open_option_chain.is_some() {
         Vec::new()
     } else {
@@ -1512,8 +1511,7 @@ pub fn complete(
         }
         suggestions.extend(active_suggestions);
     }
-    let mut additional_items = current.additional_suggestions.clone();
-    additional_items.sort_by(|left, right| cmp_named_names(&left.names, &right.names));
+    let additional_items = sorted_by_names(&current.additional_suggestions, |seed| seed.names.as_slice());
     let mut additional = collect_named(
         &additional_items,
         |seed| seed.names.as_slice(),
@@ -1795,6 +1793,12 @@ fn cmp_named_names(left: &[String], right: &[String]) -> std::cmp::Ordering {
     let left = left.first().map(String::as_str).unwrap_or_default();
     let right = right.first().map(String::as_str).unwrap_or_default();
     crate::query::cmp_ignore_ascii_case(left, right).then_with(|| left.cmp(right))
+}
+
+fn sorted_by_names<T>(items: &[T], names: impl Fn(&T) -> &[String]) -> Vec<&T> {
+    let mut refs: Vec<&T> = items.iter().collect();
+    refs.sort_by(|left, right| cmp_named_names(names(left), names(right)));
+    refs
 }
 
 fn option_repetition_limit(option: &OptionSpec) -> Option<f64> {
@@ -2302,6 +2306,32 @@ mod tests {
         assert!(
             body.contains("tokens") && body.contains("ends_with_space") && body.contains("buffer"),
             "lookup::complete takes the pre-parsed completion buffer"
+        );
+    }
+
+    #[test]
+    fn listing_and_walk_do_not_deep_clone_subcommand_trees() {
+        let src = include_str!("lookup.rs");
+        let walk_clone = ["Arc", "new(next.clone())"].join("::");
+        let spec_clone = ["Arc", "new(spec.clone())"].join("::");
+        let resolved_clone = ["Arc", "new(resolved.clone())"].join("::");
+        let list_clone = ["current.subcommands", "clone()"].join(".");
+        let extra_clone = ["current.additional_suggestions", "clone()"].join(".");
+        assert!(
+            !src.contains(&walk_clone),
+            "walk must Arc::clone the child, not clone the Spec tree"
+        );
+        assert!(
+            !src.contains(&list_clone),
+            "listing must sort references, not clone every nested spec"
+        );
+        assert!(
+            !src.contains(&extra_clone),
+            "additional suggestions must sort references, not clone the seed vec"
+        );
+        assert!(
+            !src.contains(&spec_clone) && !src.contains(&resolved_clone),
+            "loadSpec walk must reuse the resolved Arc"
         );
     }
 
