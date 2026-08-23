@@ -12,7 +12,7 @@ use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, sel}
 use objc2_foundation::{NSDistributedNotificationCenter, NSPoint, NSRange, NSRect, NSSize, NSString, ns_string};
 use objc2_input_method_kit::{IMKInputController, IMKServer};
 
-use crate::wire::{self, Origin};
+use crate::wire::{self, Origin, caret_rect_is_usable, caret_should_replace};
 use crate::{paths, terminals};
 
 const INPUT_CONTROLLER_CLASS_NAME: &str = env!("InputMethodServerControllerClass");
@@ -22,19 +22,6 @@ const INPUT_CONTROLLER_CLASS_NAME: &str = env!("InputMethodServerControllerClass
 fn bundle_identifier(client: &AnyObject) -> Option<String> {
     let bundle_id: Option<Retained<NSString>> = unsafe { msg_send_id![client, bundleIdentifier] };
     Some(bundle_id?.to_string())
-}
-
-/// A client that no longer backs a live window — a closed Ghostty window whose input controller
-/// is still registered, for example — leaves `attributesForCharacterIndex:lineHeightRectangle:`
-/// untouched, so the caret rect stays at its zeroed default. Sending that on would place the
-/// overlay at the screen-space origin, which the desktop then clamps to the bottom-left corner of
-/// the primary monitor — on multi-monitor setups that is a different screen than the terminal.
-fn is_valid_caret_rect(rect: NSRect) -> bool {
-    rect.origin.x.is_finite()
-        && rect.origin.y.is_finite()
-        && rect.size.width.is_finite()
-        && rect.size.height.is_finite()
-        && rect.size.height > 0.0
 }
 
 /// Otty / Ghostty / Kitty attach through IMK. After an IME restart or a
@@ -55,29 +42,19 @@ fn client_is_key_window(client: &AnyObject) -> bool {
     is_key.as_bool()
 }
 
-const CARET_EPS: f64 = 0.5;
 const CARET_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 /// How long the sender thread waits for another caret before giving itself up. An
 /// idle input method should hold nothing but its AppKit main thread; the next
 /// keystroke starts a new one.
 const SENDER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-type CaretRect = (f64, f64, f64, f64);
-
-fn caret_rect_tuple(rect: NSRect) -> CaretRect {
+fn caret_rect_tuple(rect: NSRect) -> wire::CaretRect {
     (rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
 }
 
-fn caret_rects_close(left: CaretRect, right: CaretRect) -> bool {
-    (left.0 - right.0).abs() < CARET_EPS
-        && (left.1 - right.1).abs() < CARET_EPS
-        && (left.2 - right.2).abs() < CARET_EPS
-        && (left.3 - right.3).abs() < CARET_EPS
-}
-
-fn should_send_caret(last: &Cell<Option<CaretRect>>, rect: NSRect) -> bool {
+fn should_send_caret(last: &Cell<Option<wire::CaretRect>>, rect: NSRect) -> bool {
     let next = caret_rect_tuple(rect);
-    if last.get().is_some_and(|previous| caret_rects_close(previous, next)) {
+    if !caret_should_replace(last.get(), next) {
         return false;
     }
     last.set(Some(next));
@@ -179,7 +156,7 @@ fn report_caret_from_client(
     client: &AnyObject,
     bundle_id: Option<&str>,
     reason: &str,
-    last_sent: &Cell<Option<CaretRect>>,
+    last_sent: &Cell<Option<wire::CaretRect>>,
 ) {
     let bundle_id = bundle_id.unwrap_or_default();
     if !terminals::supports_input_method(bundle_id) {
@@ -197,7 +174,10 @@ fn report_caret_from_client(
     };
     let _: () = unsafe { msg_send![client, attributesForCharacterIndex: 0 lineHeightRectangle: &mut rect] };
 
-    if !is_valid_caret_rect(rect) {
+    // A client that no longer backs a live window leaves the rect at its
+    // zeroed default. Sending that on would place the overlay at the
+    // screen-space origin. Height ≤ 0 is the same unusable box IBus / Win32 drop.
+    if !caret_rect_is_usable(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height) {
         log_debug!("Instance {bundle_id:?} reported an invalid caret rect {rect:?}, ignoring request");
         return;
     }
@@ -217,7 +197,7 @@ fn report_caret_from_client(
 
 struct Ivars {
     is_active: Cell<bool>,
-    last_sent: Cell<Option<CaretRect>>,
+    last_sent: Cell<Option<wire::CaretRect>>,
 }
 
 declare_class!(
@@ -340,26 +320,68 @@ mod tests {
 
     #[test]
     fn zeroed_caret_rect_is_rejected() {
-        assert!(!is_valid_caret_rect(rect(0.0, 0.0, 0.0, 0.0)));
+        let r = rect(0.0, 0.0, 0.0, 0.0);
+        assert!(!caret_rect_is_usable(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height
+        ));
     }
 
     #[test]
     fn caret_rect_without_height_is_rejected() {
-        assert!(!is_valid_caret_rect(rect(1200.0, 800.0, 8.0, 0.0)));
-        assert!(!is_valid_caret_rect(rect(1200.0, 800.0, 8.0, -16.0)));
+        let r = rect(1200.0, 800.0, 8.0, 0.0);
+        assert!(!caret_rect_is_usable(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height
+        ));
+        let r = rect(1200.0, 800.0, 8.0, -16.0);
+        assert!(!caret_rect_is_usable(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height
+        ));
     }
 
     #[test]
     fn non_finite_caret_rect_is_rejected() {
-        assert!(!is_valid_caret_rect(rect(f64::NAN, 800.0, 8.0, 16.0)));
-        assert!(!is_valid_caret_rect(rect(1200.0, f64::INFINITY, 8.0, 16.0)));
+        let r = rect(f64::NAN, 800.0, 8.0, 16.0);
+        assert!(!caret_rect_is_usable(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height
+        ));
+        let r = rect(1200.0, f64::INFINITY, 8.0, 16.0);
+        assert!(!caret_rect_is_usable(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height
+        ));
     }
 
     #[test]
     fn caret_rect_on_a_secondary_monitor_is_accepted() {
         // Screens left of or below the primary one report negative Cocoa origins.
-        assert!(is_valid_caret_rect(rect(-1920.0, -450.0, 0.0, 16.0)));
-        assert!(is_valid_caret_rect(rect(1200.0, 800.0, 8.0, 16.0)));
+        let r = rect(-1920.0, -450.0, 0.0, 16.0);
+        assert!(caret_rect_is_usable(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height
+        ));
+        let r = rect(1200.0, 800.0, 8.0, 16.0);
+        assert!(caret_rect_is_usable(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height
+        ));
     }
 
     #[test]

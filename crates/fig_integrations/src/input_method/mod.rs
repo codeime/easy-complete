@@ -129,18 +129,6 @@ fn wait_for_exit(pids: &[Pid], timeout: Duration) -> bool {
     }
 }
 
-/// `launched` is the hash we recorded when we last started the IME; `disk` is
-/// the hash of the bundle we want to run. Missing tracker state is *not* stale:
-/// killing on that would undo `install.sh` when it already decided the bytes
-/// match. The caller pins the hash instead. Sparkle after this tracker has
-/// been written still sees `Some(old) != Some(new)` and replaces.
-fn process_is_stale(launched: Option<&str>, disk: Option<&str>) -> bool {
-    match (launched, disk) {
-        (Some(a), Some(b)) => a != b,
-        _ => false,
-    }
-}
-
 use thiserror::Error;
 
 #[derive(Error, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -452,15 +440,6 @@ impl InputMethod {
         }
     }
 
-    /// The process on the machine is from a different binary than the one in
-    /// this bundle. A missing tracker is not stale — see [`process_is_stale`].
-    fn running_process_is_stale(&self) -> bool {
-        process_is_stale(
-            Self::launched_binary_hash().as_deref(),
-            self.on_disk_binary_hash().as_deref(),
-        )
-    }
-
     /// SIGTERM these processes, then SIGKILL whatever is still alive. Returns
     /// only once they are all gone, because `open` on a bundle whose process is
     /// still up just activates that process — launching a replacement before
@@ -496,17 +475,23 @@ impl InputMethod {
 
     fn ensure_current_binary_running(&self, launch_bundle: &Path) {
         let running = self.running_pids();
-
-        if running.is_empty() {
-            self.start_from(launch_bundle);
-        } else if self.running_process_is_stale() {
-            info!("Input method binary changed; replacing the running process");
-            Self::stop(&running);
-            self.start_from(launch_bundle);
-        } else if Self::launched_binary_hash().is_none() {
-            // A helper that predates this tracker. Pin its hash so the next
-            // build is recognised as a change instead of staying invisible.
-            self.record_launched_binary();
+        match crate::ime_launch::ime_launch_action(
+            !running.is_empty(),
+            Self::launched_binary_hash().as_deref(),
+            self.on_disk_binary_hash().as_deref(),
+        ) {
+            crate::ime_launch::ImeLaunchAction::Start => self.start_from(launch_bundle),
+            crate::ime_launch::ImeLaunchAction::Replace => {
+                info!("Input method binary changed; replacing the running process");
+                Self::stop(&running);
+                self.start_from(launch_bundle);
+            },
+            crate::ime_launch::ImeLaunchAction::PinHash => {
+                // A helper that predates this tracker. Pin its hash so the next
+                // build is recognised as a change instead of staying invisible.
+                self.record_launched_binary();
+            },
+            crate::ime_launch::ImeLaunchAction::Keep => {},
         }
     }
 }
@@ -997,15 +982,6 @@ mod tests {
         // Reading the enabled list rather than the selected one is what stops a
         // selected-and-disabled leftover from passing for installed.
         assert!(prod.contains("ec_hitoolbox::is_palette_enabled"));
-    }
-
-    #[test]
-    fn process_is_stale_only_when_the_hash_changed() {
-        assert!(!process_is_stale(None, None));
-        assert!(!process_is_stale(Some("aaa"), None));
-        assert!(!process_is_stale(None, Some("aaa")));
-        assert!(!process_is_stale(Some("aaa"), Some("aaa")));
-        assert!(process_is_stale(Some("aaa"), Some("bbb")));
     }
 
     #[test]

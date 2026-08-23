@@ -193,6 +193,20 @@ pub fn macos_overlay_window_level() -> i64 {
     NS_FLOATING_WINDOW_LEVEL
 }
 
+/// Pins the overlay above the focused terminal.
+///
+/// `None` / `Some(0)` is a normal window (iTerm at the default level): use
+/// the floating level. A non-zero terminal level (Quake, always-on-top,
+/// fullscreen) is inherited so the list stays above that terminal. The
+/// floating value is supplied by the AppKit host (`CGWindowLevelForKey`);
+/// this module only decides which one to apply.
+pub fn macos_overlay_level_for_terminal(terminal_level: Option<i64>, floating_level: i64) -> i64 {
+    match terminal_level {
+        None | Some(0) => floating_level,
+        Some(level) => level,
+    }
+}
+
 pub fn macos_overlay_collection_behavior() -> u64 {
     NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES
         | NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_AUXILIARY
@@ -414,6 +428,15 @@ mod tests {
             decide_overlay_frame_schedule(&moved, None, Some(&applied)),
             OverlayFrameSchedule::Enqueue
         );
+    }
+
+    #[test]
+    fn overlay_follows_a_raised_terminal_and_floats_above_a_normal_one() {
+        const FLOATING: i64 = NS_FLOATING_WINDOW_LEVEL;
+        assert_eq!(macos_overlay_level_for_terminal(None, FLOATING), FLOATING);
+        assert_eq!(macos_overlay_level_for_terminal(Some(0), FLOATING), FLOATING);
+        assert_eq!(macos_overlay_level_for_terminal(Some(25), FLOATING), 25);
+        assert_eq!(macos_overlay_level_for_terminal(Some(-1), FLOATING), -1);
     }
 
     #[test]

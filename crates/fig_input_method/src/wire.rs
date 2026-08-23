@@ -4,6 +4,9 @@
 //! Hand-encoded so the binary does not link prost and its descriptor pool for a
 //! payload that is always under fifty bytes. [`tests::frame_matches_fig_proto`]
 //! diffs the bytes against the generated encoder.
+//!
+//! Caret-rect usability and coalesce policy also live here so Linux CI pins
+//! the IMK gates without AppKit. `imk.rs` is still `cfg(macos)`.
 
 /// `\x1b@` plus the eight-byte type tag, per `fig_proto::FigMessage`.
 const FIG_PBUF_PREFIX: &[u8] = b"\x1b@fig-pbuf";
@@ -63,6 +66,29 @@ fn caret_position_hook(x: f64, y: f64, width: f64, height: f64, origin: Origin) 
     push_tag(&mut out, 5, WIRE_TYPE_VARINT);
     push_varint(&mut out, origin as u64);
     out
+}
+
+/// A remote IMK proxy may return a zeroed rect when the client is gone. Sending
+/// that on places the overlay at the screen-space origin. Height ≤ 0 is the
+/// same class of unusable box IBus / Win32 already drop.
+pub fn caret_rect_is_usable(x: f64, y: f64, width: f64, height: f64) -> bool {
+    x.is_finite() && y.is_finite() && width.is_finite() && height.is_finite() && height > 0.0
+}
+
+pub const CARET_EPS: f64 = 0.5;
+
+pub type CaretRect = (f64, f64, f64, f64);
+
+pub fn caret_rects_close(left: CaretRect, right: CaretRect) -> bool {
+    (left.0 - right.0).abs() < CARET_EPS
+        && (left.1 - right.1).abs() < CARET_EPS
+        && (left.2 - right.2).abs() < CARET_EPS
+        && (left.3 - right.3).abs() < CARET_EPS
+}
+
+/// Duplicate IMK frames (same box within [`CARET_EPS`]) are not written again.
+pub fn caret_should_replace(previous: Option<CaretRect>, next: CaretRect) -> bool {
+    !previous.is_some_and(|previous| caret_rects_close(previous, next))
 }
 
 /// A complete frame, ready to write to the desktop socket.
@@ -144,5 +170,23 @@ mod tests {
         let mut out = Vec::new();
         push_tag(&mut out, HOOK_CARET_POSITION_FIELD, WIRE_TYPE_LEN);
         assert_eq!(out, [0x8a, 0x07]);
+    }
+
+    #[test]
+    fn zero_height_or_non_finite_caret_is_not_usable() {
+        assert!(caret_rect_is_usable(10.0, 20.0, 0.0, 16.0));
+        assert!(!caret_rect_is_usable(10.0, 20.0, 8.0, 0.0));
+        assert!(!caret_rect_is_usable(10.0, 20.0, 8.0, -1.0));
+        assert!(!caret_rect_is_usable(f64::NAN, 20.0, 8.0, 16.0));
+        assert!(!caret_rect_is_usable(10.0, f64::INFINITY, 8.0, 16.0));
+    }
+
+    #[test]
+    fn duplicate_caret_frames_are_coalesced() {
+        let first = (10.0, 20.0, 8.0, 16.0);
+        assert!(caret_should_replace(None, first));
+        assert!(!caret_should_replace(Some(first), first));
+        assert!(!caret_should_replace(Some(first), (10.4, 20.0, 8.0, 16.0)));
+        assert!(caret_should_replace(Some(first), (11.0, 20.0, 8.0, 16.0)));
     }
 }

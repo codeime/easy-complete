@@ -29,6 +29,37 @@ pub(crate) fn hide_overlay_on_element_change(bundle_id: &str) -> bool {
     )
 }
 
+/// tao / NSApplication activation policy, without AppKit.
+///
+/// `macos.rs` is `cfg(macos)`. Linux CI pins the NS integer mapping and the
+/// fullscreen / settings-window rule here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MacosActivationPolicy {
+    Regular,
+    Accessory,
+    Prohibited,
+}
+
+/// `NSApplicationActivationPolicyRegular` is 0, Accessory 1, Prohibited 2.
+/// Unknown future tao variants map to Accessory, matching the previous `_ => 1`.
+pub(crate) fn macos_ns_activation_policy(policy: MacosActivationPolicy) -> i64 {
+    match policy {
+        MacosActivationPolicy::Regular => 0,
+        MacosActivationPolicy::Accessory => 1,
+        MacosActivationPolicy::Prohibited => 2,
+    }
+}
+
+/// Fullscreen always hides the dock icon (Accessory). Otherwise Regular only
+/// while the settings window is up.
+pub(crate) fn macos_settings_activation_policy(fullscreen: bool, settings_visible: bool) -> MacosActivationPolicy {
+    if fullscreen || !settings_visible {
+        MacosActivationPolicy::Accessory
+    } else {
+        MacosActivationPolicy::Regular
+    }
+}
+
 /// Screen-space caret the overlay already consumes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaretOnScreen {
@@ -222,6 +253,42 @@ pub fn caret_origin_needs_screens(origin: Origin) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macos_activation_policy_maps_to_ns_integers() {
+        assert_eq!(macos_ns_activation_policy(MacosActivationPolicy::Regular), 0);
+        assert_eq!(macos_ns_activation_policy(MacosActivationPolicy::Accessory), 1);
+        assert_eq!(macos_ns_activation_policy(MacosActivationPolicy::Prohibited), 2);
+        assert_eq!(
+            macos_settings_activation_policy(true, true),
+            MacosActivationPolicy::Accessory
+        );
+        assert_eq!(
+            macos_settings_activation_policy(true, false),
+            MacosActivationPolicy::Accessory
+        );
+        assert_eq!(
+            macos_settings_activation_policy(false, true),
+            MacosActivationPolicy::Regular
+        );
+        assert_eq!(
+            macos_settings_activation_policy(false, false),
+            MacosActivationPolicy::Accessory
+        );
+        let macos = include_str!("macos.rs");
+        assert!(
+            macos.contains("macos_ns_activation_policy") && macos.contains("macos_settings_activation_policy"),
+            "AppKit host must use the shared activation-policy mapping"
+        );
+        assert!(
+            macos.contains("macos_overlay_level_for_terminal"),
+            "iTerm Quake window level must go through the shared overlay policy"
+        );
+        assert!(
+            !macos.contains("None | Some(0) =>"),
+            "do not fork None|Some(0) → floating back into macos.rs"
+        );
+    }
 
     #[test]
     fn ime_terminals_keep_the_overlay_on_element_change() {
@@ -472,6 +539,14 @@ mod tests {
         assert!(
             ci.matches("cargo test --locked -p ec_gpui").count() >= 2,
             "rust-linux and rust-windows both run the ec_gpui suite (macos_overlay / windows_overlay)"
+        );
+        assert!(
+            ci.matches("-p fig_input_method").count() >= 2,
+            "IME terminals / wire / TISDisable pins belong on rust-linux and rust-windows"
+        );
+        assert!(
+            ci.matches("-p ec_hitoolbox").count() >= 2,
+            "HIToolbox palette rewrite policy belongs on rust-linux and rust-windows"
         );
     }
 

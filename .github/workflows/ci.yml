@@ -125,10 +125,10 @@ jobs:
           key: ci-linux
 
       - name: Clippy (headless crates)
-        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
+        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method --color always -- -D warnings
 
       - name: Test (headless crates)
-        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
+        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method
 
       - name: Headless engine complete
         run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"
@@ -153,9 +153,11 @@ jobs:
     name: Rust (Windows)
     runs-on: windows-latest
     timeout-minutes: 45
-    # Same crate list as rust-linux. This is the MSVC compile of ConPTY, named
-    # pipes, and GPUI HWND — not a live desktop session. GetGUIThreadInfo,
-    # SetWindowPos against a real HWND, and ConPTY I/O are not exercised.
+    # Same crate list as rust-linux, including ec_hitoolbox / fig_input_method
+    # policy pins (no live TIS / IMK / cfprefsd). This is the MSVC compile of
+    # ConPTY, named pipes, and GPUI HWND — not a live desktop session.
+    # GetGUIThreadInfo, SetWindowPos against a real HWND, and ConPTY I/O are
+    # not exercised.
     # The named-pipe accept/connect test is cfg(windows) and runs here only;
     # F1 slug / F2 ~user / F3 BOOL / F4 caret / F5 SetWindowPos flags / F6 zip
     # layout are unit-tested on Linux too. No shellcheck/zsh/fish; those
@@ -172,10 +174,10 @@ jobs:
           key: ci-windows
 
       - name: Clippy (headless crates)
-        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
+        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method --color always -- -D warnings
 
       - name: Test (headless crates)
-        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
+        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method
 
       - name: Headless engine complete
         run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"

@@ -3,7 +3,8 @@
 //! Mirrors `Terminal::from_bundle_id` composed with
 //! `Terminal::supports_macos_input_method`, for the same reason as [`crate::paths`]:
 //! `fig_util` is too heavy to link here. [`tests::matches_fig_util`] pins the two
-//! together over the full bundle-ID table.
+//! together over the full bundle-ID table. Compiled on every OS so Linux CI
+//! runs that pin; `imk.rs` is still `cfg(macos)`.
 
 /// Terminals that draw their own cursor and expose it only through the input
 /// method: the desktop cannot read their caret over Accessibility.

@@ -32,7 +32,9 @@ use tracing::{debug, error, trace, warn};
 use super::{PlatformBoundEvent, PlatformWindow};
 use crate::bootstrap::{GLOBAL_PROXY, WindowId};
 use crate::event::{Event, WindowEvent, WindowPosition};
-use crate::platform::caret::hide_overlay_on_element_change;
+use crate::platform::caret::{
+    MacosActivationPolicy, hide_overlay_on_element_change, macos_ns_activation_policy, macos_settings_activation_policy,
+};
 use crate::utils::Rect;
 use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID};
 
@@ -190,19 +192,12 @@ impl PlatformWindowImpl {
     }
 }
 
-/// Pins the autocomplete overlay above the focused terminal.
-///
-/// `terminal_level` is the window level of the terminal the overlay is following. Handles iTerm
-/// Quake mode by explicitly setting the window level, see
-/// <https://github.com/gnachman/iTerm2/blob/1a5a09f02c62afcc70a647603245e98862e51911/sources/iTermProfileHotKey.m#L276-L310>
-/// for more on window levels.
 pub fn set_activation_policy(policy: ActivationPolicy) {
-    let ns_policy: i64 = match policy {
-        ActivationPolicy::Regular => 0,
-        ActivationPolicy::Accessory => 1,
-        ActivationPolicy::Prohibited => 2,
-        _ => 1,
-    };
+    let ns_policy: i64 = macos_ns_activation_policy(match policy {
+        ActivationPolicy::Regular => MacosActivationPolicy::Regular,
+        ActivationPolicy::Prohibited => MacosActivationPolicy::Prohibited,
+        _ => MacosActivationPolicy::Accessory,
+    });
     unsafe {
         let Some(application) = Class::get("NSApplication") else {
             return;
@@ -212,11 +207,16 @@ pub fn set_activation_policy(policy: ActivationPolicy) {
     }
 }
 
+/// Pins the autocomplete overlay above the focused terminal.
+///
+/// `terminal_level` is the window level of the terminal the overlay is following. Handles iTerm
+/// Quake mode by explicitly setting the window level, see
+/// <https://github.com/gnachman/iTerm2/blob/1a5a09f02c62afcc70a647603245e98862e51911/sources/iTermProfileHotKey.m#L276-L310>
+/// for more on window levels. `None` / `Some(0)` uses the floating level from
+/// `CGWindowLevelForKey`; any other level is inherited.
 fn apply_autocomplete_window_level(terminal_level: Option<i64>) {
-    let above = match terminal_level {
-        None | Some(0) => unsafe { CGWindowLevelForKey(kCGFloatingWindowLevelKey) as i64 },
-        Some(level) => level,
-    };
+    let floating = unsafe { CGWindowLevelForKey(kCGFloatingWindowLevelKey) as i64 };
+    let above = ec_gpui::macos_overlay_level_for_terminal(terminal_level, floating);
     debug!("Setting overlay window level to {terminal_level:?}");
     ec_gpui::set_overlay_window_level_for_title(AUTOCOMPLETE_WINDOW_TITLE, above);
 }
@@ -463,16 +463,10 @@ impl PlatformStateImpl {
                 fullscreen,
                 settings_visible,
             } => {
-                let policy = if fullscreen {
-                    ActivationPolicy::Accessory
-                } else {
-                    let settings_visible = settings_visible.unwrap_or_else(crate::settings_ui::is_open);
-
-                    if settings_visible {
-                        ActivationPolicy::Regular
-                    } else {
-                        ActivationPolicy::Accessory
-                    }
+                let settings_visible = settings_visible.unwrap_or_else(crate::settings_ui::is_open);
+                let policy = match macos_settings_activation_policy(fullscreen, settings_visible) {
+                    MacosActivationPolicy::Regular => ActivationPolicy::Regular,
+                    MacosActivationPolicy::Accessory | MacosActivationPolicy::Prohibited => ActivationPolicy::Accessory,
                 };
 
                 let mut policy_lock = crate::utils::recover_mutex(&ACTIVATION_POLICY);

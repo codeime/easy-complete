@@ -13,6 +13,11 @@
 //! `python3`: the IME is launched by TIS with a bare `PATH`, and `python3` there
 //! is the Command Line Tools stub, which is missing on a machine that never
 //! installed them. A failed palette write means no caret and no overlay.
+//!
+//! Classification / vendor-prefix / rewrite policy lives in `policy` so
+//! Linux CI can pin it. Live `CFPreferences` still needs a macOS host.
+
+mod policy;
 
 #[cfg(target_os = "macos")]
 mod macos;

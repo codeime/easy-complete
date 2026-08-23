@@ -8,6 +8,8 @@ use core_foundation_sys::preferences::{
     CFPreferencesAppSynchronize, CFPreferencesCopyAppValue, CFPreferencesSetAppValue,
 };
 
+use crate::policy::{NON_KEYBOARD_KIND, PaletteEntry, classify, scan_palette, vendor_prefix};
+
 const DOMAIN: &str = "com.apple.HIToolbox";
 /// The list a new window is matched against when macOS hands it an IMK
 /// connection. Missing from here means no caret, whatever the palette shows.
@@ -16,7 +18,6 @@ const ENABLED_KEY: &str = "AppleEnabledInputSources";
 const SELECTED_KEY: &str = "AppleSelectedInputSources";
 const BUNDLE_ID_KEY: &str = "Bundle ID";
 const KIND_KEY: &str = "InputSourceKind";
-const NON_KEYBOARD_KIND: &str = "Non Keyboard Input Method";
 
 /// Whether `AppleEnabledInputSources` names this source.
 ///
@@ -39,41 +40,6 @@ pub fn ensure_palette_enabled(bundle_id: &str) -> bool {
     let enabled = ensure_listed(DOMAIN, ENABLED_KEY, bundle_id);
     let selected = ensure_listed(DOMAIN, SELECTED_KEY, bundle_id);
     enabled && selected
-}
-
-/// What an existing palette entry means for the source being installed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Entry {
-    /// This exact source, already listed.
-    Ours,
-    /// The same palette under an older bundle ID, left by a rename.
-    Superseded,
-    /// Somebody else's input source. Never rewritten, never reordered.
-    Other,
-}
-
-fn classify(bundle_id: Option<&str>, kind: Option<&str>, ours: &str, vendor_prefix: &str) -> Entry {
-    if bundle_id == Some(ours) {
-        return Entry::Ours;
-    }
-    // An empty prefix would match every palette on the machine, so a bundle ID
-    // with too few components disables the rename cleanup rather than widening it.
-    let same_vendor = !vendor_prefix.is_empty() && bundle_id.is_some_and(|id| id.starts_with(vendor_prefix));
-    if same_vendor && kind == Some(NON_KEYBOARD_KIND) {
-        Entry::Superseded
-    } else {
-        Entry::Other
-    }
-}
-
-/// `dev.emmmm.easy-complete.inputmethod` → `dev.emmmm`: the reverse-DNS vendor,
-/// which survives renaming both the app and the helper.
-fn vendor_prefix(bundle_id: &str) -> &str {
-    bundle_id
-        .rsplit_once('.')
-        .map_or("", |(head, _)| head)
-        .rsplit_once('.')
-        .map_or("", |(head, _)| head)
 }
 
 fn palette_entry(bundle_id: &str) -> CFDictionary<CFString, CFString> {
@@ -135,22 +101,25 @@ fn ensure_listed(domain: &str, key: &str, bundle_id: &str) -> bool {
     let prefix = vendor_prefix(bundle_id);
 
     let mut others: Vec<CFType> = Vec::new();
-    let mut ours = 0usize;
-    let mut superseded = 0usize;
+    let mut pairs: Vec<(Option<String>, Option<String>)> = Vec::new();
 
     if let Some(list) = copy_list(domain, key) {
         for item in list.iter() {
             let item: *const c_void = *item;
             let (entry_id, kind) = entry_strings(item);
-            match classify(entry_id.as_deref(), kind.as_deref(), bundle_id, prefix) {
-                Entry::Ours => ours += 1,
-                Entry::Superseded => superseded += 1,
-                Entry::Other => others.push(unsafe { CFType::wrap_under_get_rule(item) }),
+            if classify(entry_id.as_deref(), kind.as_deref(), bundle_id, prefix) == PaletteEntry::Other {
+                others.push(unsafe { CFType::wrap_under_get_rule(item) });
             }
+            pairs.push((entry_id, kind));
         }
     }
 
-    if ours == 1 && superseded == 0 {
+    if scan_palette(
+        pairs.iter().map(|(id, kind)| (id.as_deref(), kind.as_deref())),
+        bundle_id,
+    )
+    .leave_alone()
+    {
         return true;
     }
 
@@ -201,80 +170,6 @@ mod tests {
             return None;
         }
         Some(guard)
-    }
-
-    #[test]
-    fn vendor_prefix_keeps_the_reverse_dns_vendor() {
-        assert_eq!(vendor_prefix("dev.emmmm.easy-complete.inputmethod"), "dev.emmmm");
-        assert_eq!(vendor_prefix("com.example.app"), "com");
-        assert_eq!(vendor_prefix("two.parts"), "");
-        assert_eq!(vendor_prefix("single"), "");
-    }
-
-    #[test]
-    fn our_own_entry_is_recognised() {
-        assert_eq!(
-            classify(Some(OURS), Some(NON_KEYBOARD_KIND), OURS, "dev.emmmm"),
-            Entry::Ours
-        );
-        // A stale entry keeps its identity even without the kind recorded.
-        assert_eq!(classify(Some(OURS), None, OURS, "dev.emmmm"), Entry::Ours);
-    }
-
-    #[test]
-    fn a_renamed_copy_of_this_palette_is_superseded() {
-        assert_eq!(
-            classify(
-                Some("dev.emmmm.old-name.inputmethod"),
-                Some(NON_KEYBOARD_KIND),
-                OURS,
-                "dev.emmmm"
-            ),
-            Entry::Superseded
-        );
-    }
-
-    #[test]
-    fn other_vendors_and_keyboard_layouts_are_left_alone() {
-        assert_eq!(
-            classify(
-                Some("com.apple.keylayout.ABC"),
-                Some("Keyboard Layout"),
-                OURS,
-                "dev.emmmm"
-            ),
-            Entry::Other
-        );
-        assert_eq!(
-            classify(
-                Some("com.sogou.inputmethod"),
-                Some(NON_KEYBOARD_KIND),
-                OURS,
-                "dev.emmmm"
-            ),
-            Entry::Other
-        );
-        // Same vendor, but a keyboard layout rather than this palette.
-        assert_eq!(
-            classify(
-                Some("dev.emmmm.keylayout.x"),
-                Some("Keyboard Layout"),
-                OURS,
-                "dev.emmmm"
-            ),
-            Entry::Other
-        );
-        assert_eq!(classify(None, None, OURS, "dev.emmmm"), Entry::Other);
-    }
-
-    /// An unparsed bundle ID must not turn the rename cleanup into "drop every
-    /// palette on the machine".
-    #[test]
-    fn an_empty_vendor_prefix_supersedes_nothing() {
-        assert_eq!(
-            classify(Some("com.sogou.inputmethod"), Some(NON_KEYBOARD_KIND), "single", ""),
-            Entry::Other
-        );
     }
 
     fn seed(key: &str, entries: &[(&str, &str)]) {

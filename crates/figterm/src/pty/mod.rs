@@ -109,6 +109,14 @@ mod win32_bool_tests {
             child.contains("FailedChildKiller"),
             "clone_killer degrades when the process handle cannot be duplicated"
         );
+        assert!(
+            src.contains("CreateProcessW") && src.contains("if res == 0"),
+            "CreateProcessW returns BOOL; 0 is failure, unlike ConPTY HRESULT"
+        );
+        assert!(
+            !src.contains("win32_hresult_succeeded(res)"),
+            "do not feed CreateProcessW BOOL to the ConPTY HRESULT mapper"
+        );
     }
 }
 

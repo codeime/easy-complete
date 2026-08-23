@@ -368,10 +368,10 @@ impl CommandBuilder {
                 // Note that this really replaces the extension in the
                 // user specified path, so this is potentially wrong.
                 for ext in std::env::split_paths(&extensions) {
-                    // PATHEXT includes the leading `.`, but `with_extension`
-                    // doesn't want that
-                    let ext = ext.to_str().expect("PATHEXT entries must be utf8");
-                    let path = path.join(exe).with_extension(&ext[1..]);
+                    let Some(ext) = ext.to_str().and_then(win32_pathext_extension) else {
+                        continue;
+                    };
+                    let path = path.join(exe).with_extension(ext);
                     if path.exists() {
                         return path.into_os_string();
                     }
@@ -467,48 +467,67 @@ impl CommandBuilder {
         Ok((exe, cmdline))
     }
 
+    fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
+        let wide: Vec<u16> = arg.encode_wide().collect();
+        win32_append_quoted(&wide, cmdline);
+    }
+}
+
+/// Strip the leading `.` from a `PATHEXT` entry. Empty / `"."` is skipped
+/// rather than panicking on `[1..]` or feeding `with_extension("")`.
+#[cfg(any(test, windows))]
+pub(crate) fn win32_pathext_extension(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let ext = trimmed.strip_prefix('.').unwrap_or(trimmed);
+    if ext.is_empty() { None } else { Some(ext) }
+}
+
+/// Win32 `CommandLineToArgvW` quoting. Compiled on every OS so Linux CI pins
+/// CreateProcessW argument encoding. Live spawn is still `cfg(windows)`.
+#[cfg(any(test, windows))]
+pub(crate) fn win32_append_quoted(arg: &[u16], cmdline: &mut Vec<u16>) {
     // Borrowed from https://github.com/hniksic/rust-subprocess/blob/873dfed165173e52907beb87118b2c0c05d8b8a1/src/popen.rs#L1117
     // which in turn was translated from ArgvQuote at http://tinyurl.com/zmgtnls
-    fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
-        if !arg.is_empty()
-            && !arg.encode_wide().any(|c| {
-                c == ' ' as u16 || c == '\t' as u16 || c == '\n' as u16 || c == '\x0b' as u16 || c == '\"' as u16
-            })
-        {
-            cmdline.extend(arg.encode_wide());
-            return;
-        }
-        cmdline.push('"' as u16);
-
-        let arg: Vec<_> = arg.encode_wide().collect();
-        let mut i = 0;
-        while i < arg.len() {
-            let mut num_backslashes = 0;
-            while i < arg.len() && arg[i] == '\\' as u16 {
-                i += 1;
-                num_backslashes += 1;
-            }
-
-            if i == arg.len() {
-                for _ in 0..num_backslashes * 2 {
-                    cmdline.push('\\' as u16);
-                }
-                break;
-            } else if arg[i] == b'"' as u16 {
-                for _ in 0..num_backslashes * 2 + 1 {
-                    cmdline.push('\\' as u16);
-                }
-                cmdline.push(arg[i]);
-            } else {
-                for _ in 0..num_backslashes {
-                    cmdline.push('\\' as u16);
-                }
-                cmdline.push(arg[i]);
-            }
-            i += 1;
-        }
-        cmdline.push('"' as u16);
+    let needs_quotes = arg.is_empty()
+        || arg.iter().any(|&c| {
+            c == u16::from(b' ') || c == u16::from(b'\t') || c == u16::from(b'\n') || c == 0x0b || c == u16::from(b'"')
+        });
+    if !needs_quotes {
+        cmdline.extend_from_slice(arg);
+        return;
     }
+    cmdline.push(u16::from(b'"'));
+
+    let mut i = 0;
+    while i < arg.len() {
+        let mut num_backslashes = 0;
+        while i < arg.len() && arg[i] == u16::from(b'\\') {
+            i += 1;
+            num_backslashes += 1;
+        }
+
+        if i == arg.len() {
+            for _ in 0..num_backslashes * 2 {
+                cmdline.push(u16::from(b'\\'));
+            }
+            break;
+        } else if arg[i] == u16::from(b'"') {
+            for _ in 0..num_backslashes * 2 + 1 {
+                cmdline.push(u16::from(b'\\'));
+            }
+            cmdline.push(arg[i]);
+        } else {
+            for _ in 0..num_backslashes {
+                cmdline.push(u16::from(b'\\'));
+            }
+            cmdline.push(arg[i]);
+        }
+        i += 1;
+    }
+    cmdline.push(u16::from(b'"'));
 }
 
 #[cfg(test)]
@@ -520,5 +539,45 @@ mod tests {
         let mut cb = CommandBuilder::new("/bin/sh");
         cb.args(["-c", "echo hello"]);
         assert_eq!(cb.as_unix_command_line().unwrap(), "/bin/sh -c 'echo hello'");
+    }
+
+    fn quoted(s: &str) -> String {
+        let mut out = Vec::new();
+        win32_append_quoted(&s.encode_utf16().collect::<Vec<_>>(), &mut out);
+        String::from_utf16(&out).unwrap()
+    }
+
+    #[test]
+    fn win32_append_quoted_matches_commandlinetoargvw() {
+        assert_eq!(quoted("hello"), "hello");
+        assert_eq!(quoted("hello world"), "\"hello world\"");
+        assert_eq!(quoted(""), "\"\"");
+        assert_eq!(quoted("a\"b"), "\"a\\\"b\"");
+        assert_eq!(quoted(r"foo\bar"), r"foo\bar");
+        assert_eq!(quoted(r"foo\bar baz"), "\"foo\\bar baz\"");
+        // Backslash is not a quoting trigger; trailing backslashes double only
+        // once the argument is already quoted.
+        assert_eq!(quoted("foo\\"), "foo\\");
+        assert_eq!(quoted("foo \\"), "\"foo \\\\\"");
+        assert_eq!(quoted("tab\there"), "\"tab\there\"");
+    }
+
+    #[test]
+    fn win32_pathext_skips_empty_and_strips_dot() {
+        assert_eq!(win32_pathext_extension(".EXE"), Some("EXE"));
+        assert_eq!(win32_pathext_extension("EXE"), Some("EXE"));
+        assert_eq!(win32_pathext_extension(".bat"), Some("bat"));
+        assert_eq!(win32_pathext_extension(""), None);
+        assert_eq!(win32_pathext_extension("   "), None);
+        assert_eq!(win32_pathext_extension("."), None);
+        let src = include_str!("cmdbuilder.rs");
+        assert!(
+            src.contains("win32_append_quoted(&wide, cmdline)"),
+            "CreateProcessW cmdline quoting must use the shared encoder"
+        );
+        assert!(
+            src.contains("ext.to_str().and_then(win32_pathext_extension)"),
+            "PATHEXT must not slice [1..] on an empty entry"
+        );
     }
 }

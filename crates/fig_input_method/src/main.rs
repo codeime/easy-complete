@@ -9,9 +9,11 @@ mod imk;
 mod macos;
 #[cfg(target_os = "macos")]
 mod paths;
-#[cfg(target_os = "macos")]
+/// Bundle-ID table and caret wire format are OS-agnostic. Compiled on every
+/// OS so Linux CI pins IMK terminals and the prost-equivalent frame.
+#[allow(dead_code)]
 mod terminals;
-#[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod wire;
 
 #[cfg(not(target_os = "macos"))]
@@ -25,3 +27,6 @@ fn main() -> ExitCode {
     println!("Easy Complete input method is only supported on macOS");
     ExitCode::FAILURE
 }
+
+#[cfg(test)]
+mod macos_pins;

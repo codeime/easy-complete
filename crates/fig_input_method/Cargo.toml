@@ -57,6 +57,9 @@ objc2-input-method-kit = { workspace = true, features = [
     "IMKInputController",
 ] }
 
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Always-on so rust-linux / rust-windows pin terminals.rs against fig_util
+# and wire.rs against the prost encoder. Dev-deps do not link into the IME
+# binary; the process still must not take fig_util / fig_proto as a runtime dep.
+[dev-dependencies]
 fig_proto.workspace = true
 fig_util.workspace = true

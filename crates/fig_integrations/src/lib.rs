@@ -3,6 +3,9 @@ pub mod backup;
 pub mod desktop_entry;
 pub mod error;
 pub mod file;
+/// IME launch / replace policy. Compiled on every OS so Linux CI pins
+/// "a missing hash tracker is not stale". `input_method` is still `cfg(macos)`.
+mod ime_launch;
 pub mod launch_at_login;
 // GNOME Shell extension is not compiled.
 #[cfg(target_os = "macos")]

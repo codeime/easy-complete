@@ -48,8 +48,8 @@ pub use macos::{
     set_overlay_window_level_for_title, system_appearance_is_dark,
 };
 pub use macos_overlay::{
-    macos_overlay_activates, macos_overlay_anchors_to_main_screen, macos_primary_screen_index,
-    quartz_y_to_cocoa_frame_y,
+    macos_overlay_activates, macos_overlay_anchors_to_main_screen, macos_overlay_level_for_terminal,
+    macos_primary_screen_index, quartz_y_to_cocoa_frame_y,
 };
 pub use overlay::{
     OVERLAY_WINDOW_TITLE, OverlayHandle, OverlayState, open_overlay_window, open_overlay_window_with_visibility,
