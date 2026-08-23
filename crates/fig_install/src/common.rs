@@ -24,7 +24,6 @@ bitflags::bitflags! {
         const DESKTOP_APP           = 0b00001000;
         const INPUT_METHOD          = 0b00010000;
         const DESKTOP_ENTRY         = 0b00100000;
-        const GNOME_SHELL_EXTENSION = 0b01000000;
     }
 }
 
@@ -85,11 +84,6 @@ pub async fn uninstall(components: InstallComponents, ctx: Arc<Context>) -> Resu
                 }
             }
         }
-    }
-
-    #[cfg(target_os = "linux")]
-    if components.contains(InstallComponents::GNOME_SHELL_EXTENSION) {
-        super::os::uninstall_gnome_extension(&ctx).await?;
     }
 
     #[cfg(target_os = "linux")]

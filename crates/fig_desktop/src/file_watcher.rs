@@ -93,7 +93,7 @@ pub async fn setup_listeners(proxy: EventLoopProxy) {
                                     error!(%err, "failed to reload settings into memory");
                                 }
                                 proxy
-                                    .send_event(Event::ReloadCredentials)
+                                    .send_event(Event::ReloadSettings)
                                     .map_err(|err| error!(?err, "failed to refresh overlay after settings change"))
                                     .ok();
 

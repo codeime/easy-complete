@@ -60,7 +60,7 @@ impl DesktopHost {
                     tray.set_menu(Some(Box::new(get_context_menu())));
                 }
             },
-            Event::ReloadCredentials => {
+            Event::ReloadSettings => {
                 let autocomplete_enabled = autocomplete_should_run();
                 self.overlay.apply_theme(cx);
                 self.overlay.set_enabled(autocomplete_enabled, cx);
@@ -68,6 +68,7 @@ impl DesktopHost {
                     self.overlay.recomplete(cx);
                 }
             },
+            Event::ClearEngineCaches => self.overlay.clear_engine_caches(),
             Event::ReloadAccessibility => {
                 #[cfg(target_os = "linux")]
                 crate::linux_tray::reload();
@@ -368,6 +369,22 @@ mod tests {
         assert!(
             !production.contains(&["WindowEvent", "Reload"].join("::")),
             "settings dispatch must not handle a WebView Reload"
+        );
+    }
+
+    #[test]
+    fn reload_settings_is_not_an_auth_event() {
+        let production = include_str!("gpui_host.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains("Event::ReloadSettings =>") && !production.contains("ReloadCredentials"),
+            "settings changes refresh the overlay; they are not an auth reload"
+        );
+        assert!(
+            production.contains("Event::ClearEngineCaches =>") && production.contains("clear_engine_caches"),
+            "ClearAutocompleteCache must reach the overlay's engine client"
         );
     }
 

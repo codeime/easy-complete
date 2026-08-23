@@ -141,7 +141,7 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
         menu_id if menu_id == SETTINGS_ABOUT => proxy.send_event_or_warn(Event::WindowEvent {
             window_id: SETTINGS_ID,
             window_event: WindowEvent::Batch(vec![
-                WindowEvent::NavigateRelative { path: "/about".into() },
+                WindowEvent::NavigateRelative { path: "about".into() },
                 WindowEvent::Show,
             ]),
         }),

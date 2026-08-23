@@ -11,7 +11,7 @@ use fig_settings::{settings, state};
 use fig_util::{CLI_BINARY_NAME, PRODUCT_NAME, manifest};
 use tracing::{info, trace};
 
-use crate::util::desktop::{LaunchArgs, desktop_app_running, launch_fig_desktop};
+use crate::util::desktop::{LaunchArgs, desktop_app_running, launch_desktop};
 
 #[derive(Debug, Args, PartialEq, Eq)]
 pub struct UninstallArgs {
@@ -68,7 +68,7 @@ impl From<&UninstallArgs> for InstallComponents {
     }
 }
 
-pub async fn restart_fig() -> Result<()> {
+pub async fn restart_desktop() -> Result<()> {
     if fig_util::system_info::in_cloudshell() {
         bail!("Restarting {PRODUCT_NAME} is not supported in CloudShell");
     }
@@ -78,9 +78,9 @@ pub async fn restart_fig() -> Result<()> {
     }
 
     if !desktop_app_running() {
-        launch_fig_desktop(LaunchArgs {
+        launch_desktop(LaunchArgs {
             wait_for_socket: true,
-            open_dashboard: false,
+            open_settings: false,
             immediate_update: true,
             verbose: true,
         })?;
@@ -88,11 +88,11 @@ pub async fn restart_fig() -> Result<()> {
         Ok(())
     } else {
         println!("Restarting {PRODUCT_NAME}");
-        crate::util::quit_fig(false).await?;
+        crate::util::quit_desktop(false).await?;
         tokio::time::sleep(Duration::from_millis(1000)).await;
-        launch_fig_desktop(LaunchArgs {
+        launch_desktop(LaunchArgs {
             wait_for_socket: true,
-            open_dashboard: false,
+            open_settings: false,
             immediate_update: true,
             verbose: false,
         })?;
@@ -109,9 +109,9 @@ impl AppSubcommand {
 
         match self {
             AppSubcommand::Onboarding => {
-                launch_fig_desktop(LaunchArgs {
+                launch_desktop(LaunchArgs {
                     wait_for_socket: true,
-                    open_dashboard: false,
+                    open_settings: false,
                     immediate_update: true,
                     verbose: true,
                 })?;
@@ -169,9 +169,9 @@ impl AppSubcommand {
                             tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
 
                             trace!("launching updated version");
-                            launch_fig_desktop(LaunchArgs {
+                            launch_desktop(LaunchArgs {
                                 wait_for_socket: true,
-                                open_dashboard: false,
+                                open_settings: false,
                                 immediate_update: true,
                                 verbose: false,
                             })
@@ -198,9 +198,9 @@ impl AppSubcommand {
                             fig_settings::state::set_value("DISPLAYED_AUTOLAUNCH_SETTINGS_HINT", true)?;
                         }
 
-                        launch_fig_desktop(LaunchArgs {
+                        launch_desktop(LaunchArgs {
                             wait_for_socket: false,
-                            open_dashboard: false,
+                            open_settings: false,
                             immediate_update: true,
                             verbose: false,
                         })?;
@@ -215,9 +215,9 @@ impl AppSubcommand {
             },
             #[cfg(not(target_os = "macos"))]
             AppSubcommand::Uninstall(_) => {},
-            AppSubcommand::Restart => restart_fig().await?,
+            AppSubcommand::Restart => restart_desktop().await?,
             AppSubcommand::Quit => {
-                crate::util::quit_fig(true).await?;
+                crate::util::quit_desktop(true).await?;
             },
             AppSubcommand::Launch => {
                 if desktop_app_running() {
@@ -225,9 +225,9 @@ impl AppSubcommand {
                     return Ok(ExitCode::FAILURE);
                 }
 
-                launch_fig_desktop(LaunchArgs {
+                launch_desktop(LaunchArgs {
                     wait_for_socket: true,
-                    open_dashboard: false,
+                    open_settings: false,
                     immediate_update: true,
                     verbose: true,
                 })?;

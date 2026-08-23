@@ -41,7 +41,7 @@ use tokio::select;
 use tracing::{debug, error, info, trace};
 
 use crate::cli::installation::install_cli;
-use crate::util::desktop::{LaunchArgs, launch_fig_desktop};
+use crate::util::desktop::{LaunchArgs, launch_desktop};
 
 #[derive(Debug, Args, PartialEq, Eq)]
 #[command(group(
@@ -618,9 +618,9 @@ impl InternalSubcommand {
             InternalSubcommand::SshLocalCommand { remote_dest, uuid } => {
                 // Ensure desktop app is running to avoid SSH errors on stdout when local side of
                 // RemoteForward isn't listening
-                launch_fig_desktop(LaunchArgs {
+                launch_desktop(LaunchArgs {
                     wait_for_socket: true,
-                    open_dashboard: false,
+                    open_settings: false,
                     immediate_update: false,
                     verbose: false,
                 })
@@ -676,7 +676,7 @@ impl InternalSubcommand {
                 // Wait some time for the previous installation to close
                 tokio::time::sleep(Duration::from_millis(100)).await;
 
-                crate::util::quit_fig(false).await.ok();
+                crate::util::quit_desktop(false).await.ok();
 
                 tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -692,9 +692,9 @@ impl InternalSubcommand {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
 
-                launch_fig_desktop(LaunchArgs {
+                launch_desktop(LaunchArgs {
                     wait_for_socket: false,
-                    open_dashboard: relaunch_dashboard,
+                    open_settings: relaunch_dashboard,
                     immediate_update: false,
                     verbose: false,
                 })

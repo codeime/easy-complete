@@ -24,8 +24,13 @@ pub enum Event {
     ControlFlow(ControlFlow),
     SetTrayVisible(bool),
 
-    ReloadCredentials,
+    /// Settings file or native settings UI changed. Re-apply overlay theme
+    /// and autocomplete.enabled, then recomplete if still enabled.
+    ReloadSettings,
     ReloadAccessibility,
+    /// Drop generateSpec / generator caches on the engine worker. The next
+    /// keystroke re-runs hooks; the overlay is not forced to recomplete.
+    ClearEngineCaches,
     /// Rebuild the tray icon and menu. Auth is gone, so this is never a
     /// signed-out / "session expired" state.
     ReloadTray,

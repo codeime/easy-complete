@@ -11,10 +11,11 @@ pub const Q_FORCE_FIGTERM_LAUNCH: &str = "Q_FORCE_FIGTERM_LAUNCH";
 pub struct LaunchArgs {
     /// Should we wait for the socket to continue execution
     pub wait_for_socket: bool,
-    /// Should we open the dashboard right away
+    /// Should we open the settings window right away
     ///
-    /// Note that this won't open the dashboard if the app is already running
-    pub open_dashboard: bool,
+    /// Note that this won't open settings if the app is already running.
+    /// Maps to the `--no-dashboard` desktop flag (kept for LaunchAgent compat).
+    pub open_settings: bool,
     /// Should we do the first update check or skip it
     pub immediate_update: bool,
     /// Print output to user
@@ -67,7 +68,7 @@ pub fn desktop_app_running() -> bool {
     processes.next().is_some()
 }
 
-pub fn launch_fig_desktop(args: LaunchArgs) -> Result<()> {
+pub fn launch_desktop(args: LaunchArgs) -> Result<()> {
     if manifest::is_minimal() {
         return Err(eyre!(
             "launching {PRODUCT_NAME} from minimal installs is not yet supported"
@@ -93,7 +94,7 @@ pub fn launch_fig_desktop(args: LaunchArgs) -> Result<()> {
     std::fs::remove_file(directories::desktop_socket_path()?).ok();
 
     let mut common_args = vec![];
-    if !args.open_dashboard {
+    if !args.open_settings {
         common_args.push("--no-dashboard");
     }
     if !args.immediate_update {
@@ -249,10 +250,10 @@ mod tests {
 
     #[test]
     #[ignore = "not in ci"]
-    fn test_e2e_launch_fig_desktop() {
-        launch_fig_desktop(LaunchArgs {
+    fn test_e2e_launch_desktop() {
+        launch_desktop(LaunchArgs {
             wait_for_socket: true,
-            open_dashboard: true,
+            open_settings: true,
             immediate_update: false,
             verbose: true,
         })

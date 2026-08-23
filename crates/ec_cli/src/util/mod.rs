@@ -103,7 +103,7 @@ pub fn app_path_from_bundle_id(bundle_id: impl AsRef<OsStr>) -> Option<String> {
     }
 }
 
-pub async fn quit_fig(verbose: bool) -> Result<ExitCode> {
+pub async fn quit_desktop(verbose: bool) -> Result<ExitCode> {
     if fig_util::system_info::in_cloudshell() {
         bail!("Restarting {PRODUCT_NAME} is not supported in CloudShell");
     }

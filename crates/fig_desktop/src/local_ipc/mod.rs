@@ -171,13 +171,21 @@ async fn handle_local_ipc<Ctx>(
 
                                 Ok(LocalResponse::Success(None))
                             },
+                            ResetCache(_) => {
+                                proxy.send_event_or_warn(Event::ClearEngineCaches);
+                                Ok(LocalResponse::Success(None))
+                            },
+                            RestartSettingsListener(_) => {
+                                // setup_listeners runs once for the process. A
+                                // second watcher would double-fire on every
+                                // settings.json write.
+                                Ok(LocalResponse::Success(None))
+                            },
                             TerminalIntegration(_)
                             | ListTerminalIntegrations(_)
                             | Restart(_)
                             | ReportWindow(_)
-                            | RestartSettingsListener(_)
                             | RunInstallScript(_)
-                            | ResetCache(_)
                             | InputMethod(_) => {
                                 debug!(?command, "Unhandled command");
                                 Err(LocalResponse::Error {
@@ -233,7 +241,7 @@ async fn handle_local_ipc<Ctx>(
                     },
                     Some(KeyboardFocusChanged(_)) => hooks::focus_change(&proxy).await,
                     Some(Event(_)) => hooks::event().await,
-                    Some(ClearAutocompleteCache(_)) => hooks::clear_autocomplete_cache().await,
+                    Some(ClearAutocompleteCache(_)) => hooks::clear_autocomplete_cache(&proxy).await,
                     Some(
                         Init(_)
                         | PostExec(_)
@@ -260,5 +268,30 @@ async fn handle_local_ipc<Ctx>(
             },
             None => warn!("Received empty local message"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reset_cache_and_restart_settings_listener_are_not_unknown() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            production.contains("ResetCache(_) =>") && production.contains("Event::ClearEngineCaches"),
+            "ResetCache must clear engine caches, not return Unknown command"
+        );
+        assert!(
+            production.contains("RestartSettingsListener(_) =>")
+                && production.contains("Ok(LocalResponse::Success(None))"),
+            "RestartSettingsListener is process-lifetime success, not Unknown command"
+        );
+        let unknown_arm = production
+            .split("TerminalIntegration(_)")
+            .nth(1)
+            .expect("unknown-command arm");
+        assert!(
+            !unknown_arm.contains("ResetCache") && !unknown_arm.contains("RestartSettingsListener"),
+            "ResetCache / RestartSettingsListener must not stay in the Unknown command arm"
+        );
     }
 }

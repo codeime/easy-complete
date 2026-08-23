@@ -37,7 +37,7 @@ use crate::{AUTOCOMPLETE_ID, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID}
 const ACCESSIBILITY_MENU_ID: &str = "accessibility";
 
 /// Autocomplete is fully inert without Accessibility, so the tray is the one surface that can say
-/// so no matter how the app was launched — a silent launch never opens the dashboard, where the
+/// so no matter how the app was launched — a silent launch never opens settings, where the
 /// permission gate lives.
 #[cfg(target_os = "macos")]
 fn accessibility_is_missing() -> bool {
@@ -84,7 +84,7 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
                 window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(vec![
                     WindowEvent::NavigateRelative {
-                        path: "/autocomplete".into(),
+                        path: "appearance".into(),
                     },
                     WindowEvent::Show,
                 ]),
@@ -94,7 +94,7 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
             proxy.send_event_or_warn(Event::WindowEvent {
                 window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(vec![
-                    WindowEvent::NavigateRelative { path: "/help".into() },
+                    WindowEvent::NavigateRelative { path: "about".into() },
                     WindowEvent::Show,
                 ]),
             });

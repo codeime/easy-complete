@@ -177,11 +177,6 @@ async fn update_full_ctx(
     Ok(())
 }
 
-pub(crate) async fn uninstall_gnome_extension(_ctx: &Context) -> Result<(), Error> {
-    debug!("GNOME Shell extension uninstall is a no-op until the Linux desktop port");
-    Ok(())
-}
-
 pub(crate) async fn uninstall_desktop_entries(ctx: &Context) -> Result<(), Error> {
     DesktopEntryIntegration::new(ctx, None::<&str>, None, None)
         .uninstall()

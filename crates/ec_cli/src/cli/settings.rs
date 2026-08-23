@@ -13,7 +13,7 @@ use serde_json::json;
 
 use super::OutputFormat;
 use crate::cli::Cli;
-use crate::util::desktop::{LaunchArgs, launch_fig_desktop};
+use crate::util::desktop::{LaunchArgs, launch_desktop};
 use crate::util::{CliContext, app_not_running_message};
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -158,9 +158,9 @@ impl SettingsArgs {
                         return Ok(ExitCode::SUCCESS);
                     }
 
-                    launch_fig_desktop(LaunchArgs {
+                    launch_desktop(LaunchArgs {
                         wait_for_socket: true,
-                        open_dashboard: false,
+                        open_settings: false,
                         immediate_update: true,
                         verbose: true,
                     })?;

@@ -221,15 +221,15 @@ async fn async_main() -> ExitCode {
     let silent_launch = page.is_none() && fig_settings::settings::get_bool_or("app.silentLaunch", false);
 
     #[cfg(target_os = "macos")]
-    let defer_dashboard_for_modern_login_item = !cli.no_dashboard
+    let defer_settings_for_modern_login_item = !cli.no_dashboard
         && !silent_launch
         && launch_on_startup
         && fig_integrations::login_item::supports_modern_login_item();
     #[cfg(not(target_os = "macos"))]
-    let defer_dashboard_for_modern_login_item = false;
-    let visible = !cli.no_dashboard && !silent_launch && !defer_dashboard_for_modern_login_item;
+    let defer_settings_for_modern_login_item = false;
+    let visible = !cli.no_dashboard && !silent_launch && !defer_settings_for_modern_login_item;
 
-    let runtime = AppRuntime::new(ctx, visible, defer_dashboard_for_modern_login_item);
+    let runtime = AppRuntime::new(ctx, visible, defer_settings_for_modern_login_item);
     let auto_updates_enabled = !fig_settings::settings::get_bool_or("app.disableAutoupdates", false);
     if auto_updates_enabled {
         // start_automatic_checks dispatches to the main thread asynchronously,
@@ -286,7 +286,7 @@ fn parse_url_page(url: Option<&str>) -> Result<Option<String>, ExitCode> {
     }
 
     Ok(url.host_str().and_then(|s| match s {
-        "dashboard" => Some(url.path().to_owned()),
+        "dashboard" | "settings" => Some(url.path().to_owned()),
         _ => {
             error!("Invalid deep link");
             None

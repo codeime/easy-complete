@@ -74,8 +74,8 @@ pub async fn event() -> Result<()> {
     Ok(())
 }
 
-pub async fn clear_autocomplete_cache() -> Result<()> {
-    // WebView `clear-cache` is gone. Engine caches are request-keyed.
+pub async fn clear_autocomplete_cache(proxy: &EventLoopProxy) -> Result<()> {
+    proxy.send_event_or_warn(Event::ClearEngineCaches);
     Ok(())
 }
 
@@ -104,5 +104,21 @@ mod tests {
     fn accepts_caret_rect_on_a_secondary_monitor() {
         assert!(is_valid_caret_rect(-1920.0, -450.0, 0.0, 16.0));
         assert!(is_valid_caret_rect(1200.0, 800.0, 8.0, 16.0));
+    }
+
+    #[test]
+    fn clear_autocomplete_cache_reaches_the_engine_worker() {
+        let production = include_str!("hooks.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains("Event::ClearEngineCaches"),
+            "ClearAutocompleteCache must drop engine generateSpec / generator caches"
+        );
+        assert!(
+            !production.contains("Engine caches are request-keyed"),
+            "the hook is no longer a WebView-era no-op"
+        );
     }
 }

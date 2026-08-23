@@ -34,7 +34,7 @@ use tracing::{Level, debug};
 
 use self::integrations::IntegrationsSubcommands;
 use crate::util::CliContext;
-use crate::util::desktop::{LaunchArgs, launch_fig_desktop};
+use crate::util::desktop::{LaunchArgs, launch_desktop};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
@@ -211,11 +211,11 @@ impl Cli {
                 CliRootCommands::Issue(args) => args.execute().await,
                 CliRootCommands::Completion(args) => args.execute(),
                 CliRootCommands::Internal(internal_subcommand) => internal_subcommand.execute().await,
-                CliRootCommands::Launch => launch_dashboard(false).await,
-                CliRootCommands::Quit => crate::util::quit_fig(true).await,
+                CliRootCommands::Launch => launch_settings(false).await,
+                CliRootCommands::Quit => crate::util::quit_desktop(true).await,
                 CliRootCommands::Restart { .. } => {
-                    app::restart_fig().await?;
-                    launch_dashboard(false).await
+                    app::restart_desktop().await?;
+                    launch_settings(false).await
                 },
                 CliRootCommands::Integrations(subcommand) => subcommand.execute().await,
                 CliRootCommands::Telemetry(subcommand) => subcommand.execute().await,
@@ -249,28 +249,28 @@ impl Cli {
     }
 }
 
-async fn launch_dashboard(help_fallback: bool) -> Result<ExitCode> {
+async fn launch_settings(help_fallback: bool) -> Result<ExitCode> {
     if manifest::is_minimal() || system_info::is_remote() {
         if help_fallback {
             Cli::command().print_help()?;
             return Ok(ExitCode::SUCCESS);
         } else {
-            bail!("Launching the dashboard is not supported in minimal mode");
+            bail!("Launching settings is not supported in minimal mode");
         }
     }
 
-    launch_fig_desktop(LaunchArgs {
+    launch_desktop(LaunchArgs {
         wait_for_socket: true,
-        open_dashboard: true,
+        open_settings: true,
         immediate_update: true,
         verbose: true,
     })?;
 
-    println!("Opening {PRODUCT_NAME} dashboard");
+    println!("Opening {PRODUCT_NAME} settings");
 
-    open_ui_element(UiElement::MissionControl, Some("/".into()))
+    open_ui_element(UiElement::MissionControl, Some("appearance".into()))
         .await
-        .context("Failed to open dashboard")?;
+        .context("Failed to open settings")?;
 
     Ok(ExitCode::SUCCESS)
 }

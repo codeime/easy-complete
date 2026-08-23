@@ -489,36 +489,6 @@ pub fn update_lock_path(ctx: &impl FsProvider) -> Result<PathBuf> {
     Ok(fig_data_dir_ctx(ctx)?.join("update.lock"))
 }
 
-/// The path to the .zip bundle containing the GNOME Shell Extension identified by
-/// `extension_uuid`.
-pub fn bundled_gnome_extension_zip_path<Ctx: EnvProvider + PlatformProvider>(
-    ctx: &Ctx,
-    extension_uuid: &str,
-) -> Result<PathBuf> {
-    let os = ctx.platform().os();
-    if os != Os::Linux {
-        return Err(DirectoryError::UnsupportedOs(os));
-    }
-    Ok(resources_path_ctx(ctx)?
-        .join(extension_uuid)
-        .join(format!("{}.zip", extension_uuid)))
-}
-
-/// The path to the text file containing the version of the bundled GNOME Shell Extension.
-/// identified by `extension_uuid`.
-pub fn bundled_gnome_extension_version_path<Ctx: EnvProvider + PlatformProvider>(
-    ctx: &Ctx,
-    extension_uuid: &str,
-) -> Result<PathBuf> {
-    let os = ctx.platform().os();
-    if os != Os::Linux {
-        return Err(DirectoryError::UnsupportedOs(os));
-    }
-    Ok(resources_path_ctx(ctx)?
-        .join(extension_uuid)
-        .join(format!("{}.version.txt", extension_uuid)))
-}
-
 /// The path to the desktop entry bundled with the AppImage.
 ///
 /// Only applicable to the desktop app binary when ran as an AppImage.

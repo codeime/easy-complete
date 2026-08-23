@@ -103,7 +103,7 @@ pub async fn open_ui_element(command: OpenUiElementCommand, proxy: &EventLoopPro
                 window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(vec![
                     WindowEvent::NavigateRelative {
-                        path: "/preferences".into(),
+                        path: "appearance".into(),
                     },
                     WindowEvent::Show,
                 ]),

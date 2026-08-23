@@ -15,6 +15,8 @@ use std::time::Duration;
 use anstream::{eprintln, println};
 use async_trait::async_trait;
 use checks::{BashVersionCheck, FishVersionCheck, SshdConfigCheck};
+#[cfg(target_os = "linux")]
+use checks::{DisplayServerCheck, SandboxCheck};
 use clap::Args;
 use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
@@ -46,9 +48,9 @@ use semver::Version;
 use spinners::{Spinner, Spinners};
 use tokio::io::AsyncBufReadExt;
 
-use super::app::restart_fig;
+use super::app::restart_desktop;
 use super::diagnostics::verify_integration;
-use crate::util::desktop::{LaunchArgs, desktop_app_running, launch_fig_desktop};
+use crate::util::desktop::{LaunchArgs, desktop_app_running, launch_desktop};
 use crate::util::{app_path_from_bundle_id, glob, glob_dir, is_executable_in_path};
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -432,7 +434,7 @@ impl DoctorCheck for DesktopSocketCheck {
             }
             return Err(doctor_fix_async!({
                 reason: format!("{PRODUCT_NAME} IPC endpoint missing"),
-                fix: restart_fig()
+                fix: restart_desktop()
             }));
         }
 
@@ -441,7 +443,7 @@ impl DoctorCheck for DesktopSocketCheck {
             check_file_exists(&fig_socket_path).map_err(|_err| {
                 doctor_fix_async!({
                     reason: format!("{PRODUCT_NAME} socket missing"),
-                    fix: restart_fig()
+                    fix: restart_desktop()
                 })
             })?;
 
@@ -1709,78 +1711,6 @@ impl DoctorCheck for WindowsConsoleCheck {
     }
 }
 
-struct LoginStatusCheck;
-
-#[async_trait]
-impl DoctorCheck for LoginStatusCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "Auth".into()
-    }
-
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        // Auth check removed (fig_auth deleted)
-        Ok(())
-    }
-}
-
-struct DashboardHostCheck;
-
-#[async_trait]
-impl DoctorCheck for DashboardHostCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "Dashboard is loading from the correct URL".into()
-    }
-
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        match fig_settings::settings::get_string("developer.dashboard.host")
-            .ok()
-            .flatten()
-        {
-            Some(host) => {
-                if host.contains("localhost") {
-                    Err(DoctorError::Warning(
-                        format!("developer.dashboard.host = {host}, delete this setting if Dashboard fails to load")
-                            .into(),
-                    ))
-                } else {
-                    Ok(())
-                }
-            },
-            None => Ok(()),
-        }
-    }
-}
-
-struct AutocompleteHostCheck;
-
-#[async_trait]
-impl DoctorCheck for AutocompleteHostCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "Autocomplete is loading from the correct URL".into()
-    }
-
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        match fig_settings::settings::get_string("developer.autocomplete.host")
-            .ok()
-            .flatten()
-        {
-            Some(host) => {
-                if host.contains("localhost") {
-                    Err(DoctorError::Warning(
-                        format!(
-                            "developer.autocomplete.host = {host}, delete this setting if Autocomplete fails to load"
-                        )
-                        .into(),
-                    ))
-                } else {
-                    Ok(())
-                }
-            },
-            None => Ok(()),
-        }
-    }
-}
-
 #[cfg(target_os = "macos")]
 struct ToolboxInstalledCheck;
 
@@ -1971,18 +1901,9 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
         }
     }
 
-    run_checks(
-        "Let's check if you're logged in...".into(),
-        vec![&LoginStatusCheck {}],
-        config,
-        &mut spinner,
-    )
-    .await?;
-
-    // If user is logged in, try to launch fig
-    launch_fig_desktop(LaunchArgs {
+    launch_desktop(LaunchArgs {
         wait_for_socket: true,
-        open_dashboard: false,
+        open_settings: false,
         immediate_update: true,
         verbose: false,
     })
@@ -2045,8 +1966,6 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
                 &PtySocketCheck,
                 &AutocompleteDevModeCheck,
                 &PluginDevModeCheck,
-                &DashboardHostCheck,
-                &AutocompleteHostCheck,
             ],
             config,
             &mut spinner,
@@ -2093,6 +2012,15 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
 
         #[cfg(target_os = "linux")]
         {
+            run_checks_with_context(
+                "Let's check your Linux session...",
+                vec![&DisplayServerCheck, &SandboxCheck],
+                || async { Ok(Context::new()) },
+                config,
+                &mut spinner,
+            )
+            .await?;
+
             if fig_util::manifest::is_full() && !fig_util::system_info::is_remote() {
                 run_checks_with_context(
                     format!("Let's check {}...", format!("{CLI_BINARY_NAME} diagnostic").bold()),
@@ -2196,6 +2124,26 @@ mod product_name_tests {
         assert!(
             body.contains("{QTERM_SESSION_ID}"),
             "the env var name is still QTERM_SESSION_ID"
+        );
+    }
+
+    #[test]
+    fn doctor_does_not_keep_webview_host_or_auth_checks() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("struct LoginStatusCheck"),
+            "fig_auth is gone; doctor must not pretend to check login"
+        );
+        assert!(
+            !production.contains("struct DashboardHostCheck")
+                && !production.contains("struct AutocompleteHostCheck")
+                && !production.contains("developer.dashboard.host")
+                && !production.contains("developer.autocomplete.host"),
+            "WebView localhost dashboard/autocomplete hosts are gone"
+        );
+        assert!(
+            !production.contains("Let's check if you're logged in"),
+            "doctor no longer has an auth section"
         );
     }
 }

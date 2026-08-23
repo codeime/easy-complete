@@ -23,9 +23,9 @@ use owo_colors::OwoColorize;
 use tempfile::{NamedTempFile, TempDir};
 use tracing::error;
 
-use crate::cli::launch_fig_desktop;
+use crate::cli::launch_desktop;
 use crate::util::desktop::LaunchArgs;
-use crate::util::{get_app_info, glob, glob_dir, quit_fig};
+use crate::util::{get_app_info, glob, glob_dir, quit_desktop};
 
 #[derive(Debug, ValueEnum, Clone, PartialEq, Eq)]
 pub enum Build {
@@ -48,14 +48,15 @@ impl std::fmt::Display for Build {
 
 #[derive(Debug, ValueEnum, Clone, PartialEq, Eq)]
 pub enum App {
-    Dashboard,
+    #[value(alias = "dashboard")]
+    Settings,
     Autocomplete,
 }
 
 impl std::fmt::Display for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            App::Dashboard => f.write_str("dashboard"),
+            App::Settings => f.write_str("settings"),
             App::Autocomplete => f.write_str("autocomplete"),
         }
     }
@@ -474,22 +475,22 @@ impl DebugSubcommand {
 
                 match action {
                     Some(AccessibilityAction::Refresh) => {
-                        quit_fig(true).await?;
+                        quit_desktop(true).await?;
 
                         Command::new("tccutil")
                             .args(["reset", "Accessibility", APP_BUNDLE_ID])
                             .spawn()?
                             .wait()?;
 
-                        launch_fig_desktop(LaunchArgs {
+                        launch_desktop(LaunchArgs {
                             wait_for_socket: true,
-                            open_dashboard: false,
+                            open_settings: false,
                             immediate_update: true,
                             verbose: true,
                         })?;
                     },
                     Some(AccessibilityAction::Reset) => {
-                        quit_fig(true).await?;
+                        quit_desktop(true).await?;
 
                         Command::new("tccutil")
                             .args(["reset", "Accessibility", APP_BUNDLE_ID])
@@ -497,9 +498,9 @@ impl DebugSubcommand {
                             .wait()?;
                     },
                     Some(AccessibilityAction::Prompt) => {
-                        launch_fig_desktop(LaunchArgs {
+                        launch_desktop(LaunchArgs {
                             wait_for_socket: true,
-                            open_dashboard: false,
+                            open_settings: false,
                             immediate_update: true,
                             verbose: true,
                         })?;
@@ -677,15 +678,15 @@ impl DebugSubcommand {
                 }
             },
             Self::Devtools { app } => {
-                launch_fig_desktop(LaunchArgs {
+                launch_desktop(LaunchArgs {
                     wait_for_socket: true,
-                    open_dashboard: false,
+                    open_settings: false,
                     immediate_update: true,
                     verbose: true,
                 })?;
 
                 devtools_command(match app {
-                    App::Dashboard => fig_proto::local::devtools_command::Window::DevtoolsDashboard,
+                    App::Settings => fig_proto::local::devtools_command::Window::DevtoolsDashboard,
                     App::Autocomplete => fig_proto::local::devtools_command::Window::DevtoolsAutocomplete,
                 })
                 .await

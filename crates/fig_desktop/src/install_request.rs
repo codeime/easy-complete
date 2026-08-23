@@ -335,7 +335,7 @@ where
             }
         },
         (InstallComponent::GnomeExtension, _action) => {
-            integration_result(Err("The GNOME Shell extension is not supported yet"))
+            integration_result(Err("The GNOME Shell extension is not part of Linux v1"))
         },
     };
 

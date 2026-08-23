@@ -708,6 +708,17 @@ impl OverlayController {
     /// Re-run the current buffer even when its text is unchanged. Settings
     /// changes (notably the auto-execute visibility toggle) must update the
     /// retained rows immediately instead of waiting for another keystroke.
+    /// Fire-and-forget: the supervisor clears caches before the next complete.
+    /// Do not block the GPUI thread waiting on the engine worker.
+    pub fn clear_engine_caches(&self) {
+        let engine = self.engine.clone();
+        tokio::spawn(async move {
+            if let Err(err) = engine.clear_caches().await {
+                error!(%err, "failed to clear autocomplete caches");
+            }
+        });
+    }
+
     pub fn recomplete(&mut self, cx: &mut App) {
         let Some(current_session) = self.current_session() else {
             return;
@@ -2473,6 +2484,22 @@ mod tests {
         assert!(
             skip < actions,
             "keybinding reload must sit behind the unchanged-mode skip"
+        );
+    }
+
+    #[test]
+    fn clear_autocomplete_cache_reaches_the_engine_client() {
+        let production = include_str!("overlay.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains("pub fn clear_engine_caches") && production.contains("engine.clear_caches()"),
+            "overlay must own the EngineClient cache-clear path"
+        );
+        assert!(
+            !production.contains("blocking_recv") || production.contains("clear_caches().await"),
+            "cache clear must not block the GPUI thread"
         );
     }
 

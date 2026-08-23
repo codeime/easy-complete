@@ -450,6 +450,12 @@ impl Engine {
         &self.registry
     }
 
+    /// Drop in-process generateSpec / generator caches. Hook JS is re-read on
+    /// the next complete. Does not touch the acceptance index or spec IR index.
+    pub fn clear_caches(&mut self) {
+        self.js_host.clear_caches();
+    }
+
     /// Record a successful completion acceptance. This updates the engine's
     /// in-memory ranking immediately and best-effort persists it to the shared
     /// SQLite-backed state store.
@@ -824,6 +830,59 @@ mod tests {
             runs.matches('x').count(),
             2,
             "token-dependent generateSpec must re-run when remaining tokens change: {runs:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generate_spec_cache_clears_on_request() {
+        let _lock = engine_lock();
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("hooks")).unwrap();
+        fs::write(
+            dir.path().join("hooks/demo_generateSpec_0.js"),
+            "export default async(e,t)=>{await t({command:\"sh\",args:[\"-c\",\"printf x >> runs\"]});return {name:\"demo\",subcommands:[{name:\"alpha\"}]};}\n",
+        )
+        .unwrap();
+        write_spec(
+            dir.path(),
+            "demo",
+            r#"{"names":["demo"],"jsGenerateSpec":"demo#generateSpec#0"}"#,
+        );
+        let mut engine = Engine::new_with_frecency(dir.path().to_path_buf(), Frecency::default()).expect("engine");
+        let cwd = dir.path().display().to_string();
+        for _ in 0..2 {
+            engine
+                .complete(CompleteRequest {
+                    buffer: "demo a".into(),
+                    cwd: cwd.clone(),
+                    ..CompleteRequest::default()
+                })
+                .expect("complete");
+        }
+        assert_eq!(
+            fs::read_to_string(dir.path().join("runs"))
+                .unwrap_or_default()
+                .matches('x')
+                .count(),
+            1,
+            "the second complete must hit the generateSpec cache"
+        );
+        engine.clear_caches();
+        engine
+            .complete(CompleteRequest {
+                buffer: "demo a".into(),
+                cwd,
+                ..CompleteRequest::default()
+            })
+            .expect("complete after clear");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("runs"))
+                .unwrap_or_default()
+                .matches('x')
+                .count(),
+            2,
+            "clear_caches must drop generateSpec so the next complete re-runs the hook"
         );
     }
 

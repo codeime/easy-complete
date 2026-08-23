@@ -99,6 +99,17 @@ impl JsHost {
         Self::new(specs_dir.join("hooks"))
     }
 
+    /// Drop generateSpec / generator result caches and on-disk hook source.
+    /// The next completion re-reads hook JS and re-runs generators.
+    pub fn clear_caches(&self) {
+        self.suggestion_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clear();
+        self.spec_cache.lock().unwrap_or_else(|err| err.into_inner()).clear();
+        self.sources.lock().unwrap_or_else(|err| err.into_inner()).clear();
+    }
+
     /// Bind this host for the duration of a completion attempt so generators
     /// and walk can reach it without threading an extra argument through every
     /// lookup helper.

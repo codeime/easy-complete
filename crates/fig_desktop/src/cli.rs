@@ -3,16 +3,16 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    /// Do not launch the dashboard when starting
+    /// Do not launch the settings window when starting
     #[arg(long)]
     pub no_dashboard: bool,
     /// Checks the `app.launchOnStartup` setting before launching
     #[arg(long)]
     pub is_startup: bool,
-    /// Kill old instances of `fig_desktop`
+    /// Kill old instances of the desktop app
     #[arg(long)]
     pub kill_old: bool,
-    /// Allow launching multiple instances of `fig_desktop`
+    /// Allow launching multiple instances of the desktop app
     #[arg(long)]
     pub allow_multiple: bool,
     /// Don't attempt to update right away

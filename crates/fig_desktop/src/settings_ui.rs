@@ -32,7 +32,7 @@ const SIDEBAR_W: f32 = 226.0;
 const WIN_W: f32 = 820.0;
 const WIN_H: f32 = 640.0;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Section {
     Appearance,
     Behavior,
@@ -248,7 +248,7 @@ impl SettingsWindow {
         if let Err(err) = fig_settings::settings::set_value(key, value) {
             error!(%err, key, "Failed to write setting");
         }
-        self.proxy.send_event(Event::ReloadCredentials).ok();
+        self.proxy.send_event(Event::ReloadSettings).ok();
         cx.notify();
     }
 
@@ -256,7 +256,7 @@ impl SettingsWindow {
         if let Err(err) = fig_settings::settings::set_value(key, value) {
             error!(%err, key, "Failed to write setting");
         }
-        self.proxy.send_event(Event::ReloadCredentials).ok();
+        self.proxy.send_event(Event::ReloadSettings).ok();
         cx.notify();
     }
 
@@ -1940,14 +1940,19 @@ pub fn close_settings(handle: &SettingsHandle, cx: &mut App) {
         .ok();
 }
 
-pub fn set_settings_section(handle: &SettingsHandle, path: &str, cx: &mut App) {
-    let section = if path.contains("behavior") {
+fn section_from_path(path: &str) -> Section {
+    let lowered = path.trim_start_matches('/').to_ascii_lowercase();
+    if lowered.contains("behavior") {
         Section::Behavior
-    } else if path.contains("about") {
+    } else if lowered.contains("about") || lowered.contains("help") {
         Section::About
     } else {
         Section::Appearance
-    };
+    }
+}
+
+pub fn set_settings_section(handle: &SettingsHandle, path: &str, cx: &mut App) {
+    let section = section_from_path(path);
     handle
         .update(cx, |view, _window, cx| {
             view.section = section;
@@ -1978,6 +1983,18 @@ mod tests {
             input_method,
             error: None,
         }
+    }
+
+    #[test]
+    fn settings_section_paths_are_native_not_webview_routes() {
+        assert_eq!(section_from_path("appearance"), Section::Appearance);
+        assert_eq!(section_from_path("behavior"), Section::Behavior);
+        assert_eq!(section_from_path("about"), Section::About);
+        assert_eq!(section_from_path("help"), Section::About);
+        assert_eq!(section_from_path("/preferences"), Section::Appearance);
+        assert_eq!(section_from_path("/autocomplete"), Section::Appearance);
+        assert_eq!(section_from_path("/about"), Section::About);
+        assert_eq!(section_from_path("/help"), Section::About);
     }
 
     #[test]

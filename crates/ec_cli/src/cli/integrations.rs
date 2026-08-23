@@ -60,6 +60,8 @@ pub enum Integration {
     Ssh,
     InputMethod,
     AutostartEntry,
+    /// Not a Linux v1 surface. Kept so old scripts get a clear error.
+    #[command(hide = true)]
     GnomeShellExtension,
     #[doc(hidden)]
     All,
@@ -219,9 +221,7 @@ async fn install(integration: Integration, silent: bool) -> Result<()> {
         },
         Integration::GnomeShellExtension => {
             errored = true;
-            Err(eyre::eyre!(
-                "Installing the GNOME Shell extension from the CLI is not supported"
-            ))
+            Err(eyre::eyre!("The GNOME Shell extension is not part of Linux v1"))
         },
     };
 
@@ -321,7 +321,7 @@ async fn uninstall(integration: Integration, silent: bool) -> Result<()> {
                 }
             }
         },
-        Integration::GnomeShellExtension => Err(eyre::eyre!("The GNOME Shell extension is not supported yet")),
+        Integration::GnomeShellExtension => Err(eyre::eyre!("The GNOME Shell extension is not part of Linux v1")),
     };
 
     if uninstalled && result.is_ok() && !silent {
@@ -457,8 +457,6 @@ async fn status(integration: Integration, format: OutputFormat) -> Result<ExitCo
                 }
             }
         },
-        Integration::GnomeShellExtension => Err(eyre::eyre!(
-            "Checking the status of the GNOME Shell extension from the CLI is not supported"
-        )),
+        Integration::GnomeShellExtension => Err(eyre::eyre!("The GNOME Shell extension is not part of Linux v1")),
     }
 }

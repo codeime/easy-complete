@@ -576,6 +576,19 @@ mod tests {
             "install dispatcher lives in fig_desktop; the leftover API crate is gone"
         );
         assert!(
+            !std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../fig_integrations/src/gnome_extension.rs"
+            ))
+            .exists(),
+            "GNOME Shell extension integration is not a Linux v1 surface"
+        );
+        let install = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_install/src/common.rs"));
+        assert!(
+            !install.contains("GNOME_SHELL_EXTENSION"),
+            "InstallComponents must not keep a GNOME Shell extension bit"
+        );
+        assert!(
             !workspace.contains("features = [\"full\"]")
                 && workspace.contains("rt-multi-thread")
                 && workspace.contains("\"signal\""),

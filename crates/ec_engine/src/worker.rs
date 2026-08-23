@@ -31,6 +31,9 @@ enum JobKind {
         accepted_name: String,
         timestamp: u64,
     },
+    ClearCaches {
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
 }
 
 // A completion attempt can legitimately spend the legacy 5s script timeout
@@ -139,23 +142,44 @@ impl EngineClient {
                             );
                             continue;
                         },
+                        JobKind::ClearCaches { reply } => {
+                            if let Some(engine) = engine.as_mut() {
+                                engine.clear_caches();
+                            }
+                            let _ = reply.send(Ok(()));
+                            continue;
+                        },
                         JobKind::Complete { request, reply } => Job {
                             kind: JobKind::Complete { request, reply },
                         },
                     };
                     // Rapid typing queues many jobs; only the latest buffer matters.
-                    // Acceptance records are independent events and are applied
-                    // while draining instead of being mistaken for completion
-                    // work or dropped by latest-job coalescing.
-                    let latest = drain_to_latest(&rx, first, |root_command, accepted_name, timestamp| {
-                        record_acceptance(
-                            &mut engine,
-                            &worker_acceptance,
-                            &root_command,
-                            &accepted_name,
-                            timestamp,
-                        );
-                    });
+                    // Acceptance records and cache clears are independent events
+                    // and are applied while draining instead of being mistaken
+                    // for completion work or dropped by latest-job coalescing.
+                    let mut pending_clears = Vec::new();
+                    let latest = drain_to_latest(
+                        &rx,
+                        first,
+                        |root_command, accepted_name, timestamp| {
+                            record_acceptance(
+                                &mut engine,
+                                &worker_acceptance,
+                                &root_command,
+                                &accepted_name,
+                                timestamp,
+                            );
+                        },
+                        |reply| pending_clears.push(reply),
+                    );
+                    if !pending_clears.is_empty() {
+                        if let Some(engine) = engine.as_mut() {
+                            engine.clear_caches();
+                        }
+                        for reply in pending_clears {
+                            let _ = reply.send(Ok(()));
+                        }
+                    }
                     let JobKind::Complete { request, reply } = latest.kind else {
                         unreachable!("drain_to_latest returns a completion job");
                     };
@@ -263,6 +287,30 @@ impl EngineClient {
                 self.acceptance.lock().unwrap_or_else(|err| err.into_inner()).persist();
                 anyhow!("engine thread is gone")
             })
+    }
+
+    /// Drop generateSpec / generator caches on the supervisor. A complete that
+    /// is already on the attempt thread finishes against the old cache; the
+    /// next job sees an empty one. Does not rebuild the spec IR index.
+    pub async fn clear_caches(&self) -> anyhow::Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Job {
+                kind: JobKind::ClearCaches { reply },
+            })
+            .map_err(|_err| anyhow!("engine thread is gone"))?;
+        rx.await.map_err(|_err| anyhow!("engine dropped the reply"))?
+    }
+
+    /// Block the current thread until caches are cleared. CLI / tests only.
+    pub fn clear_caches_blocking(&self) -> anyhow::Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Job {
+                kind: JobKind::ClearCaches { reply },
+            })
+            .map_err(|_err| anyhow!("engine thread is gone"))?;
+        rx.blocking_recv().map_err(|_err| anyhow!("engine dropped the reply"))?
     }
 }
 
@@ -443,9 +491,10 @@ fn rebuild_engine(
     Ok(Engine::from_registry(specs_dir, registry, acceptance.clone()))
 }
 
-fn drain_to_latest<F>(rx: &mpsc::Receiver<Job>, first: Job, mut on_acceptance: F) -> Job
+fn drain_to_latest<A, C>(rx: &mpsc::Receiver<Job>, first: Job, mut on_acceptance: A, mut on_clear: C) -> Job
 where
-    F: FnMut(String, String, u64),
+    A: FnMut(String, String, u64),
+    C: FnMut(oneshot::Sender<anyhow::Result<()>>),
 {
     let mut job = first;
     while let Ok(next) = rx.try_recv() {
@@ -455,6 +504,7 @@ where
                 accepted_name,
                 timestamp,
             } => on_acceptance(root_command, accepted_name, timestamp),
+            JobKind::ClearCaches { reply } => on_clear(reply),
             JobKind::Complete { request, reply } => {
                 // A newer request makes the current one irrelevant, but its
                 // caller is still waiting on the reply channel. Finish it
@@ -631,7 +681,12 @@ mod tests {
         ))
         .unwrap();
         let first = rx.recv().unwrap();
-        let latest = drain_to_latest(&rx, first, |_, _, _| unreachable!("no acceptance in this test"));
+        let latest = drain_to_latest(
+            &rx,
+            first,
+            |_, _, _| unreachable!("no acceptance in this test"),
+            |_| unreachable!("no cache clear in this test"),
+        );
         let JobKind::Complete { request, .. } = latest.kind else {
             unreachable!("latest job should be a completion")
         };
@@ -674,10 +729,53 @@ mod tests {
         .unwrap();
 
         let mut records = Vec::new();
-        let latest = drain_to_latest(&rx, rx.recv().unwrap(), |command, name, _| {
-            records.push((command, name));
-        });
+        let latest = drain_to_latest(
+            &rx,
+            rx.recv().unwrap(),
+            |command, name, _| {
+                records.push((command, name));
+            },
+            |_| unreachable!("no cache clear in this test"),
+        );
         assert_eq!(records, vec![("git".into(), "status".into())]);
+        let JobKind::Complete { request, .. } = latest.kind else {
+            unreachable!("latest job should be a completion");
+        };
+        assert_eq!(request.buffer, "git ");
+    }
+
+    #[test]
+    fn cache_clear_jobs_survive_completion_coalescing() {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let (reply_a, _rx_a) = oneshot::channel();
+        let (reply_clear, rx_clear) = oneshot::channel();
+        let (reply_b, _rx_b) = oneshot::channel();
+        tx.send(completion_job(CompleteRequest::default(), reply_a)).unwrap();
+        tx.send(Job {
+            kind: JobKind::ClearCaches { reply: reply_clear },
+        })
+        .unwrap();
+        tx.send(completion_job(
+            CompleteRequest {
+                buffer: "git ".into(),
+                ..CompleteRequest::default()
+            },
+            reply_b,
+        ))
+        .unwrap();
+
+        let mut cleared = 0usize;
+        let latest = drain_to_latest(
+            &rx,
+            rx.recv().unwrap(),
+            |_, _, _| unreachable!("no acceptance in this test"),
+            |reply| {
+                cleared += 1;
+                let _ = reply.send(Ok(()));
+            },
+        );
+        assert_eq!(cleared, 1);
+        rx_clear.blocking_recv().expect("clear reply").expect("clear ok");
         let JobKind::Complete { request, .. } = latest.kind else {
             unreachable!("latest job should be a completion");
         };
@@ -716,6 +814,50 @@ mod tests {
             again.suggestions.iter().any(|s| s.name == "status"),
             "{:?}",
             again.suggestions
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_clear_caches_drops_generate_spec_results() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("hooks")).unwrap();
+        std::fs::write(
+            dir.path().join("hooks/demo_generateSpec_0.js"),
+            "export default async(e,t)=>{await t({command:\"sh\",args:[\"-c\",\"printf x >> runs\"]});return {name:\"demo\",subcommands:[{name:\"alpha\"}]};}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("demo.json"),
+            r#"{"names":["demo"],"jsGenerateSpec":"demo#generateSpec#0"}"#,
+        )
+        .unwrap();
+        let client = EngineClient::spawn(dir.path().to_path_buf()).expect("spawn");
+        let cwd = dir.path().display().to_string();
+        let request = CompleteRequest {
+            buffer: "demo a".into(),
+            cwd,
+            ..CompleteRequest::default()
+        };
+        client.complete_blocking(request.clone()).expect("first complete");
+        client.complete_blocking(request.clone()).expect("cached complete");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("runs"))
+                .unwrap_or_default()
+                .matches('x')
+                .count(),
+            1,
+            "the second complete must hit the generateSpec cache"
+        );
+        client.clear_caches_blocking().expect("clear");
+        client.complete_blocking(request).expect("complete after clear");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("runs"))
+                .unwrap_or_default()
+                .matches('x')
+                .count(),
+            2,
+            "ClearCaches must drop generateSpec so the next complete re-runs the hook"
         );
     }
 
@@ -868,9 +1010,12 @@ mod tests {
         tx.send(completion_job(CompleteRequest::default(), reply)).unwrap();
         drop(caller);
 
-        let job = drain_to_latest(&rx, rx.recv().unwrap(), |_, _, _| {
-            unreachable!("no acceptance in this test")
-        });
+        let job = drain_to_latest(
+            &rx,
+            rx.recv().unwrap(),
+            |_, _, _| unreachable!("no acceptance in this test"),
+            |_| unreachable!("no cache clear in this test"),
+        );
         let JobKind::Complete { reply, .. } = job.kind else {
             unreachable!("job should be a completion")
         };
