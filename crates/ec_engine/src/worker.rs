@@ -113,6 +113,12 @@ impl EngineClient {
                 // this worker forever: the next request gets another chance
                 // to build the registry after the caller repairs the input.
                 let mut engine = None;
+                // One attempt thread, created on the first complete. QuickJS
+                // lives in thread-local storage, so spawning a thread per
+                // keystroke rebuilt the runtime on every overlay key. Timeout
+                // and panic drop this sender so the wedged thread (and its
+                // engine) is abandoned; the next request spawns a replacement.
+                let mut attempt_worker = None;
                 // Pristine index kept aside so recovering from a timed-out
                 // attempt does not re-walk the specs directory. It is cloned,
                 // never handed out, so a poisoned attempt cannot corrupt it.
@@ -174,7 +180,7 @@ impl EngineClient {
                     };
                     let attempt_timeout = fixed_attempt_timeout.unwrap_or_else(engine_attempt_timeout);
                     let attempt_context = attempt_log_context(&request);
-                    match run_engine_attempt(current_engine, request, attempt_timeout) {
+                    match dispatch_engine_attempt(&mut attempt_worker, current_engine, request, attempt_timeout) {
                         Ok((next_engine, result)) => {
                             engine = Some(next_engine);
                             let _ = reply.send(result);
@@ -272,11 +278,85 @@ impl AttemptFailure {
     }
 }
 
-/// Run one completion in an isolated thread.  The engine is returned with the
-/// result so successful attempts retain the registry/frecency caches.  If the
-/// attempt gets stuck, its thread (and the engine it owns) is intentionally
-/// abandoned; the supervisor can then rebuild a fresh engine and accept the
-/// next request.
+/// One job on the long-lived attempt thread. The engine travels with the
+/// request so a timeout can drop this sender and abandon both.
+struct AttemptJob {
+    engine: Engine,
+    request: CompleteRequest,
+    reply: mpsc::SyncSender<Result<(Engine, anyhow::Result<CompleteResult>), ()>>,
+}
+
+fn spawn_attempt_worker() -> Option<mpsc::Sender<AttemptJob>> {
+    let (tx, rx) = mpsc::channel::<AttemptJob>();
+    thread::Builder::new()
+        .name("ec-engine-attempt".into())
+        .spawn(move || {
+            while let Ok(job) = rx.recv() {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut engine = job.engine;
+                    let result = engine.complete(job.request);
+                    (engine, result)
+                }));
+                match outcome {
+                    Ok(result) => {
+                        let _ = job.reply.send(Ok(result));
+                    },
+                    Err(_) => {
+                        let _ = job.reply.send(Err(()));
+                        // Leave the QuickJS thread-local behind. A panicked
+                        // runtime is not reused for the next keystroke.
+                        break;
+                    },
+                }
+            }
+        })
+        .ok()?;
+    Some(tx)
+}
+
+/// Send one completion to the persistent attempt thread. Timeout or panic
+/// drops `worker` so the wedged thread cannot block the next request.
+fn dispatch_engine_attempt(
+    worker: &mut Option<mpsc::Sender<AttemptJob>>,
+    engine: Engine,
+    request: CompleteRequest,
+    timeout: Duration,
+) -> AttemptResult {
+    if worker.is_none() {
+        *worker = spawn_attempt_worker();
+    }
+    let sender = worker.clone().ok_or(AttemptFailure::Panicked)?;
+    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+    let job = AttemptJob {
+        engine,
+        request,
+        reply: reply_tx,
+    };
+    if sender.send(job).is_err() {
+        *worker = None;
+        return Err(AttemptFailure::Panicked);
+    }
+    match reply_rx.recv_timeout(timeout) {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(())) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+            *worker = None;
+            Err(AttemptFailure::Panicked)
+        },
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Dropping the sender is what abandons the thread: the worker is
+            // still inside `complete`, and when it next `recv`s the channel
+            // is gone. Do not queue another job on this sender.
+            *worker = None;
+            Err(AttemptFailure::TimedOut)
+        },
+    }
+}
+
+/// Run one completion in an isolated thread.  Tests use this to pin watchdog
+/// timeout/panic isolation without going through the supervisor. Production
+/// completions go through [`dispatch_engine_attempt`] so the attempt thread
+/// stays warm across keystrokes.
+#[cfg(test)]
 fn run_engine_attempt(engine: Engine, request: CompleteRequest, timeout: Duration) -> AttemptResult {
     run_attempt(engine, request, timeout, |mut engine, request| {
         let result = engine.complete(request);
@@ -284,6 +364,7 @@ fn run_engine_attempt(engine: Engine, request: CompleteRequest, timeout: Duratio
     })
 }
 
+#[cfg(test)]
 fn run_attempt<F>(engine: Engine, request: CompleteRequest, timeout: Duration, complete: F) -> AttemptResult
 where
     F: FnOnce(Engine, CompleteRequest) -> (Engine, anyhow::Result<CompleteResult>) + Send + 'static,
@@ -623,6 +704,121 @@ mod tests {
             result.suggestions.iter().any(|s| s.name == "status"),
             "{:?}",
             result.suggestions
+        );
+        let again = engine
+            .complete_blocking(CompleteRequest {
+                buffer: "git sta".into(),
+                cwd: dir.path().display().to_string(),
+                ..CompleteRequest::default()
+            })
+            .expect("second complete on the same client");
+        assert!(
+            again.suggestions.iter().any(|s| s.name == "status"),
+            "{:?}",
+            again.suggestions
+        );
+    }
+
+    #[test]
+    fn dispatch_keeps_the_attempt_sender_across_two_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("git.json"),
+            r#"{"names":["git"],"subcommands":[{"names":["status"]}]}"#,
+        )
+        .unwrap();
+        let cwd = dir.path().display().to_string();
+        let mut worker = None;
+        let first_engine = Engine::new(dir.path().to_path_buf()).unwrap();
+        let (engine, first) = dispatch_engine_attempt(
+            &mut worker,
+            first_engine,
+            CompleteRequest {
+                buffer: "git ".into(),
+                cwd: cwd.clone(),
+                ..CompleteRequest::default()
+            },
+            Duration::from_secs(5),
+        )
+        .expect("first dispatch");
+        assert!(
+            worker.is_some(),
+            "a successful complete must keep the attempt thread for the next keystroke"
+        );
+        assert!(
+            first
+                .expect("first complete")
+                .suggestions
+                .iter()
+                .any(|s| s.name == "status")
+        );
+        let (_engine, second) = dispatch_engine_attempt(
+            &mut worker,
+            engine,
+            CompleteRequest {
+                buffer: "git sta".into(),
+                cwd,
+                ..CompleteRequest::default()
+            },
+            Duration::from_secs(5),
+        )
+        .expect("second dispatch");
+        assert!(worker.is_some(), "the second complete must reuse the same sender");
+        assert!(
+            second
+                .expect("second complete")
+                .suggestions
+                .iter()
+                .any(|s| s.name == "status")
+        );
+    }
+
+    #[test]
+    fn supervisor_reuses_the_attempt_thread_on_the_happy_path() {
+        let src = include_str!("worker.rs");
+        let start = src.find("fn spawn_supervised").expect("spawn_supervised");
+        let rest = &src[start..];
+        let end = rest
+            .find("pub async fn complete(")
+            .expect("complete method follows spawn_supervised");
+        let body = &rest[..end];
+        assert!(
+            body.contains("attempt_worker") && body.contains("dispatch_engine_attempt"),
+            "the supervisor must keep one attempt thread and dispatch to it"
+        );
+        assert!(
+            !body.contains("run_engine_attempt"),
+            "run_engine_attempt spawns a one-shot thread; the overlay path must not use it"
+        );
+        let dispatch = {
+            let start = src.find("fn dispatch_engine_attempt").expect("dispatch_engine_attempt");
+            let rest = &src[start..];
+            let brace = rest.find('{').expect("fn body");
+            let bytes = rest.as_bytes();
+            let mut depth = 0i32;
+            let mut end = rest.len();
+            for (i, &b) in bytes.iter().enumerate().skip(brace) {
+                match b {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i;
+                            break;
+                        }
+                    },
+                    _ => {},
+                }
+            }
+            &rest[..=end]
+        };
+        assert!(
+            dispatch.contains("*worker = None") && dispatch.contains("RecvTimeoutError::Timeout"),
+            "a timed-out dispatch must drop the attempt sender so the wedged thread cannot take the next job"
+        );
+        assert!(
+            !dispatch.contains("thread::Builder"),
+            "dispatch must not spawn a thread per completion"
         );
     }
 

@@ -1835,21 +1835,32 @@ fn set_intercept(figterm_state: &FigtermState, session_id: Uuid, overlay_visible
     set_intercept_flags(figterm_state, session_id, intercept, intercept_global);
 }
 
+/// `None` when figterm already has this intercept pair, so the overlay can
+/// skip two IPC frames (and a settings reload for the action list) on every
+/// keystroke that did not change visibility.
+fn next_intercept_modes(
+    current_intercept: InterceptMode,
+    current_global: InterceptMode,
+    enable: bool,
+    enable_global: bool,
+) -> Option<(InterceptMode, InterceptMode)> {
+    let intercept = InterceptMode::from(enable);
+    let intercept_global = InterceptMode::from(enable_global);
+    (current_intercept != intercept || current_global != intercept_global).then_some((intercept, intercept_global))
+}
+
 fn set_intercept_flags(figterm_state: &FigtermState, session_id: Uuid, intercept: bool, intercept_global: bool) {
     for session in figterm_state.inner.lock().linked_sessions.values_mut() {
         let for_this = session.id == session_id;
         let enable = intercept && for_this;
         let enable_global = intercept_global && for_this;
-        session.intercept = if enable {
-            InterceptMode::Locked
-        } else {
-            InterceptMode::Unlocked
+        let Some((next_intercept, next_global)) =
+            next_intercept_modes(session.intercept, session.intercept_global, enable, enable_global)
+        else {
+            continue;
         };
-        session.intercept_global = if enable_global {
-            InterceptMode::Locked
-        } else {
-            InterceptMode::Unlocked
-        };
+        session.intercept = next_intercept;
+        session.intercept_global = next_global;
         let actions = if enable || enable_global {
             overlay_actions()
         } else {
@@ -2431,6 +2442,38 @@ mod tests {
         assert_eq!(intercept_flags(false, true), (false, true));
         assert_eq!(intercept_flags(false, false), (false, false));
         assert_eq!(intercept_flags(true, false), (false, false));
+    }
+
+    #[test]
+    fn unchanged_intercept_modes_skip_figterm_ipc() {
+        use super::InterceptMode::{Locked, Unlocked};
+        assert_eq!(next_intercept_modes(Unlocked, Unlocked, false, false), None);
+        assert_eq!(next_intercept_modes(Locked, Locked, true, true), None);
+        assert_eq!(
+            next_intercept_modes(Unlocked, Unlocked, true, true),
+            Some((Locked, Locked))
+        );
+        assert_eq!(
+            next_intercept_modes(Locked, Locked, false, true),
+            Some((Unlocked, Locked))
+        );
+        assert_eq!(
+            next_intercept_modes(Unlocked, Locked, false, true),
+            None,
+            "hide-with-rows keeps global Tab intercept without a second SetFigjsIntercepts"
+        );
+        let src = include_str!("overlay.rs");
+        let body = rust_fn_body(src, "fn set_intercept_flags");
+        assert!(
+            body.contains("next_intercept_modes") && body.contains("continue"),
+            "set_intercept_flags must skip InterceptFigJs when the session already has that pair"
+        );
+        let skip = body.find("next_intercept_modes").expect("skip");
+        let actions = body.find("overlay_actions()").expect("actions");
+        assert!(
+            skip < actions,
+            "keybinding reload must sit behind the unchanged-mode skip"
+        );
     }
 
     #[test]
