@@ -374,10 +374,38 @@ fn autocomplete_enabled(env: &Env) -> bool {
 
 static AUTOCOMPLETE_ENABLED: LazyLock<bool> = LazyLock::new(|| autocomplete_enabled(&Env::new()));
 
+/// Last edit-buffer frame that went on the wire. PTY highlighting can emit
+/// many chunks that do not change the captured prompt text; skip those so
+/// we do not protobuf+socket the same buffer 60 times a second.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SentEditBuffer {
+    text: String,
+    cursor: i64,
+    cwd: Option<String>,
+    coords: Option<TerminalCursorCoordinates>,
+}
+
+fn edit_buffer_frame_is_duplicate(
+    last: Option<&SentEditBuffer>,
+    text: &str,
+    cursor: i64,
+    cwd: Option<&str>,
+    coords: Option<&TerminalCursorCoordinates>,
+    env_pending: bool,
+) -> bool {
+    if env_pending {
+        return false;
+    }
+    last.is_some_and(|last| {
+        last.text == text && last.cursor == cursor && last.cwd.as_deref() == cwd && last.coords.as_ref() == coords
+    })
+}
+
 async fn send_edit_buffer<T>(
     term: &Term<T>,
     sender: &Sender<Hostbound>,
     cursor_coordinates: Option<TerminalCursorCoordinates>,
+    last_sent: &mut Option<SentEditBuffer>,
 ) -> Result<()>
 where
     T: EventListener,
@@ -394,10 +422,26 @@ where
                 trace!("buffer chars: {:?}", edit_buffer.buffer.chars().collect::<Vec<_>>());
 
                 let sent_epoch = pending_shell_context_epoch();
+                let cwd = cwd_string(term.shell_state());
+                if edit_buffer_frame_is_duplicate(
+                    last_sent.as_ref(),
+                    &edit_buffer.buffer,
+                    cursor_idx,
+                    cwd.as_deref(),
+                    cursor_coordinates.as_ref(),
+                    sent_epoch.is_some(),
+                ) {
+                    return Ok(());
+                }
                 let context = edit_buffer_context(term.shell_state(), sent_epoch.is_some());
 
-                let edit_buffer_hook =
-                    new_edit_buffer_hook(Some(context), edit_buffer.buffer, cursor_idx, 0, cursor_coordinates);
+                let edit_buffer_hook = new_edit_buffer_hook(
+                    Some(context),
+                    edit_buffer.buffer.clone(),
+                    cursor_idx,
+                    0,
+                    cursor_coordinates,
+                );
                 let message = hook_to_message(edit_buffer_hook);
 
                 trace!("Sending: {message:?}");
@@ -406,6 +450,12 @@ where
                 if let Some(epoch) = sent_epoch {
                     mark_shell_context_sent(epoch);
                 }
+                *last_sent = Some(SentEditBuffer {
+                    text: edit_buffer.buffer,
+                    cursor: cursor_idx,
+                    cwd,
+                    coords: cursor_coordinates,
+                });
             }
             Ok(())
         },
@@ -637,6 +687,7 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
         key_interceptor.load_key_intercepts()?;
 
         let mut edit_buffer_interval = tokio::time::interval(Duration::from_millis(16));
+        let mut last_sent_edit_buffer = None;
 
         let mut first_time = true;
 
@@ -897,7 +948,14 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
 
                             if can_send_edit_buffer(&term) {
                                 let cursor_coordinates = get_cursor_coordinates(&terminal);
-                                if let Err(err) = send_edit_buffer(&term, &remote_sender, cursor_coordinates).await {
+                                if let Err(err) = send_edit_buffer(
+                                    &term,
+                                    &remote_sender,
+                                    cursor_coordinates,
+                                    &mut last_sent_edit_buffer,
+                                )
+                                .await
+                                {
                                     warn!("Failed to send edit buffer: {err}");
                                 }
                             }
@@ -955,7 +1013,14 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
                     let send_eb = recover_rwlock_read(&INSERTION_LOCKED_AT).is_some();
                     if send_eb && can_send_edit_buffer(&term) {
                         let cursor_coordinates = get_cursor_coordinates(&terminal);
-                        if let Err(err) = send_edit_buffer(&term, &remote_sender, cursor_coordinates).await {
+                        if let Err(err) = send_edit_buffer(
+                            &term,
+                            &remote_sender,
+                            cursor_coordinates,
+                            &mut last_sent_edit_buffer,
+                        )
+                        .await
+                        {
                             warn!(%err, "Failed to send edit buffer");
                         }
                     }
@@ -1180,5 +1245,72 @@ mod tests {
         assert_ne!(next, epoch);
         mark_shell_context_sent(next);
         assert_eq!(pending_shell_context_epoch(), None);
+    }
+
+    #[test]
+    fn unchanged_edit_buffer_frame_is_duplicate() {
+        let last = SentEditBuffer {
+            text: "git ch".into(),
+            cursor: 6,
+            cwd: Some("/tmp".into()),
+            coords: None,
+        };
+        assert!(edit_buffer_frame_is_duplicate(
+            Some(&last),
+            "git ch",
+            6,
+            Some("/tmp"),
+            None,
+            false,
+        ));
+        assert!(!edit_buffer_frame_is_duplicate(
+            Some(&last),
+            "git che",
+            7,
+            Some("/tmp"),
+            None,
+            false,
+        ));
+        assert!(!edit_buffer_frame_is_duplicate(
+            Some(&last),
+            "git ch",
+            6,
+            Some("/var"),
+            None,
+            false,
+        ));
+        assert!(!edit_buffer_frame_is_duplicate(
+            Some(&last),
+            "git ch",
+            6,
+            Some("/tmp"),
+            None,
+            true,
+        ));
+        assert!(!edit_buffer_frame_is_duplicate(
+            None,
+            "git ch",
+            6,
+            Some("/tmp"),
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn send_edit_buffer_skips_duplicate_frames_before_encode() {
+        let src = include_str!("main.rs");
+        let start = src.find("async fn send_edit_buffer").expect("send_edit_buffer");
+        let body = &src[start..];
+        let end = body.find("\nfn get_parent_shell").expect("get_parent_shell");
+        let body = &body[..end];
+        assert!(
+            body.contains("edit_buffer_frame_is_duplicate") && body.contains("return Ok(())"),
+            "unchanged edit-buffer ticks must skip protobuf encode and socket send"
+        );
+        assert!(
+            body.contains("pending_shell_context_epoch") && body.contains("sent_epoch.is_some()"),
+            "a pending env/alias epoch must still send even when the buffer text is unchanged"
+        );
     }
 }

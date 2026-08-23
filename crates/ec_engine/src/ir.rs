@@ -260,12 +260,15 @@ pub struct Spec {
     /// Shared so listing and walk clone pointers, not the nested tree.
     #[serde(default)]
     pub subcommands: Vec<Arc<Spec>>,
+    /// Shared so listing and walk clone pointers, not each option's arg tree.
+    /// `gcc -` / `clang -` / `curl -` would otherwise deep-copy hundreds of
+    /// `OptionSpec`s on every keystroke just to override listing priority.
     #[serde(default)]
-    pub options: Vec<OptionSpec>,
+    pub options: Vec<Arc<OptionSpec>>,
     /// Effective persistent options for this node. For a lazy `loadSpec`, the
     /// lookup walker merges the parent set into this set as it descends.
     #[serde(default, alias = "persistentOptions")]
-    pub persistent_options: Vec<OptionSpec>,
+    pub persistent_options: Vec<Arc<OptionSpec>>,
     #[serde(default)]
     pub args: Vec<ArgSpec>,
     #[serde(default, alias = "additionalSuggestions")]
@@ -698,7 +701,7 @@ fn resolve_spec_references(spec: &mut Spec, root: &Path, files: &HashMap<Arc<str
         resolve_arg_spec(arg, root, files, stack);
     }
     for option in &mut spec.options {
-        for arg in &mut option.args {
+        for arg in &mut Arc::make_mut(option).args {
             resolve_arg_spec(arg, root, files, stack);
         }
     }
@@ -789,6 +792,10 @@ mod tests {
             Arc::ptr_eq(&cloned.subcommands[0], &git.subcommands[0]),
             "cloning a spec must share nested subcommand trees"
         );
+        assert!(
+            Arc::ptr_eq(&cloned.options[0], &git.options[0]),
+            "cloning a spec must share option trees"
+        );
     }
 
     #[test]
@@ -806,6 +813,22 @@ mod tests {
         let found = git.find_subcommand("checkout").expect("child");
         assert!(std::ptr::eq(found, checkout.as_ref()));
         assert!(Arc::ptr_eq(&git.clone().subcommands[0], &checkout));
+    }
+
+    #[test]
+    fn options_are_shared_arcs() {
+        let help = Arc::new(OptionSpec {
+            names: vec!["--help".into()],
+            description: "Show help".into(),
+            ..OptionSpec::default()
+        });
+        let gcc = Spec {
+            names: vec!["gcc".into()],
+            options: vec![Arc::clone(&help)],
+            ..Spec::default()
+        };
+        assert!(std::ptr::eq(gcc.options[0].as_ref(), help.as_ref()));
+        assert!(Arc::ptr_eq(&gcc.clone().options[0], &help));
     }
 
     #[test]

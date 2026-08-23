@@ -30,6 +30,12 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
         session_id: Uuid,
         figterm_state: &Arc<FigtermState>,
     ) -> Result<Option<clientbound::response::Response>> {
+        if figterm_state
+            .with(&session_id, |session| session.edit_buffer_hook_is_duplicate(hook))
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
         let _old_metrics = figterm_state.with_update(session_id, |session| {
             session.edit_buffer.text.clone_from(&hook.text);
             session.edit_buffer.cursor.clone_from(&hook.cursor);
@@ -155,6 +161,25 @@ mod tests {
         assert!(
             !production.contains("WindowEvent::Emit") && !production.contains("BASE64_STANDARD"),
             "WebView protobuf/base64 notification emit is gone"
+        );
+    }
+
+    #[test]
+    fn duplicate_edit_buffer_does_not_wake_the_overlay() {
+        let src = include_str!("mod.rs");
+        let start = src.find("async fn edit_buffer").expect("edit_buffer");
+        let body = &src[start..];
+        let end = body.find("\n    async fn prompt").expect("prompt");
+        let body = &body[..end];
+        assert!(
+            body.contains("edit_buffer_hook_is_duplicate") && body.contains("return Ok(None)"),
+            "unchanged edit-buffer hooks must not send GpuiOverlayBuffer"
+        );
+        let send = body.find("GpuiOverlayBuffer").expect("overlay event");
+        let skip = body.find("edit_buffer_hook_is_duplicate").expect("duplicate check");
+        assert!(
+            skip < send,
+            "duplicate check must run before cloning the buffer onto the overlay event"
         );
     }
 }

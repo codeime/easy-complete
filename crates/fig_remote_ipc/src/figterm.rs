@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use fig_proto::fig::EnvironmentVariable;
-use fig_proto::local::{ShellContext, TerminalCursorCoordinates};
+use fig_proto::local::{EditBufferHook, ShellContext, TerminalCursorCoordinates};
 use fig_proto::remote::{Clientbound, hostbound};
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{FairMutex, MappedFairMutexGuard, RawFairMutex};
@@ -211,6 +211,15 @@ impl FigtermSession {
         }
     }
 
+    /// True when this hook would not change the session's edit buffer, caret,
+    /// or context. Duplicate PTY chunks must not wake the overlay.
+    pub fn edit_buffer_hook_is_duplicate(&self, hook: &EditBufferHook) -> bool {
+        self.edit_buffer.text == hook.text
+            && self.edit_buffer.cursor == hook.cursor
+            && self.terminal_cursor_coordinates == hook.terminal_cursor_coordinates
+            && !incoming_context_has_new_facts(self.context.as_ref(), hook.context.as_ref())
+    }
+
     /// Merge session context. Edit-buffer frames send cwd / process / shell
     /// path, and env/alias only after `UpdateShellContext`; a `None`
     /// incoming hook is a no-op so a missing frame cannot wipe a prompt.
@@ -256,6 +265,27 @@ fn merge_if_some<T>(existing: &mut Option<T>, incoming: Option<T>) {
     if incoming.is_some() {
         *existing = incoming;
     }
+}
+
+fn incoming_context_has_new_facts(existing: Option<&ShellContext>, incoming: Option<&ShellContext>) -> bool {
+    let Some(new) = incoming else {
+        return false;
+    };
+    if !new.environment_variables.is_empty() || new.alias.is_some() {
+        return true;
+    }
+    let Some(existing) = existing else {
+        return new.current_working_directory.is_some() || new.process_name.is_some() || new.shell_path.is_some();
+    };
+    some_string_changed(&existing.current_working_directory, &new.current_working_directory)
+        || some_string_changed(&existing.process_name, &new.process_name)
+        || some_string_changed(&existing.shell_path, &new.shell_path)
+}
+
+fn some_string_changed(existing: &Option<String>, incoming: &Option<String>) -> bool {
+    incoming
+        .as_ref()
+        .is_some_and(|value| existing.as_deref() != Some(value.as_str()))
 }
 
 fn flatten_shell_environment(context: Option<&ShellContext>) -> Arc<Vec<(String, String)>> {
@@ -331,7 +361,7 @@ impl FigtermCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fig_proto::local::EnvironmentVariable;
+    use fig_proto::local::{EditBufferHook, EnvironmentVariable};
 
     fn dummy_session() -> FigtermSession {
         let (sender, _) = flume::unbounded();
@@ -417,5 +447,45 @@ mod tests {
         session.apply_context(None);
         assert_eq!(session.flattened_env.as_slice(), &[("PATH".into(), "/bin".into())]);
         assert!(session.context.is_some());
+    }
+
+    #[test]
+    fn duplicate_edit_buffer_hook_is_detected() {
+        let mut session = dummy_session();
+        session.edit_buffer.text = "git ch".into();
+        session.edit_buffer.cursor = 6;
+        session.apply_context(Some(ShellContext {
+            current_working_directory: Some("/tmp".into()),
+            process_name: Some("zsh".into()),
+            ..Default::default()
+        }));
+        let hook = EditBufferHook {
+            text: "git ch".into(),
+            cursor: 6,
+            context: Some(ShellContext {
+                current_working_directory: Some("/tmp".into()),
+                process_name: Some("zsh".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(session.edit_buffer_hook_is_duplicate(&hook));
+
+        let mut typed = hook.clone();
+        typed.text = "git che".into();
+        typed.cursor = 7;
+        assert!(!session.edit_buffer_hook_is_duplicate(&typed));
+
+        let mut moved = hook.clone();
+        moved.context = Some(ShellContext {
+            current_working_directory: Some("/var".into()),
+            process_name: Some("zsh".into()),
+            ..Default::default()
+        });
+        assert!(!session.edit_buffer_hook_is_duplicate(&moved));
+
+        let mut env = hook.clone();
+        env.context = Some(context_with_env("PATH", "/bin"));
+        assert!(!session.edit_buffer_hook_is_duplicate(&env));
     }
 }

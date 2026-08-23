@@ -446,6 +446,8 @@ pub(crate) struct ActiveArg {
     pub exclusive: bool,
 }
 
+type SharedOptions = Vec<Arc<OptionSpec>>;
+
 #[derive(Debug)]
 pub(crate) struct CompletionContext {
     pub spec: Arc<Spec>,
@@ -453,10 +455,10 @@ pub(crate) struct CompletionContext {
     /// The effective persistent option set after walking through any parent
     /// subcommands/loadSpecs. The WebView parser mutates this set onto the
     /// child completion object before collecting rows.
-    pub persistent_options: Vec<OptionSpec>,
+    pub persistent_options: SharedOptions,
     /// Options consumed in the current parser scope. Entering a subcommand or
     /// a loadSpec resets this list, matching `passedOptions` in the WebView.
-    pub passed_options: Vec<OptionSpec>,
+    pub passed_options: SharedOptions,
     /// Parser directives inherited along the current spec path.
     pub parser_directives: ParserDirectives,
     /// Whether sibling options are legal at the current parser state.
@@ -559,7 +561,7 @@ pub(crate) fn resolve_context(
     };
     let (spec, path_end, persistent_options, passed_options, parser_directives, options_allowed) =
         walk_spec(root, tokens, current_limit, registry);
-    let persistent_refs: Vec<&OptionSpec> = persistent_options.iter().collect();
+    let persistent_refs: Vec<&OptionSpec> = persistent_options.iter().map(Arc::as_ref).collect();
     let active = active_arg(
         spec.as_ref(),
         &persistent_refs,
@@ -586,14 +588,7 @@ fn walk_spec(
     tokens: &[String],
     limit: usize,
     mut registry: Option<&mut Registry>,
-) -> (
-    Arc<Spec>,
-    usize,
-    Vec<OptionSpec>,
-    Vec<OptionSpec>,
-    ParserDirectives,
-    bool,
-) {
+) -> (Arc<Spec>, usize, SharedOptions, SharedOptions, ParserDirectives, bool) {
     let mut current = root;
     apply_generate_spec(&mut current, tokens);
     let mut index = 1;
@@ -608,7 +603,7 @@ fn walk_spec(
     let mut subcommand_variadic_count = 0usize;
     while index < limit {
         let token = &tokens[index];
-        let persistent_refs: Vec<&OptionSpec> = persistent_options.iter().collect();
+        let persistent_refs: Vec<&OptionSpec> = persistent_options.iter().map(Arc::as_ref).collect();
         let subcommand_arg = positional_arg(&current.args, positional);
         let options_allowed = can_consume_options(
             &parser_directives,
@@ -628,9 +623,9 @@ fn walk_spec(
             if let Some(resolved) =
                 resolve_option_token_with_persistent(current.as_ref(), &persistent_refs, token, &parser_directives)
             {
-                let option = resolved.option.clone();
+                let option = resolved.option;
                 for passed in options_in_token(current.as_ref(), &persistent_refs, token, &parser_directives) {
-                    passed_options.push(passed.clone());
+                    passed_options.push(share_option(current.as_ref(), &persistent_options, passed));
                 }
                 if let Some(arg) = option.args.first() {
                     if let Some(attached) = resolved.attached_value {
@@ -660,7 +655,7 @@ fn walk_spec(
                     if index + 1 < limit
                         && (should_consume_option_value(
                             current.as_ref(),
-                            &option,
+                            option,
                             &tokens[index + 1],
                             &parser_directives,
                         ) || !arg.is_optional)
@@ -795,9 +790,9 @@ fn enter_loaded_spec(
     current: &mut Arc<Spec>,
     path_end: &mut usize,
     positional: &mut usize,
-    persistent_options: &mut Vec<OptionSpec>,
+    persistent_options: &mut SharedOptions,
     parser_directives: &mut ParserDirectives,
-    passed_options: &mut Vec<OptionSpec>,
+    passed_options: &mut SharedOptions,
     option_arg: &mut Option<OptionArgState>,
     entered_args: &mut bool,
     subcommand_variadic_count: &mut usize,
@@ -1096,16 +1091,36 @@ fn positional_arg(args: &[ArgSpec], index: usize) -> Option<&ArgSpec> {
     Some(arg)
 }
 
-fn merge_persistent_options(parent: &[OptionSpec], spec: &Spec) -> Vec<OptionSpec> {
+fn merge_persistent_options(parent: &[Arc<OptionSpec>], spec: &Spec) -> SharedOptions {
     let mut options = parent.to_vec();
     for option in &spec.persistent_options {
         if let Some(existing) = options.iter_mut().find(|existing| options_are_equal(existing, option)) {
-            *existing = option.clone();
+            *existing = Arc::clone(option);
         } else {
-            options.push(option.clone());
+            options.push(Arc::clone(option));
         }
     }
     options
+}
+
+fn spec_options(spec: &Spec) -> impl Iterator<Item = &OptionSpec> {
+    spec.options.iter().map(Arc::as_ref)
+}
+
+fn all_options<'a>(spec: &'a Spec, persistent: &'a [&'a OptionSpec]) -> impl Iterator<Item = &'a OptionSpec> {
+    spec_options(spec).chain(persistent.iter().copied())
+}
+
+/// Recover the `Arc` for an option the walker already resolved by reference.
+/// The fallback clone is only for a pointer that did not come from `spec` or
+/// `persistent`; listing/walk never take that path.
+fn share_option(spec: &Spec, persistent: &[Arc<OptionSpec>], option: &OptionSpec) -> Arc<OptionSpec> {
+    spec.options
+        .iter()
+        .chain(persistent)
+        .find(|candidate| std::ptr::eq(candidate.as_ref(), option))
+        .cloned()
+        .unwrap_or_else(|| Arc::new(option.clone()))
 }
 
 fn options_are_equal(a: &OptionSpec, b: &OptionSpec) -> bool {
@@ -1134,8 +1149,7 @@ fn find_option_in<'a>(
     directives: &ParserDirectives,
 ) -> Option<&'a OptionSpec> {
     let option_name = separator_at(token, directives).map_or(token, |(index, _)| &token[..index]);
-    spec.options
-        .iter()
+    spec_options(spec)
         .find(|option| option.names.iter().any(|name| name == option_name))
         .or_else(|| {
             persistent
@@ -1153,7 +1167,7 @@ fn short_option_name(option: &OptionSpec) -> Option<&str> {
 }
 
 fn find_short_option_in<'a>(spec: &'a Spec, persistent: &[&'a OptionSpec], letter: char) -> Option<&'a OptionSpec> {
-    spec.options.iter().chain(persistent.iter().copied()).find(|option| {
+    spec_options(spec).chain(persistent.iter().copied()).find(|option| {
         option.names.iter().any(|name| {
             let Some(rest) = name.strip_prefix('-') else {
                 return false;
@@ -1433,7 +1447,7 @@ pub fn complete(
         context.active_arg.as_ref().map(|active| &active.arg),
     );
     let current = context.spec.as_ref();
-    let persistent_refs: Vec<&OptionSpec> = context.persistent_options.iter().collect();
+    let persistent_refs: Vec<&OptionSpec> = context.persistent_options.iter().map(Arc::as_ref).collect();
     let option_chain = (!ends_with_space)
         .then(|| {
             parse_short_option_chain(
@@ -1480,6 +1494,7 @@ pub fn complete(
             },
             |spec| spec.meta.separator_to_add.clone(),
             |spec| spec.args.first().is_some_and(|arg| !arg.is_optional),
+            |spec| spec.meta.priority,
             "subcommand",
             &query,
             &search_term,
@@ -1519,6 +1534,7 @@ pub fn complete(
         |seed| seed.meta.should_add_space.unwrap_or(false),
         |seed| seed.meta.separator_to_add.clone(),
         |_| false,
+        |seed| seed.meta.priority,
         "arg",
         if open_option_chain.is_some() { "" } else { &query },
         if open_option_chain.is_some() { "" } else { &search_term },
@@ -1732,6 +1748,7 @@ fn collect_named<T>(
     should_add_space: impl Fn(&T) -> bool,
     separator: impl Fn(&T) -> Option<String>,
     requires_arg: impl Fn(&T) -> bool,
+    priority: impl Fn(&T) -> Option<i64>,
     kind: &str,
     query: &str,
     search_term: &str,
@@ -1774,7 +1791,7 @@ fn collect_named<T>(
                 separator(item),
                 should_add_space(item),
                 metadata.hidden,
-                metadata.priority,
+                priority(item),
                 metadata.icon.clone(),
             )
             .with_primary_name(item_names.first().cloned())
@@ -1814,14 +1831,14 @@ fn option_repetition_limit(option: &OptionSpec) -> Option<f64> {
     }
 }
 
-fn option_repetition_count(option: &OptionSpec, passed: &[OptionSpec]) -> usize {
+fn option_repetition_count(option: &OptionSpec, passed: &[Arc<OptionSpec>]) -> usize {
     passed
         .iter()
         .filter(|candidate| options_are_equal(option, candidate))
         .count()
 }
 
-fn option_is_excluded(option: &OptionSpec, passed: &[OptionSpec]) -> bool {
+fn option_is_excluded(option: &OptionSpec, passed: &[Arc<OptionSpec>]) -> bool {
     passed.iter().any(|candidate| {
         candidate
             .exclusive_on
@@ -1830,7 +1847,7 @@ fn option_is_excluded(option: &OptionSpec, passed: &[OptionSpec]) -> bool {
     })
 }
 
-fn option_priority(option: &OptionSpec, passed: &[OptionSpec]) -> Option<i64> {
+fn option_priority(option: &OptionSpec, passed: &[Arc<OptionSpec>]) -> Option<i64> {
     let mut unmet = HashSet::new();
     for candidate in passed {
         unmet.extend(candidate.depends_on.iter().cloned());
@@ -1852,25 +1869,20 @@ fn option_priority(option: &OptionSpec, passed: &[OptionSpec]) -> Option<i64> {
 fn collect_option_suggestions(
     current: &Spec,
     persistent: &[&OptionSpec],
-    passed: &[OptionSpec],
+    passed: &[Arc<OptionSpec>],
     query: &str,
     search_term: &str,
     fuzzy: bool,
     prefer_verbose: bool,
     directives: &ParserDirectives,
 ) -> Vec<Suggestion> {
-    let mut options = Vec::new();
-    for option in current.options.iter().chain(persistent.iter().copied()) {
-        if option_is_excluded(option, passed)
-            || option_repetition_limit(option)
-                .is_some_and(|limit| option_repetition_count(option, passed) as f64 >= limit)
-        {
-            continue;
-        }
-        let mut option = option.clone();
-        option.meta.priority = option_priority(&option, passed);
-        options.push(option);
-    }
+    let mut options: Vec<&OptionSpec> = all_options(current, persistent)
+        .filter(|option| {
+            !option_is_excluded(option, passed)
+                && !option_repetition_limit(option)
+                    .is_some_and(|limit| option_repetition_count(option, passed) as f64 >= limit)
+        })
+        .collect();
     options.sort_by(|left, right| cmp_named_names(&left.names, &right.names));
     collect_named(
         &options,
@@ -1885,6 +1897,7 @@ fn collect_option_suggestions(
         },
         |opt| option_separator(opt, directives),
         |opt| opt.args.first().is_some_and(|arg| !arg.is_optional),
+        |opt| option_priority(opt, passed),
         "option",
         query,
         search_term,
@@ -1919,13 +1932,13 @@ fn option_chain_suggestions(
     spec: &Spec,
     persistent: &[&OptionSpec],
     chain: ShortOptionChain<'_, '_>,
-    passed: &[OptionSpec],
+    passed: &[Arc<OptionSpec>],
     directives: &ParserDirectives,
 ) -> Vec<Suggestion> {
     let mandatory_arg = chain.option.args.first().is_some_and(|arg| !arg.is_optional);
     let mut suggestions = Vec::new();
 
-    for option in spec.options.iter().chain(persistent.iter().copied()) {
+    for option in all_options(spec, persistent) {
         if option_is_excluded(option, passed)
             || option_repetition_limit(option)
                 .is_some_and(|limit| option_repetition_count(option, passed) as f64 >= limit)
@@ -2368,6 +2381,35 @@ mod tests {
         assert!(
             !src.contains(&spec_clone) && !src.contains(&resolved_clone),
             "loadSpec walk must reuse the resolved Arc"
+        );
+    }
+
+    #[test]
+    fn listing_and_walk_do_not_deep_clone_option_specs() {
+        let src = include_str!("lookup.rs");
+        let list_clone = ["let mut option = option", "clone()"].join(".");
+        let resolved_clone = ["resolved.option", "clone()"].join(".");
+        let passed_clone = ["passed_options.push(passed", "clone())"].join(".");
+        let merge_clone = ["options.push(option", "clone())"].join(".");
+        assert!(
+            !src.contains(&list_clone),
+            "listing must not clone OptionSpec just to override priority"
+        );
+        assert!(
+            !src.contains(&resolved_clone),
+            "walk must keep the resolved option by reference, not clone the arg tree"
+        );
+        assert!(
+            !src.contains(&passed_clone),
+            "passedOptions must share the option Arc, not clone the OptionSpec"
+        );
+        assert!(
+            !src.contains(&merge_clone),
+            "persistent option merge must Arc::clone, not clone the OptionSpec"
+        );
+        assert!(
+            src.contains("share_option(") && src.contains("option_priority(opt, passed)"),
+            "walk shares option Arcs; listing applies priority on references"
         );
     }
 

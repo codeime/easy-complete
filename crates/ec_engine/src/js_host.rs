@@ -944,10 +944,12 @@ pub fn spec_from_fig_json(value: &JsonValue) -> Option<Spec> {
         options: json_array(object.get("options"))
             .iter()
             .filter_map(option_from_fig_json)
+            .map(Arc::new)
             .collect(),
         persistent_options: json_array(object.get("persistentOptions"))
             .iter()
             .filter_map(option_from_fig_json)
+            .map(Arc::new)
             .collect(),
         args: args_from_fig(object.get("args")),
         additional_suggestions: json_array(object.get("additionalSuggestions"))
@@ -1009,7 +1011,7 @@ fn merge_specs(mut dest: Vec<Arc<Spec>>, incoming: Vec<Arc<Spec>>) -> Vec<Arc<Sp
     dest
 }
 
-fn merge_options(mut dest: Vec<OptionSpec>, incoming: Vec<OptionSpec>) -> Vec<OptionSpec> {
+fn merge_options(mut dest: Vec<Arc<OptionSpec>>, incoming: Vec<Arc<OptionSpec>>) -> Vec<Arc<OptionSpec>> {
     for option in incoming {
         if let Some(existing) = dest.iter_mut().find(|existing| {
             option

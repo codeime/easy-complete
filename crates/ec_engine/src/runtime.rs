@@ -1,5 +1,6 @@
 //! Completion engine: load spec IR and run lookup.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -298,21 +299,25 @@ pub fn query_term_for(search_term: &str, separator: Option<&str>) -> String {
 /// Compute the matching term for one static suggestion. Explicit string
 /// getQueryTerm has priority; shortcut rows use the legacy `?` prefix rule
 /// only when no explicit query-term override is present.
-pub(crate) fn suggestion_query_term(
+///
+/// The common path (no separator, not a `?` shortcut) borrows `query` so
+/// listing hundreds of static options does not allocate a query `String`
+/// per row before `matches_query` even runs.
+pub(crate) fn suggestion_query_term<'a>(
     kind: &str,
     explicit_separator: Option<&str>,
-    query: &str,
+    query: &'a str,
     search_term: &str,
-) -> (String, Option<String>) {
+) -> (Cow<'a, str>, Option<String>) {
     if let Some(separator) = explicit_separator {
         let term = query_term_for(search_term, Some(separator));
-        return (term.clone(), Some(term));
+        return (Cow::Owned(term.clone()), Some(term));
     }
     if kind == "shortcut" && search_term.starts_with('?') {
         let term = search_term[1..].to_string();
-        return (term.clone(), Some(term));
+        return (Cow::Owned(term.clone()), Some(term));
     }
-    (query.to_string(), None)
+    (Cow::Borrowed(query), None)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -688,6 +693,19 @@ mod tests {
         assert_eq!(query_term_for("foo", Some("/")), "foo");
         assert_eq!(query_term_for("foo", None), "foo");
         assert_eq!(query_term_for("foo", Some("")), "");
+    }
+
+    #[test]
+    fn suggestion_query_term_borrows_query_without_a_separator() {
+        let query = "ch";
+        let (term, override_term) = suggestion_query_term("subcommand", None, query, "ch");
+        assert!(matches!(term, Cow::Borrowed(borrowed) if std::ptr::eq(borrowed, query)));
+        assert!(override_term.is_none());
+
+        let (term, override_term) = suggestion_query_term("file", Some("/"), query, "src/main");
+        assert_eq!(term.as_ref(), "main");
+        assert_eq!(override_term.as_deref(), Some("main"));
+        assert!(matches!(term, Cow::Owned(_)));
     }
 
     #[test]

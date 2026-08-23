@@ -1098,7 +1098,7 @@ mod tests {
     fn option_args_are_completed_after_the_flag() {
         let spec = Spec {
             names: vec!["ls".into()],
-            options: vec![OptionSpec {
+            options: vec![Arc::new(OptionSpec {
                 names: vec!["--color".into()],
                 args: vec![ArgSpec {
                     suggestions: vec![
@@ -1116,7 +1116,7 @@ mod tests {
                     ..ArgSpec::default()
                 }],
                 ..OptionSpec::default()
-            }],
+            })],
             args: vec![ArgSpec {
                 templates: vec![Template::Filepaths],
                 ..ArgSpec::default()
