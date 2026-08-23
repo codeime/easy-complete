@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod checks;
 
 use std::borrow::Cow;
@@ -22,36 +20,31 @@ use crossterm::style::Stylize;
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use crossterm::{cursor, execute};
 use eyre::{ContextCompat, Result, WrapErr};
+use fig_integrations::Error as InstallationError;
 #[cfg(target_os = "macos")]
 use fig_integrations::input_method::InputMethodError;
 use fig_integrations::shell::{ShellExt, ShellIntegration};
-use fig_integrations::ssh::SshIntegration;
-use fig_integrations::{Error as InstallationError, Integration};
 use fig_ipc::{BufferedUnixStream, SendMessage, SendRecvMessage};
 use fig_os_shim::{Context, Env, Os};
 use fig_proto::local::DiagnosticsResponse;
 use fig_settings::JsonStore;
-use fig_util::directories::{remote_socket_path, settings_path};
-use fig_util::env_var::{PROCESS_LAUNCHED_BY_Q, Q_PARENT, QTERM_SESSION_ID};
-use fig_util::macos::BUNDLE_CONTENTS_INFO_PLIST_PATH;
+use fig_util::directories::settings_path;
+use fig_util::env_var::{PROCESS_LAUNCHED_BY_Q, QTERM_SESSION_ID};
 use fig_util::system_info::SupportLevel;
 use fig_util::terminal::in_special_terminal;
-use fig_util::{
-    APP_BUNDLE_NAME, CLI_BINARY_NAME, CLI_CRATE_NAME, OLD_CLI_BINARY_NAMES, PRODUCT_NAME, PTY_BINARY_NAME, Shell,
-    Terminal, directories, system_paths,
-};
+#[cfg(target_os = "macos")]
+use fig_util::{APP_BUNDLE_NAME, CLI_CRATE_NAME, OLD_CLI_BINARY_NAMES, system_paths};
+use fig_util::{CLI_BINARY_NAME, PRODUCT_NAME, PTY_BINARY_NAME, Shell, Terminal, directories};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use owo_colors::OwoColorize;
 use regex::Regex;
 use semver::Version;
 use spinners::{Spinner, Spinners};
 use tokio::io::AsyncBufReadExt;
 
 use super::app::restart_desktop;
-use super::diagnostics::verify_integration;
 use crate::util::desktop::{LaunchArgs, desktop_app_running, launch_desktop};
-use crate::util::{app_path_from_bundle_id, glob, glob_dir, is_executable_in_path};
+use crate::util::is_executable_in_path;
 
 #[derive(Debug, Args, PartialEq, Eq)]
 pub struct DoctorArgs {
@@ -228,27 +221,6 @@ where
     })))
 }
 
-fn is_installed(app: Option<impl AsRef<OsStr>>) -> bool {
-    match app.and_then(app_path_from_bundle_id) {
-        Some(x) => !x.is_empty(),
-        None => false,
-    }
-}
-
-pub fn app_version(app: impl AsRef<OsStr>) -> Option<Version> {
-    let app_path = app_path_from_bundle_id(app)?;
-    let output = Command::new("defaults")
-        .args([
-            "read",
-            &format!("{app_path}/{BUNDLE_CONTENTS_INFO_PLIST_PATH}"),
-            "CFBundleShortVersionString",
-        ])
-        .output()
-        .ok()?;
-    let version = String::from_utf8_lossy(&output.stdout);
-    Version::parse(version.trim()).ok()
-}
-
 const CHECKMARK: &str = "✔";
 const DOT: &str = "●";
 const CROSS: &str = "✘";
@@ -313,15 +285,7 @@ trait DoctorCheck<T = ()>: Sync
 where
     T: Sync + Send + Sized,
 {
-    // Name should be _static_ across different user's devices. It is used to generate
-    // a unique id for the check used in analytics. If name cannot be unique for some reason, you
-    // should override analytics_event_name with the unique name to be sent for analytics.
     fn name(&self) -> Cow<'static, str>;
-
-    fn analytics_event_name(&self) -> String {
-        let name = self.name().to_ascii_lowercase();
-        Regex::new(r"[^a-zA-Z0-9]+").unwrap().replace_all(&name, "_").into()
-    }
 
     async fn get_type(&self, _: &T, _platform: Platform) -> DoctorCheckType {
         DoctorCheckType::NormalCheck
@@ -330,10 +294,10 @@ where
     async fn check(&self, context: &T) -> Result<(), DoctorError>;
 }
 
-struct FigBinCheck;
+struct DataDirCheck;
 
 #[async_trait]
-impl DoctorCheck for FigBinCheck {
+impl DoctorCheck for DataDirCheck {
     fn name(&self) -> Cow<'static, str> {
         format!("{PRODUCT_NAME} data dir exists").into()
     }
@@ -456,63 +420,6 @@ impl DoctorCheck for DesktopSocketCheck {
     }
 }
 
-struct RemoteSocketCheck;
-
-#[async_trait]
-impl DoctorCheck for RemoteSocketCheck {
-    fn name(&self) -> Cow<'static, str> {
-        format!("{PRODUCT_NAME} socket exists").into()
-    }
-
-    async fn get_type(&self, _: &(), _: Platform) -> DoctorCheckType {
-        DoctorCheckType::NormalCheck
-    }
-
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        let q_parent = fig_os_shim::Env::new().q_parent().ok();
-        let remote_socket = remote_socket_path().map_err(|err| DoctorError::Error {
-            reason: "Unable to get remote socket path".into(),
-            info: vec![
-                format!("{Q_PARENT}: {q_parent:?}").into(),
-                format!("Error: {err}").into(),
-            ],
-            fix: None,
-            error: Some(err.into()),
-        })?;
-
-        // Check file exists
-        check_file_exists(&remote_socket).map_err(|err| DoctorError::Error {
-            reason: format!("{PRODUCT_NAME} socket missing").into(),
-            info: vec![
-                format!("Path: {remote_socket:?}").into(),
-                format!("{Q_PARENT}: {q_parent:?}").into(),
-                format!("Error: {err}").into(),
-            ],
-            fix: None,
-            error: Some(err),
-        })?;
-
-        // Check socket permissions
-        check_socket_perms(&remote_socket).await?;
-
-        // Check connecting to socket
-        match fig_ipc::socket_connect(&remote_socket).await {
-            Ok(_) => Ok(()),
-            Err(err) => Err(DoctorError::Error {
-                reason: "Failed to connect to remote socket".into(),
-                info: vec![
-                    "Ensure the desktop app is running".into(),
-                    format!("Path: {remote_socket:?}").into(),
-                    format!("{Q_PARENT}: {q_parent:?}").into(),
-                    format!("Error: {err}").into(),
-                ],
-                fix: None,
-                error: Some(err.into()),
-            }),
-        }
-    }
-}
-
 struct SettingsCorruptionCheck;
 
 #[async_trait]
@@ -536,10 +443,10 @@ impl DoctorCheck for SettingsCorruptionCheck {
     }
 }
 
-struct FigIntegrationsCheck;
+struct TerminalIntegrationsCheck;
 
 #[async_trait]
-impl DoctorCheck for FigIntegrationsCheck {
+impl DoctorCheck for TerminalIntegrationsCheck {
     fn name(&self) -> Cow<'static, str> {
         format!("{PRODUCT_NAME} terminal integrations").into()
     }
@@ -620,21 +527,6 @@ impl DoctorCheck for FigIntegrationsCheck {
             });
         }
 
-        // Check that ~/.local/bin/ecterm exists
-        // TODO(grant): Check figterm exe exists
-        // let figterm_path = fig_directories::fig_dir()
-        //    .context("Could not find ~/.fig")?
-        //    .join("bin")
-        //    .join("figterm");
-
-        // if !figterm_path.exists() {
-        //    return Err(DoctorError::Error {
-        //        reason: "figterm does not exist".into(),
-        //        info: vec![],
-        //        fix: None,
-        //    });
-        //}
-
         match fig_os_shim::Env::new().q_term().as_deref() {
             Ok(env!("CARGO_PKG_VERSION")) => Ok(()),
             Ok(ver) if env!("CARGO_PKG_VERSION").ends_with("-dev") || ver.ends_with("-dev") => Err(doctor_warning!(
@@ -668,10 +560,6 @@ struct PtySocketCheck;
 impl DoctorCheck for PtySocketCheck {
     fn name(&self) -> Cow<'static, str> {
         format!("{PTY_BINARY_NAME} socket exists").into()
-    }
-
-    fn analytics_event_name(&self) -> String {
-        "qterm_socket_check".into()
     }
 
     async fn check(&self, _: &()) -> Result<(), DoctorError> {
@@ -862,10 +750,6 @@ impl DoctorCheck<Option<Shell>> for DotfileCheck {
         format!("{shell} {path} integration check").into()
     }
 
-    fn analytics_event_name(&self) -> String {
-        format!("dotfile_check_{}", self.integration.file_name())
-    }
-
     async fn get_type(&self, current_shell: &Option<Shell>, _platform: Platform) -> DoctorCheckType {
         if let Some(shell) = current_shell {
             if *shell == self.integration.get_shell() {
@@ -942,7 +826,7 @@ impl DoctorCheck<Option<Shell>> for DotfileCheck {
 }
 
 #[cfg(target_os = "macos")]
-pub fn dscl_read(value: impl AsRef<OsStr>) -> Result<String> {
+fn dscl_read(value: impl AsRef<OsStr>) -> Result<String> {
     let username_command = Command::new("id").arg("-un").output().context("Could not get id")?;
 
     let username: String = String::from_utf8_lossy(&username_command.stdout).trim().into();
@@ -997,43 +881,10 @@ impl DoctorCheck<DiagnosticsResponse> for ShellCompatibilityCheck {
     }
 }
 
-struct SshIntegrationCheck;
-
-#[async_trait]
-impl DoctorCheck<()> for SshIntegrationCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "SSH integration".into()
-    }
-
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        match SshIntegration::new() {
-            Ok(integration) => match integration.is_installed().await {
-                Ok(()) => Ok(()),
-                Err(err) => Err(DoctorError::Error {
-                    reason: err.to_string().into(),
-                    info: vec![],
-                    fix: Some(DoctorFix::Async(
-                        async move {
-                            integration.install().await?;
-                            Ok(())
-                        }
-                        .boxed(),
-                    )),
-                    error: Some(eyre::Report::new(err)),
-                }),
-            },
-            Err(err) => Err(DoctorError::Error {
-                reason: err.to_string().into(),
-                info: vec![],
-                fix: None,
-                error: Some(eyre::Report::new(err)),
-            }),
-        }
-    }
-}
-
+#[cfg(target_os = "macos")]
 struct BundlePathCheck;
 
+#[cfg(target_os = "macos")]
 #[async_trait]
 impl DoctorCheck<DiagnosticsResponse> for BundlePathCheck {
     fn name(&self) -> Cow<'static, str> {
@@ -1064,8 +915,10 @@ impl DoctorCheck<DiagnosticsResponse> for BundlePathCheck {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct AutocompleteEnabledCheck;
 
+#[cfg(target_os = "macos")]
 #[async_trait]
 impl DoctorCheck<DiagnosticsResponse> for AutocompleteEnabledCheck {
     fn name(&self) -> Cow<'static, str> {
@@ -1120,10 +973,10 @@ dev_mode_check!(
     "autocomplete.developerMode"
 );
 
-dev_mode_check!(PluginDevModeCheck, "Plugin dev mode", state, "plugin.developerMode");
-
+#[cfg(target_os = "macos")]
 struct CliPathCheck;
 
+#[cfg(target_os = "macos")]
 #[async_trait]
 impl DoctorCheck<DiagnosticsResponse> for CliPathCheck {
     fn name(&self) -> Cow<'static, str> {
@@ -1174,8 +1027,10 @@ impl DoctorCheck<DiagnosticsResponse> for CliPathCheck {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct AccessibilityCheck;
 
+#[cfg(target_os = "macos")]
 #[async_trait]
 impl DoctorCheck<DiagnosticsResponse> for AccessibilityCheck {
     fn name(&self) -> Cow<'static, str> {
@@ -1191,21 +1046,6 @@ impl DoctorCheck<DiagnosticsResponse> for AccessibilityCheck {
                     vec![CLI_BINARY_NAME, "debug", "prompt-accessibility"],
                     Duration::from_secs(1),
                 ),
-                // fix: Some(DoctorFix::Sync(Box::new(move || {
-                //     println!("1. Try enabling accessibility in System Settings");
-                //     if !Command::new(CLI_BINARY_NAME)
-                //         .args(["debug", "prompt-accessibility"])
-                //         .status()?
-                //         .success()
-                //     {
-                //         bail!("Failed to open accessibility in System Settings: {CLI_BINARY_NAME} debug
-                // prompt-accessibility");     }
-
-                //     println!("2. Restarting");
-                //     println!("3. Reset accessibility");
-
-                //     Ok(())
-                // }))),
                 error: None,
             })
         } else {
@@ -1214,8 +1054,10 @@ impl DoctorCheck<DiagnosticsResponse> for AccessibilityCheck {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct DotfilesSymlinkedCheck;
 
+#[cfg(target_os = "macos")]
 #[async_trait]
 impl DoctorCheck<DiagnosticsResponse> for DotfilesSymlinkedCheck {
     fn name(&self) -> Cow<'static, str> {
@@ -1239,8 +1081,10 @@ impl DoctorCheck<DiagnosticsResponse> for DotfilesSymlinkedCheck {
     }
 }
 
+#[cfg(target_os = "linux")]
 struct AutocompleteActiveCheck;
 
+#[cfg(target_os = "linux")]
 #[async_trait]
 impl DoctorCheck<DiagnosticsResponse> for AutocompleteActiveCheck {
     fn name(&self) -> Cow<'static, str> {
@@ -1327,40 +1171,6 @@ impl DoctorCheck<SupportedTerminalCheckContext> for SupportedTerminalCheck {
     }
 }
 
-struct ItermIntegrationCheck;
-
-#[async_trait]
-impl DoctorCheck<Option<Terminal>> for ItermIntegrationCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "iTerm integration is enabled".into()
-    }
-
-    async fn get_type(&self, current_terminal: &Option<Terminal>, platform: Platform) -> DoctorCheckType {
-        if platform == Platform::MacOs {
-            if !is_installed(Terminal::Iterm.to_bundle_id().as_deref()) {
-                DoctorCheckType::NoCheck
-            } else if matches!(current_terminal.to_owned(), Some(Terminal::Iterm)) {
-                DoctorCheckType::NormalCheck
-            } else {
-                DoctorCheckType::SoftCheck
-            }
-        } else {
-            DoctorCheckType::NoCheck
-        }
-    }
-
-    async fn check(&self, _: &Option<Terminal>) -> Result<(), DoctorError> {
-        if let Some(version) = app_version("com.googlecode.iterm2") {
-            if version < Version::new(3, 4, 0) {
-                return Err(doctor_error!(
-                    "iTerm version is incompatible with {PRODUCT_NAME}. Please update iTerm to latest version"
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
 struct ItermBashIntegrationCheck;
 
 #[async_trait]
@@ -1427,59 +1237,6 @@ impl DoctorCheck<SupportedTerminalCheckContext> for ItermBashIntegrationCheck {
     }
 }
 
-struct HyperIntegrationCheck;
-#[async_trait]
-impl DoctorCheck<Option<Terminal>> for HyperIntegrationCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "Hyper integration is enabled".into()
-    }
-
-    async fn get_type(&self, current_terminal: &Option<Terminal>, _platform: Platform) -> DoctorCheckType {
-        if !is_installed(Terminal::Hyper.to_bundle_id().as_deref()) {
-            return DoctorCheckType::NoCheck;
-        }
-
-        if matches!(current_terminal.to_owned(), Some(Terminal::Hyper)) {
-            DoctorCheckType::NormalCheck
-        } else {
-            DoctorCheckType::SoftCheck
-        }
-    }
-
-    async fn check(&self, _: &Option<Terminal>) -> Result<(), DoctorError> {
-        let integration = verify_integration("co.zeit.hyper")
-            .await
-            .context("Could not verify Hyper integration")?;
-
-        if integration != "installed!" {
-            // Check ~/.hyper_plugins/local/fig-hyper-integration/index.js exists
-            let integration_path = directories::home_dir()
-                .context("Could not get home dir")?
-                .join(".hyper_plugins/local/fig-hyper-integration/index.js");
-
-            if !integration_path.exists() {
-                return Err(doctor_error!("fig-hyper-integration plugin is missing."));
-            }
-
-            let config = read_to_string(
-                directories::home_dir()
-                    .context("Could not get home dir")?
-                    .join(".hyper.js"),
-            )
-            .context("Could not read ~/.hyper.js")?;
-
-            if !config.contains("fig-hyper-integration") {
-                return Err(doctor_error!(
-                    "fig-hyper-integration plugin needs to be added to localPlugins!"
-                ));
-            }
-            return Err(doctor_error!("Unknown error with Hyper integration"));
-        }
-
-        Ok(())
-    }
-}
-
 struct SystemVersionCheck;
 
 #[async_trait]
@@ -1502,67 +1259,6 @@ impl DoctorCheck for SystemVersionCheck {
             )),
             SupportLevel::Unsupported => Err(doctor_error!("{os_version} is not supported")),
         }
-    }
-}
-
-struct VSCodeIntegrationCheck;
-
-#[async_trait]
-impl DoctorCheck<Option<Terminal>> for VSCodeIntegrationCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "VSCode integration is enabled".into()
-    }
-
-    async fn get_type(&self, current_terminal: &Option<Terminal>, _platform: Platform) -> DoctorCheckType {
-        if !is_installed(Terminal::VSCode.to_bundle_id().as_deref())
-            && !is_installed(Terminal::VSCodeInsiders.to_bundle_id().as_deref())
-        {
-            return DoctorCheckType::NoCheck;
-        }
-
-        if matches!(
-            current_terminal,
-            Some(Terminal::VSCode | Terminal::VSCodeInsiders | Terminal::Cursor | Terminal::CursorNightly)
-        ) {
-            DoctorCheckType::NormalCheck
-        } else {
-            DoctorCheckType::SoftCheck
-        }
-    }
-
-    async fn check(&self, _: &Option<Terminal>) -> Result<(), DoctorError> {
-        let integration = verify_integration("com.microsoft.VSCode")
-            .await
-            .context("Could not verify VSCode integration")?;
-
-        if integration != "installed!" {
-            let mut missing = true;
-
-            for dir in [".vscode", ".vscode-insiders", ".cursor", ".cursor-nightly"] {
-                // Check if withfig.fig exists
-                let extensions = directories::home_dir()
-                    .context("Could not get home dir")?
-                    .join(dir)
-                    .join("extensions");
-
-                let glob_set = glob([extensions.join("withfig.fig-").to_string_lossy()])
-                    .context("Could not build VSCode extension glob")?;
-
-                let extensions = extensions.as_path();
-                if let Ok(fig_extensions) = glob_dir(&glob_set, extensions) {
-                    if fig_extensions.is_empty() {
-                        missing = false;
-                    }
-                }
-            }
-
-            if missing {
-                return Err(doctor_error!("VSCode integration is missing!"));
-            }
-
-            return Err(doctor_error!("Unknown error with VSCode integration!"));
-        }
-        Ok(())
     }
 }
 
@@ -1636,49 +1332,10 @@ impl DoctorCheck<SupportedTerminalCheckContext> for ImeStatusCheck {
     }
 }
 
-struct DesktopCompatibilityCheck;
-
-#[async_trait]
-impl DoctorCheck for DesktopCompatibilityCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "Desktop Compatibility Check".into()
-    }
-
-    async fn get_type(&self, _: &(), _: Platform) -> DoctorCheckType {
-        DoctorCheckType::NormalCheck
-    }
-
-    #[cfg(target_os = "linux")]
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        use fig_os_shim::Context;
-        use fig_util::system_info::linux::{
-            DesktopEnvironment, DisplayServer, get_desktop_environment, get_display_server,
-        };
-
-        let ctx = Context::new();
-        let (display_server, desktop_environment) = (get_display_server(&ctx)?, get_desktop_environment(&ctx)?);
-
-        match (display_server, desktop_environment) {
-            (DisplayServer::X11, DesktopEnvironment::Gnome | DesktopEnvironment::Plasma | DesktopEnvironment::I3) => {
-                Ok(())
-            },
-            (DisplayServer::Wayland, DesktopEnvironment::Gnome) => Err(doctor_warning!(
-                "Support for GNOME on Wayland is in development. It may not work properly on your system."
-            )),
-            (display_server, desktop_environment) => Err(doctor_warning!(
-                "Unknown desktop configuration {desktop_environment:?} on {display_server:?}"
-            )),
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        Ok(())
-    }
-}
-
+#[cfg(target_os = "windows")]
 struct WindowsConsoleCheck;
 
+#[cfg(target_os = "windows")]
 #[async_trait]
 impl DoctorCheck for WindowsConsoleCheck {
     fn name(&self) -> Cow<'static, str> {
@@ -1949,15 +1606,14 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
         run_checks(
             format!("Let's make sure {PRODUCT_NAME} is set up correctly..."),
             vec![
-                &FigBinCheck,
+                &DataDirCheck,
                 #[cfg(unix)]
                 &LocalBinPathCheck,
                 #[cfg(target_os = "windows")]
                 &WindowsConsoleCheck,
                 &SettingsCorruptionCheck,
                 &SshdConfigCheck,
-                &FigIntegrationsCheck,
-                // &SshIntegrationCheck,
+                &TerminalIntegrationsCheck,
             ],
             config,
             &mut spinner,
@@ -1980,7 +1636,6 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
                 #[cfg(unix)]
                 &PtySocketCheck,
                 &AutocompleteDevModeCheck,
-                &PluginDevModeCheck,
             ],
             config,
             &mut spinner,
@@ -2052,13 +1707,7 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
             "Let's check your terminal integrations...",
             vec![
                 &SupportedTerminalCheck,
-                // &ItermIntegrationCheck,
                 &ItermBashIntegrationCheck,
-                // TODO: re-enable on macos once IME/terminal integrations are sorted
-                // #[cfg(not(target_os = "macos"))]
-                // &HyperIntegrationCheck,
-                // #[cfg(not(target_os = "macos"))]
-                // &VSCodeIntegrationCheck,
                 #[cfg(target_os = "macos")]
                 &ImeStatusCheck,
             ],
@@ -2133,8 +1782,8 @@ mod product_name_tests {
             "socket check should name ecterm"
         );
         assert!(
-            body.contains("qterm_socket_check"),
-            "analytics id stays qterm_socket_check"
+            !body.contains("qterm_socket_check") && !body.contains("analytics_event_name"),
+            "unused Amazon Q doctor analytics ids are gone; user-visible copy is ecterm"
         );
         assert!(
             body.contains("{QTERM_SESSION_ID}"),
@@ -2159,6 +1808,31 @@ mod product_name_tests {
         assert!(
             !production.contains("Let's check if you're logged in"),
             "doctor no longer has an auth section"
+        );
+        assert!(
+            !production.contains("#![allow(dead_code)]"),
+            "doctor must not hide leftover checks behind allow(dead_code)"
+        );
+        assert!(
+            !production.contains("HyperIntegrationCheck")
+                && !production.contains("fig-hyper-integration")
+                && !production.contains("VSCodeIntegrationCheck")
+                && !production.contains("withfig.fig")
+                && !production.contains("ItermIntegrationCheck")
+                && !production.contains("SshIntegrationCheck")
+                && !production.contains("RemoteSocketCheck")
+                && !production.contains("DesktopCompatibilityCheck")
+                && !production.contains("PluginDevModeCheck")
+                && !production.contains("plugin.developerMode")
+                && !production.contains("struct FigBinCheck")
+                && !production.contains("struct FigIntegrationsCheck")
+                && !production.contains("analytics_event_name")
+                && !production.contains("verify_integration"),
+            "leftover Fig/Hyper/VSCode plugin checks and Fig-prefixed doctor types are gone"
+        );
+        assert!(
+            production.contains("struct DataDirCheck") && production.contains("struct TerminalIntegrationsCheck"),
+            "live doctor checks keep PRODUCT_NAME copy under native type names"
         );
     }
 

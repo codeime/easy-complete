@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::Error;
-use crate::manifest::is_minimal;
 
 /// The support level for different platforms
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,14 +57,10 @@ impl OSVersion {
                     SupportLevel::Unsupported
                 }
             },
-            OSVersion::Linux { .. } => match (is_remote(), is_minimal()) {
-                (true, true) => SupportLevel::Supported,
-                (false, true) => SupportLevel::SupportedWithCaveat {
-                    info: "Autocomplete is not yet available on Linux, but other products should work as expected."
-                        .into(),
-                },
-                (_, _) => SupportLevel::Supported,
-            },
+            // Easy Complete is autocomplete. Linux is WIP as a product, but the
+            // CLI, ecterm, and desktop host all compile and run there — do not
+            // warn about Amazon Q's other products.
+            OSVersion::Linux { .. } => SupportLevel::Supported,
             OSVersion::Windows { build, .. } => match build {
                 // Only Windows 11 is fully supported at the moment
                 build if *build >= 22000 => SupportLevel::Supported,
@@ -370,5 +365,20 @@ mod tests {
         let id = get_system_id();
         assert!(id.is_some());
         assert_eq!(id.unwrap().len(), 64);
+    }
+
+    #[test]
+    fn linux_support_level_is_not_an_amazon_q_other_products_caveat() {
+        let linux = OSVersion::Linux {
+            kernel_version: "6.8.0".into(),
+            os_release: None,
+        };
+        assert_eq!(linux.support_level(), SupportLevel::Supported);
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        let leftover = ["other products should work", " as expected"].concat();
+        assert!(
+            !production.contains(&leftover) && !production.contains("Autocomplete is not yet available on Linux"),
+            "doctor must not warn about Amazon Q's other products on Linux"
+        );
     }
 }

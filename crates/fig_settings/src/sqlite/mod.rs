@@ -14,7 +14,6 @@ use crate::Result;
 use crate::error::DbOpenError;
 
 const STATE_TABLE_NAME: &str = "state";
-const AUTH_TABLE_NAME: &str = "auth_kv";
 const POOL_MAX_SIZE: u32 = 4;
 
 pub static DATABASE: LazyLock<Result<Db, DbOpenError>> = LazyLock::new(|| {
@@ -55,7 +54,8 @@ const MIGRATIONS: &[Migration] = migrations![
     "002_drop_history_in_ssh_docker",
     "003_improved_history_timing",
     "004_state_table",
-    "005_auth_table"
+    "005_auth_table",
+    "006_drop_auth_table"
 ];
 
 #[derive(Debug, Clone)]
@@ -158,10 +158,6 @@ impl Db {
         self.get_value(STATE_TABLE_NAME, key)
     }
 
-    pub fn get_auth_value(&self, key: impl AsRef<str>) -> Result<Option<String>> {
-        self.get_value(AUTH_TABLE_NAME, key)
-    }
-
     fn set_value<T: ToSql>(&self, table: &'static str, key: impl AsRef<str>, value: T) -> Result<()> {
         self.pool.get()?.execute(
             &format!("INSERT OR REPLACE INTO {table} (key, value) VALUES (?1, ?2)"),
@@ -174,10 +170,6 @@ impl Db {
         self.set_value(STATE_TABLE_NAME, key, value.into())
     }
 
-    pub fn set_auth_value(&self, key: impl AsRef<str>, value: impl Into<String>) -> Result<()> {
-        self.set_value(AUTH_TABLE_NAME, key, value.into())
-    }
-
     fn unset_value(&self, table: &'static str, key: impl AsRef<str>) -> Result<()> {
         self.pool
             .get()?
@@ -187,10 +179,6 @@ impl Db {
 
     pub fn unset_state_value(&self, key: impl AsRef<str>) -> Result<()> {
         self.unset_value(STATE_TABLE_NAME, key)
-    }
-
-    pub fn unset_auth_value(&self, key: impl AsRef<str>) -> Result<()> {
-        self.unset_value(AUTH_TABLE_NAME, key)
     }
 
     fn is_value_set(&self, table: &'static str, key: impl AsRef<str>) -> Result<bool> {
@@ -205,10 +193,6 @@ impl Db {
 
     pub fn is_state_value_set(&self, key: impl AsRef<str>) -> Result<bool> {
         self.is_value_set(STATE_TABLE_NAME, key)
-    }
-
-    pub fn is_auth_value_set(&self, key: impl AsRef<str>) -> Result<bool> {
-        self.is_value_set(AUTH_TABLE_NAME, key)
     }
 
     fn all_values(&self, table: &'static str) -> Result<Map<String, serde_json::Value>> {
@@ -313,9 +297,10 @@ fn has_migration<C: Deref<Target = Connection>>(conn: &C, version: usize, max_ve
     //
     // Checking whether a migration exists would compare id with version, but since id is 1-indexed
     // and version is 0-indexed, we would actually skip the last migration! Therefore, it's
-    // possible users are missing a critical migration (namely, auth_kv table creation) when
-    // upgrading to the qchat build (which includes two new migrations). Hence, we have to check
-    // all migrations until version 7 to make sure that nothing is missed.
+    // possible users are missing a migration when upgrading across the qchat-era
+    // versions (which added two). Hence, we have to check all migrations until
+    // version 7 to make sure that nothing is missed. `006_drop_auth_table` is
+    // version 6, still in this range.
     if version <= 7 {
         let mut stmt = match conn.prepare("SELECT COUNT(*) FROM migrations WHERE version = ?1") {
             Ok(stmt) => stmt,
@@ -431,17 +416,26 @@ mod tests {
     }
 
     #[test]
-    fn auth_table_tests() {
+    fn amazon_q_auth_kv_is_dropped() {
         let db = mock();
+        let conn = db.pool.get().unwrap();
+        let tables: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'auth_kv'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0, "006_drop_auth_table must drop leftover Amazon Q auth_kv");
 
-        db.set_auth_value("test", "test").unwrap();
-        assert_eq!(db.get_auth_value("test").unwrap().unwrap(), "test");
-        assert!(db.is_auth_value_set("test").unwrap());
-        db.unset_auth_value("test").unwrap();
-        assert!(!db.is_auth_value_set("test").unwrap());
-
-        assert_eq!(db.get_auth_value("test2").unwrap(), None);
-        assert!(!db.is_auth_value_set("test2").unwrap());
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("get_auth_value")
+                && !production.contains("set_auth_value")
+                && !production.contains("AUTH_TABLE_NAME")
+                && production.contains("006_drop_auth_table"),
+            "auth APIs are gone; 005 stays in history and 006 drops the table"
+        );
     }
 
     #[test]

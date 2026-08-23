@@ -10,7 +10,7 @@ mod hook;
 mod init;
 mod installation;
 mod integrations;
-pub mod internal;
+mod internal;
 mod issue;
 mod settings;
 mod telemetry;

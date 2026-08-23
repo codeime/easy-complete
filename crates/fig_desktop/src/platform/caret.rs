@@ -1027,6 +1027,46 @@ mod tests {
             !internal_production.contains("IbusBootstrap") && !internal_production.contains("ibus-daemon"),
             "CLI must not launch ibus-daemon; linux_caret owns IBus"
         );
+        assert!(
+            cli_mod.contains("\nmod internal;") && !cli_mod.contains("pub mod internal"),
+            "internal must stay crate-private so leftover Amazon Q subcommands cannot hide behind pub mod"
+        );
+        assert!(
+            !std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_test_macro")).exists(),
+            "unused fig_test_macro (broken fig_test ENVIRONMENT_LOCK) is gone"
+        );
+        let sqlite = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fig_settings/src/sqlite/mod.rs"
+        ));
+        let sqlite_production = sqlite.split("#[cfg(test)]").next().expect("sqlite production");
+        assert!(
+            !sqlite_production.contains("get_auth_value")
+                && !sqlite_production.contains("AUTH_TABLE_NAME")
+                && sqlite.contains("006_drop_auth_table"),
+            "Amazon Q auth_kv APIs are gone; 005 stays in history and 006 drops the table"
+        );
+        let doctor = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_cli/src/cli/doctor/mod.rs"));
+        let doctor_production = doctor.split("#[cfg(test)]").next().expect("doctor production");
+        assert!(
+            !doctor_production.contains("#![allow(dead_code)]")
+                && !doctor_production.contains("HyperIntegrationCheck")
+                && !doctor_production.contains("fig-hyper-integration")
+                && !doctor_production.contains("PluginDevModeCheck")
+                && !doctor_production.contains("struct FigBinCheck")
+                && !doctor_production.contains("analytics_event_name"),
+            "doctor no longer hides leftover Fig/Hyper/plugin checks behind allow(dead_code)"
+        );
+        let diagnostics = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_cli/src/cli/diagnostics.rs"));
+        let diagnostics_production = diagnostics
+            .split("#[cfg(test)]")
+            .next()
+            .expect("diagnostics production");
+        assert!(
+            !diagnostics_production.contains("verify_integration")
+                && !diagnostics_production.contains("TerminalIntegration"),
+            "terminal-integration verify IPC was only used by leftover Hyper/VSCode doctor checks"
+        );
     }
 
     #[test]

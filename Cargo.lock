@@ -2783,14 +2783,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fig_test_macro"
-version = "2.2.2"
-dependencies = [
- "quote",
- "syn 2.0.108",
-]
-
-[[package]]
 name = "fig_test_utils"
 version = "2.2.2"
 dependencies = [
