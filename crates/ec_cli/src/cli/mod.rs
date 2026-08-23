@@ -1,6 +1,6 @@
 //! CLI functionality
 
-pub mod app;
+mod app;
 mod completion;
 mod debug;
 mod diagnostics;
@@ -415,6 +415,11 @@ mod test {
         assert_parse!(["update"], CliRootCommands::Update(update::UpdateArgs {}));
         assert!(Cli::try_parse_from([CLI_BINARY_NAME, "setup"]).is_err());
         assert!(Cli::try_parse_from([CLI_BINARY_NAME, "theme"]).is_err());
+        assert!(Cli::try_parse_from([CLI_BINARY_NAME, "app"]).is_err());
+        assert!(Cli::try_parse_from([CLI_BINARY_NAME, "login"]).is_err());
+        assert!(Cli::try_parse_from([CLI_BINARY_NAME, "chat"]).is_err());
+        assert!(Cli::try_parse_from([CLI_BINARY_NAME, "translate"]).is_err());
+        assert!(Cli::try_parse_from([CLI_BINARY_NAME, "onboarding"]).is_err());
 
         let command = Cli::command();
         for command_name in ["debug", "init"] {
@@ -441,6 +446,10 @@ mod test {
         assert!(!src.contains("\"fig issue\""));
         let app = include_str!("app/mod.rs");
         assert!(!app.contains("\"fig update\"") && !app.contains("\"fig settings"));
+        assert!(
+            !app.contains("AppSubcommand") && !app.contains("user.onboarding") && app.contains("fn restart_desktop"),
+            "app module is the desktop restart helper, not Amazon Q onboarding/prompts"
+        );
         let local = include_str!("internal/local_state.rs");
         assert!(!local.contains("\"fig launch\""));
     }

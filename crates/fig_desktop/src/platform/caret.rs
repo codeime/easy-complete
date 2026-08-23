@@ -857,6 +857,32 @@ mod tests {
                 .contains("search_xdg_data_dirs"),
             "fig_util must not keep the fig.png XDG lookup"
         );
+        let directories = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_util/src/directories.rs"));
+        assert!(
+            !directories.contains("chat_global_context_path")
+                && !directories.contains("chat_profiles_dir")
+                && !directories.contains("amazonq"),
+            "Amazon Q chat config paths are gone"
+        );
+        let init = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_cli/src/cli/init.rs"));
+        let init_production = init.split("#[cfg(test)]").next().expect("init production");
+        assert!(
+            !init_production.contains("immediateLogin")
+                && !init_production.contains("auth-watcher.logged-in")
+                && !init_production.contains("login_prompt_code")
+                && !init_production.contains("fig app onboarding"),
+            "ec init must not inject Amazon Q login or onboarding"
+        );
+        let app = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_cli/src/cli/app/mod.rs"));
+        assert!(
+            !app.contains("AppSubcommand") && !app.contains("user.onboarding") && app.contains("fn restart_desktop"),
+            "CLI app module keeps restart_desktop and drops Amazon Q onboarding/prompts"
+        );
+        let cli_mod = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_cli/src/cli/mod.rs"));
+        assert!(
+            cli_mod.contains("\nmod app;") && !cli_mod.contains("pub mod app"),
+            "app must stay crate-private so dead Amazon Q subcommands cannot hide behind pub mod"
+        );
     }
 
     #[test]

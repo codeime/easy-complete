@@ -4,7 +4,6 @@ use std::io::{Write, stdout};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::LazyLock;
-use std::time::SystemTime;
 
 use clap::Args;
 use crossterm::style::Stylize;
@@ -148,24 +147,6 @@ async fn shell_init(shell: &Shell, when: &When, rcfile: &Option<String>) -> Resu
         to_source.push(assign_shell_variable(shell, "SHOULD_QTERM_LAUNCH", status, false));
     }
 
-    if let When::Post = when {
-        // if stdin().is_tty() && env::var_os(PROCESS_LAUNCHED_BY_Q).is_none() {
-        //     // if no value, assume that we have seen onboarding already.
-        //     // this is explicitly set in onboarding in macOS app.
-        //     let has_seen_onboarding: bool = fig_settings::state::get_bool_or("user.onboarding", true);
-
-        //     if is_logged_in().await && !has_seen_onboarding {
-        //         to_source.push("fig app onboarding".into())
-        //     }
-        // }
-
-        if fig_settings::state::get_bool_or("shell-integrations.immediateLogin", false)
-            && fig_settings::state::set_value("shell-integrations.immediateLogin", false).is_ok()
-        {
-            to_source.push(format!("{CLI_BINARY_NAME} login"));
-        }
-    }
-
     let is_jetbrains_terminal = Terminal::is_jetbrains_terminal();
 
     if when == &When::Pre && shell == &Shell::Bash && is_jetbrains_terminal {
@@ -243,19 +224,6 @@ async fn shell_init(shell: &Shell, when: &When, rcfile: &Option<String>) -> Resu
         }
     }
 
-    if when == &When::Post && !fig_settings::state::get_bool_or("desktop.auth-watcher.logged-in", true) {
-        let last_sent_at = fig_settings::state::get_int_or("cli.init.login-prompt.sent-at", 0);
-        let now = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        if now - last_sent_at > 60 * 60 * 36 {
-            let _ = fig_settings::state::set_value("cli.init.login-prompt.sent-at", now);
-            // TODO(grant): re-enable, this has not been tested enough before the 1.3.2 launch
-            // to_source.push(login_prompt_code(*shell));
-        }
-    }
-
     Ok(to_source.join("\n"))
 }
 
@@ -287,22 +255,6 @@ fn input_method_prompt_code(shell: Shell, terminal: &Terminal) -> String {
     )
 }
 
-#[allow(dead_code)]
-fn login_prompt_code(shell: Shell) -> String {
-    guard_source(
-        &shell,
-        false,
-        "Q_LOGIN_PROMPT",
-        GuardAssignment::AfterSourcing,
-        format!(
-            "printf '\\nRun {} to log back into {PRODUCT_NAME}. Logging back in allows you to use AI features such as inline completions, {}, and {}\\n\\n'\n",
-            format!("{CLI_BINARY_NAME} login").magenta(),
-            format!("{CLI_BINARY_NAME} translate").magenta(),
-            format!("{CLI_BINARY_NAME} chat").magenta()
-        ),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::process::{Command, Stdio};
@@ -327,13 +279,26 @@ mod tests {
     }
 
     #[test]
-    fn login_prompt_clock_does_not_unwrap() {
-        let src = include_str!("init.rs");
-        let start = src.find("cli.init.login-prompt.sent-at").expect("login prompt");
-        let body = &src[start.saturating_sub(200)..start + 400];
+    fn shell_init_does_not_inject_amazon_q_login() {
+        let production = include_str!("init.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
         assert!(
-            body.contains("unwrap_or_default()") && !body.contains("UNIX_EPOCH)\n            .unwrap()"),
-            "ec init runs on every prompt; a pre-epoch clock must not panic the shell hook"
+            !production.contains("immediateLogin")
+                && !production.contains("auth-watcher.logged-in")
+                && !production.contains("cli.init.login-prompt.sent-at")
+                && !production.contains("login_prompt_code")
+                && !production.contains("fig app onboarding")
+                && !production.contains("is_logged_in"),
+            "Post hooks must not read leftover Amazon Q login state or inject `ec login`"
+        );
+        let login = [CLI_BINARY_NAME, " login"].concat();
+        let chat = [CLI_BINARY_NAME, " chat"].concat();
+        let translate = [CLI_BINARY_NAME, " translate"].concat();
+        assert!(
+            !production.contains(&login) && !production.contains(&chat) && !production.contains(&translate),
+            "shell init must not emit Amazon Q login/chat/translate commands"
         );
     }
 
@@ -366,22 +331,6 @@ mod tests {
                 format!(
                     "\n🚀 {PRODUCT_NAME} supports {terminal}!\n\nEnable integrations with {terminal} by running:\n  {}\n\n",
                     format!("{CLI_BINARY_NAME} integrations install input-method").magenta()
-                )
-            );
-
-            let login_prompt_output = run_shell_stdout(&shell, &login_prompt_code(shell));
-
-            println!("=== login_prompt {shell:?} ===");
-            println!("{login_prompt_output}");
-            println!("===");
-
-            assert_eq!(
-                login_prompt_output,
-                format!(
-                    "\nRun {} to log back into {PRODUCT_NAME}. Logging back in allows you to use AI features such as inline completions, {}, and {}\n\n",
-                    format!("{CLI_BINARY_NAME} login").magenta(),
-                    format!("{CLI_BINARY_NAME} translate").magenta(),
-                    format!("{CLI_BINARY_NAME} chat").magenta()
                 )
             );
         }
