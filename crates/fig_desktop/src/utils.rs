@@ -1,4 +1,6 @@
 use std::sync::{Mutex, MutexGuard};
+#[cfg(any(target_os = "macos", test))]
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::{Deserialize, Serialize};
 use tao::dpi::{Position, Size};
@@ -13,6 +15,27 @@ use tracing::warn;
 pub(crate) fn recover_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|err| {
         warn!("recovered from poisoned mutex");
+        err.into_inner()
+    })
+}
+
+/// Recover an [`RwLock`] read after another thread panicked while holding it.
+///
+/// macOS `UNMANAGED.event_sender` / `window_server` are the callers; `cfg` so
+/// Linux clippy does not see unused helpers (`-D dead_code`).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn recover_rwlock_read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|err| {
+        warn!("recovered from poisoned rwlock");
+        err.into_inner()
+    })
+}
+
+/// Recover an [`RwLock`] write after another thread panicked while holding it.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn recover_rwlock_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(|err| {
+        warn!("recovered from poisoned rwlock");
         err.into_inner()
     })
 }
@@ -121,6 +144,17 @@ mod tests {
     }
 
     #[test]
+    fn rwlock_lock_recovers_from_poison() {
+        let lock = RwLock::new(7u8);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = lock.write().unwrap();
+            panic!("poison");
+        }));
+        assert_eq!(*recover_rwlock_read(&lock), 7);
+        assert_eq!(*recover_rwlock_write(&lock), 7);
+    }
+
+    #[test]
     fn activation_policy_and_debug_mode_recover_from_poison() {
         for (name, src) in [
             ("local_ipc/commands.rs", include_str!("local_ipc/commands.rs")),
@@ -154,6 +188,25 @@ mod tests {
         assert!(
             include_str!("platform/macos.rs").contains("recover_mutex(&self.focused_window)"),
             "focused_window should recover via recover_mutex"
+        );
+    }
+
+    #[test]
+    fn unmanaged_rwlocks_recover_from_poison() {
+        // include_str so Linux CI pins macos.rs without linking AppKit.
+        let macos = include_str!("platform/macos.rs");
+        assert!(
+            !macos.contains("event_sender.write().unwrap()")
+                && !macos.contains("event_sender.read().unwrap()")
+                && !macos.contains(".write().unwrap()")
+                && !macos.contains(".read().unwrap()"),
+            "UNMANAGED event_sender / window_server must not panic on RwLock poison"
+        );
+        assert!(
+            macos.contains("recover_rwlock_write(&UNMANAGED.event_sender)")
+                && macos.contains("recover_rwlock_write(&UNMANAGED.window_server)")
+                && macos.contains("recover_rwlock_read(&UNMANAGED.event_sender)"),
+            "event_sender / window_server should recover via recover_rwlock_*"
         );
     }
 

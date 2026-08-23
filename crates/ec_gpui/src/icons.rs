@@ -7,6 +7,7 @@ use gpui::{
     AnyElement, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, SharedString, Styled, StyledImage, div, img,
     px, rgb,
 };
+use tracing::warn;
 
 // Overlay tiles are 15px. These used to be 512² (~1 MB decoded RGBA each).
 const FOLDER: &[u8] = include_bytes!("../../fig_desktop/icons/autocomplete/folder.png");
@@ -267,16 +268,25 @@ pub fn identifier_icon_element(identifier: &str, size: f32) -> Option<AnyElement
     )
 }
 
-pub fn named_icon_element(kind: &str, size: f32) -> gpui::Img {
-    let key = icon_for_kind(kind);
-    let image = cached_image(key.as_ref()).unwrap_or_else(|| cached_image("box").expect("box icon"));
-    img(image)
+fn empty_icon_element(size: f32) -> AnyElement {
+    div()
         .w(px(size))
         .h(px(size))
         .min_w(px(size))
         .min_h(px(size))
         .flex_shrink_0()
-        .object_fit(ObjectFit::Contain)
+        .into_any_element()
+}
+
+pub fn named_icon_element(kind: &str, size: f32) -> AnyElement {
+    let key = icon_for_kind(kind);
+    match cached_image(key.as_ref()).or_else(|| cached_image("box")) {
+        Some(image) => png_icon_element(image, size).into_any_element(),
+        None => {
+            warn!(icon = %key, "missing bundled overlay icon");
+            empty_icon_element(size)
+        },
+    }
 }
 
 pub fn png_icon_element(image: Arc<Image>, size: f32) -> gpui::Img {
@@ -291,15 +301,14 @@ pub fn png_icon_element(image: Arc<Image>, size: f32) -> gpui::Img {
 
 /// The history tile's inner glyph, sized like the old SVG icon (74% of the
 /// 15px icon box). The caller supplies the neutral rounded tile background.
-pub fn history_icon_image_element(size: f32) -> gpui::Img {
-    let image = cached_image("history").expect("history icon");
-    img(image)
-        .w(px(size))
-        .h(px(size))
-        .min_w(px(size))
-        .min_h(px(size))
-        .flex_shrink_0()
-        .object_fit(ObjectFit::Contain)
+pub fn history_icon_image_element(size: f32) -> AnyElement {
+    match cached_image("history") {
+        Some(image) => png_icon_element(image, size).into_any_element(),
+        None => {
+            warn!("missing bundled history icon");
+            empty_icon_element(size)
+        },
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +392,29 @@ mod tests {
         assert_eq!(
             template_icon_parts("fig://template?color=3498db&badge=%F0%9F%92%A1"),
             Some((0x3498db, "💡".into()))
+        );
+    }
+
+    #[test]
+    fn named_bundled_icons_still_decode() {
+        for name in ["box", "folder", "file", "symlink", "git", "command"] {
+            let bytes = super::named_bytes(name).unwrap_or_else(|| panic!("{name} must be bundled"));
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{name}");
+            assert!(bytes.len() >= 24 && &bytes[12..16] == b"IHDR", "{name} IHDR");
+            assert!(cached_image(name).is_some(), "{name}");
+        }
+        let history = super::named_bytes("history").expect("history");
+        assert!(
+            std::str::from_utf8(history).is_ok_and(|svg| svg.contains("<svg")),
+            "history icon must remain an SVG"
+        );
+        assert!(cached_image("history").is_some());
+        let src = include_str!("icons.rs");
+        // Concat so this pin's own source does not contain the old expect literals.
+        assert!(
+            !src.contains(&["expect(\"", "box icon\")"].concat())
+                && !src.contains(&["expect(\"", "history icon\")"].concat()),
+            "missing bundled overlay icons must not panic"
         );
     }
 }

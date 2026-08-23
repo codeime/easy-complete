@@ -6,7 +6,7 @@ use fig_settings::JsonStore;
 use fig_util::directories;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde_json::{Map, Value};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::Event;
 use crate::EventLoopProxy;
@@ -16,15 +16,20 @@ use crate::notification_bus::NOTIFICATION_BUS;
 pub async fn setup_listeners(notifications_state: Arc<NotificationsState>, proxy: EventLoopProxy) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let mut watcher = notify::recommended_watcher(move |res| match res {
+    let mut watcher = match notify::recommended_watcher(move |res| match res {
         Ok(event) => {
             if let Err(err) = tx.send(event) {
                 error!(%err, "failed to send notify event");
             }
         },
         Err(err) => error!(%err, "notify watcher"),
-    })
-    .unwrap();
+    }) {
+        Ok(watcher) => watcher,
+        Err(err) => {
+            warn!(%err, "failed to create settings file watcher; settings live-reload disabled");
+            return;
+        },
+    };
 
     let settings_path = match directories::settings_path() {
         Ok(settings_path) => match settings_path.parent() {
@@ -163,5 +168,23 @@ fn json_map_diff(
         if !map_a.contains_key(key) {
             on_new(key, value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn settings_watcher_creation_does_not_panic() {
+        let src = include_str!("file_watcher.rs");
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        // Concat so this pin's own source does not contain the old panic.
+        assert!(
+            !production.contains(&[")\n    .unwrap", "();"].concat()),
+            "recommended_watcher must warn and return instead of panicking the desktop"
+        );
+        assert!(
+            src.contains("failed to create settings file watcher"),
+            "a bad watch setup should warn and disable live-reload"
+        );
     }
 }

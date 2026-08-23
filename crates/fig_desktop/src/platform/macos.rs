@@ -297,13 +297,10 @@ impl PlatformStateImpl {
                     }
                 }
 
-                UNMANAGED.event_sender.write().unwrap().replace(self.proxy.clone());
+                crate::utils::recover_rwlock_write(&UNMANAGED.event_sender).replace(self.proxy.clone());
                 let (tx, rx) = flume::unbounded::<WindowServerEvent>();
 
-                UNMANAGED
-                    .window_server
-                    .write()
-                    .unwrap()
+                crate::utils::recover_rwlock_write(&UNMANAGED.window_server)
                     .replace(Arc::new(Mutex::new(WindowServer::new(tx))));
 
                 let accessibility_proxy = self.proxy.clone();
@@ -667,10 +664,7 @@ impl PlatformStateImpl {
             let caret = caret.context("Failed to get cursor position")?;
             debug!("Sending caret update {:?}", caret);
 
-            UNMANAGED
-                .event_sender
-                .read()
-                .unwrap()
+            crate::utils::recover_rwlock_read(&UNMANAGED.event_sender)
                 .clone()
                 .unwrap()
                 .send_event(Event::WindowEvent {
