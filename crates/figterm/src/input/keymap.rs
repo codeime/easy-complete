@@ -43,7 +43,7 @@ impl<Value: Debug> Node<Value> {
                         // An unambiguous match for the entire input
                         return NodeFind::Exact(depth, value);
                     },
-                    None => panic!("Node has no children and no value!?"),
+                    None => return NodeFind::None,
                 }
             }
             return match self.value.as_ref() {
@@ -185,6 +185,12 @@ mod test {
     fn lookup_empty() {
         let km: KeyMap<bool> = KeyMap::new();
         assert_eq!(km.lookup("boo"), Found::None);
+    }
+
+    #[test]
+    fn lookup_empty_key_on_empty_map_does_not_panic() {
+        let km: KeyMap<bool> = KeyMap::new();
+        assert_eq!(km.lookup(""), Found::None);
     }
 
     #[test]

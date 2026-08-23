@@ -698,8 +698,7 @@ fn walk_spec(
                 continue;
             }
         }
-        if option_arg.is_some() {
-            let state = option_arg.expect("checked above");
+        if let Some(state) = option_arg.take() {
             option_arg = state.arg.is_variadic.then_some(OptionArgState {
                 arg: state.arg,
                 count: state.count + 1,
@@ -2278,6 +2277,19 @@ mod tests {
         assert!(!is_fresh_command_position(""));
         assert!(!is_fresh_command_position("FOO=1 "));
         assert!(!is_fresh_command_position("echo x && FOO=1 "));
+    }
+
+    #[test]
+    fn option_arg_walk_does_not_expect() {
+        let src = include_str!("lookup.rs");
+        assert!(
+            !src.contains(&["option_arg", ".expect("].concat()),
+            "a live option-arg walk must take the state, not panic the engine worker"
+        );
+        assert!(
+            src.contains("if let Some(state) = option_arg.take()"),
+            "option-arg state still advances the walk"
+        );
     }
 
     #[test]

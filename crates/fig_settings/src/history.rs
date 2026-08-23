@@ -1,6 +1,5 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 use fig_util::directories;
@@ -11,7 +10,7 @@ pub use rusqlite;
 use rusqlite::params;
 use rusqlite::types::ValueRef;
 use serde_json::Value;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::Result;
 use crate::sqlite::{Db, database};
@@ -133,11 +132,11 @@ impl History {
                 legacy_history_file_opts.mode(0o600);
             }
 
-            let legacy_history_file = legacy_history_file_opts.open(
-                [directories::fig_data_dir().unwrap(), "history".into()]
-                    .into_iter()
-                    .collect::<PathBuf>(),
-            )?;
+            let Ok(data_dir) = directories::fig_data_dir() else {
+                warn!("skipping legacy history write; data dir unavailable");
+                return Ok(());
+            };
+            let legacy_history_file = legacy_history_file_opts.open(data_dir.join("history"))?;
 
             let mut legacy_history_buff = BufWriter::new(legacy_history_file);
 
@@ -404,6 +403,21 @@ mod tests {
     #[test]
     fn history_new_test() {
         let _ = History::new();
+    }
+
+    #[test]
+    fn legacy_history_write_does_not_unwrap_data_dir() {
+        let src = include_str!("history.rs");
+        let start = src.find("fn insert_command_history").expect("insert");
+        let body = &src[start..];
+        assert!(
+            !body.contains(&["fig_data_dir()", ".unwrap()"].concat()),
+            "a missing data dir must skip the legacy history file, not panic ecterm"
+        );
+        assert!(
+            body.contains("fig_data_dir()") && body.contains("skipping legacy history write"),
+            "legacy history still writes next to the sqlite db when the data dir exists"
+        );
     }
 
     #[test]

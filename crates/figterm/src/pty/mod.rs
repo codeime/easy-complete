@@ -101,6 +101,14 @@ mod win32_bool_tests {
             child.contains("TerminateProcess"),
             "Win32 child kill is TerminateProcess"
         );
+        assert!(
+            !child.contains(&["try_clone()", ".unwrap()"].concat()),
+            "a failed DuplicateHandle must not panic ecterm"
+        );
+        assert!(
+            child.contains("FailedChildKiller"),
+            "clone_killer degrades when the process handle cannot be duplicated"
+        );
     }
 }
 

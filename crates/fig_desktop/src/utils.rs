@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "macos", test))]
+use std::ffi::CString;
 use std::sync::{Mutex, MutexGuard};
 #[cfg(any(target_os = "macos", test))]
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -38,6 +40,14 @@ pub(crate) fn recover_rwlock_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, 
         warn!("recovered from poisoned rwlock");
         err.into_inner()
     })
+}
+
+/// C ABI strings (ObjC type encodings, paths) must not contain interior NUL.
+///
+/// A panic here would take down the desktop during dock-reopen method install.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn c_string_without_nul(bytes: impl Into<Vec<u8>>) -> Option<CString> {
+    CString::new(bytes).ok()
 }
 
 /// Determines if the build is ran in debug mode
@@ -230,8 +240,21 @@ mod tests {
             "caret updates should go through Option event_sender"
         );
         assert!(
-            macos.contains("GLOBAL_PROXY.get().unwrap()") && macos.contains("CString::new(types).unwrap()"),
-            "OnceLock / CString panics are still the remaining macos unwraps"
+            !macos.contains("GLOBAL_PROXY.get().unwrap()") && !macos.contains("CString::new(types).unwrap()"),
+            "dock reopen / ObjC type encodings must not panic the desktop"
+        );
+        assert!(
+            macos.contains("GLOBAL_PROXY.get()") && macos.contains("c_string_without_nul"),
+            "dock reopen still uses GLOBAL_PROXY; encodings still go through CString"
+        );
+    }
+
+    #[test]
+    fn c_string_without_nul_rejects_interior_nul() {
+        assert!(c_string_without_nul("v@:").is_some());
+        assert!(
+            c_string_without_nul("v@:\0i").is_none(),
+            "an interior NUL must skip the override, not panic"
         );
     }
 

@@ -94,9 +94,12 @@ impl AppRuntime {
     #[allow(unused_mut)]
     pub async fn run(mut self) -> anyhow::Result<()> {
         let window_target = EventLoopWindowTarget;
-        self.platform_state
+        if let Err(err) = self
+            .platform_state
             .handle(PlatformBoundEvent::Initialize, &window_target)
-            .expect("Failed to initialize platform state");
+        {
+            diagnostic_exit(&format!("failed to initialize platform state: {err:#}"));
+        }
 
         {
             let platform_state = self.platform_state.clone();
@@ -110,13 +113,18 @@ impl AppRuntime {
             });
         }
 
-        tokio::spawn(fig_remote_ipc::remote::start_remote_ipc(
-            fig_util::directories::local_remote_socket_path().unwrap(),
-            self.figterm_state.clone(),
-            RemoteHook {
-                proxy: self.proxy.clone(),
+        match fig_util::directories::local_remote_socket_path() {
+            Ok(path) => {
+                tokio::spawn(fig_remote_ipc::remote::start_remote_ipc(
+                    path,
+                    self.figterm_state.clone(),
+                    RemoteHook {
+                        proxy: self.proxy.clone(),
+                    },
+                ));
             },
-        ));
+            Err(err) => error!(%err, "Unable to start remote ipc"),
+        }
 
         file_watcher::setup_listeners(self.proxy.clone()).await;
 
@@ -193,7 +201,7 @@ impl AppRuntime {
         let context = self.context;
         let show_settings_after_normal_launch = self.show_settings_after_normal_launch;
 
-        crate::gpui_host::start_application(move |cx| {
+        if let Err(err) = crate::gpui_host::start_application(move |cx| {
             let overlay = crate::overlay::OverlayController::start(
                 cx,
                 engine,
@@ -213,8 +221,9 @@ impl AppRuntime {
                 tray,
             });
             Ok((host, event_rx))
-        })
-        .expect("gpui host");
+        }) {
+            diagnostic_exit(&format!("failed to start gpui host: {err:#}"));
+        }
         Ok(())
     }
 }
@@ -303,4 +312,30 @@ async fn init_notification_listeners(proxy: EventLoopProxy) {
             proxy.send_event_or_warn(Event::SetTrayVisible(enabled));
         }
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bootstrap_startup_does_not_unwrap() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("local_remote_socket_path().unwrap()"),
+            "a missing remote socket path must skip remote IPC, not panic the desktop"
+        );
+        assert!(
+            !production.contains("Failed to initialize platform state"),
+            "platform Initialize failure must diagnostic_exit, not panic"
+        );
+        assert!(
+            !production.contains(".expect(\"gpui host\")"),
+            "GPUI host failure must diagnostic_exit, not panic"
+        );
+        assert!(
+            production.contains("local_remote_socket_path()")
+                && production.contains("failed to initialize platform state")
+                && production.contains("failed to start gpui host"),
+            "startup still initializes platform, remote IPC, and GPUI"
+        );
+    }
 }

@@ -521,12 +521,19 @@ impl KeyCode {
                 csi_u_encode(&mut buf, c, mods, modes.encoding)?;
             },
 
-            Char(c) if mods.contains(Modifiers::CTRL) && ctrl_mapping(c).is_some() => {
-                let c = ctrl_mapping(c).unwrap();
-                if mods.contains(Modifiers::ALT) {
+            Char(c) if mods.contains(Modifiers::CTRL) => {
+                if let Some(mapped) = ctrl_mapping(c) {
+                    if mods.contains(Modifiers::ALT) {
+                        buf.push(0x1b as char);
+                    }
+                    buf.push(mapped);
+                } else if (c.is_ascii_alphanumeric() || c.is_ascii_punctuation()) && mods.contains(Modifiers::ALT) {
+                    // Same as the ALT arm below: this CTRL arm used not to match.
                     buf.push(0x1b as char);
+                    buf.push(c);
+                } else {
+                    csi_u_encode(&mut buf, c, mods, modes.encoding)?;
                 }
-                buf.push(c);
             },
 
             // When alt is pressed, send escape first to indicate to the peer that
@@ -786,8 +793,8 @@ fn csi_u_encode(buf: &mut String, c: char, mods: Modifiers, encoding: KeyboardEn
     if encoding == KeyboardEncoding::CsiU && is_ascii(c) {
         write!(buf, "\x1b[{};{}u", c as u32, 1 + encode_modifiers(mods))?;
     } else {
-        let c = if mods.contains(Modifiers::CTRL) && ctrl_mapping(c).is_some() {
-            ctrl_mapping(c).unwrap()
+        let c = if mods.contains(Modifiers::CTRL) {
+            ctrl_mapping(c).unwrap_or(c)
         } else {
             c
         };
@@ -1394,10 +1401,8 @@ impl InputParser {
 
     /// Returns the first char from a str and the length of that char
     /// in *bytes*.
-    fn first_char_and_len(s: &str) -> (char, usize) {
-        let mut iter = s.chars();
-        let c = iter.next().unwrap();
-        (c, c.len_utf8())
+    fn first_char_and_len(s: &str) -> Option<(char, usize)> {
+        s.chars().next().map(|c| (c, c.len_utf8()))
     }
 
     /// This is a horrible function to pull off the first unicode character
@@ -1410,18 +1415,15 @@ impl InputParser {
         // state that the maximum expansion for a `char` is 4 bytes.
         let bytes = &bytes[..bytes.len().min(4)];
         match std::str::from_utf8(bytes) {
-            Ok(s) => {
-                let (c, len) = Self::first_char_and_len(s);
-                Some((c, len))
-            },
+            Ok(s) => Self::first_char_and_len(s),
             Err(err) => {
                 let (valid, _after_valid) = bytes.split_at(err.valid_up_to());
-                if !valid.is_empty() {
-                    let s = unsafe { std::str::from_utf8_unchecked(valid) };
-                    let (c, len) = Self::first_char_and_len(s);
-                    Some((c, len))
-                } else {
+                if valid.is_empty() {
                     None
+                } else {
+                    // SAFETY: split at utf8::valid_up_to.
+                    let s = unsafe { std::str::from_utf8_unchecked(valid) };
+                    Self::first_char_and_len(s)
                 }
             },
         }
@@ -1648,6 +1650,13 @@ impl InputParser {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn decode_one_char_empty_does_not_panic() {
+        assert_eq!(InputParser::decode_one_char(b""), None);
+        assert_eq!(InputParser::first_char_and_len(""), None);
+        assert_eq!(InputParser::first_char_and_len("ab"), Some(('a', 1)));
+    }
 
     #[test]
     fn simple() {

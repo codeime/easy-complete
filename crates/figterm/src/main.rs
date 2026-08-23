@@ -429,8 +429,10 @@ fn build_shell_command(command: Option<&[String]>) -> Result<CommandBuilder> {
     let mut builder = match command {
         Some(command) => {
             let mut iter = command.iter().map(|s| s.as_str());
-
-            let mut builder = CommandBuilder::new(iter.next().unwrap());
+            let Some(prog) = iter.next() else {
+                anyhow::bail!("empty command");
+            };
+            let mut builder = CommandBuilder::new(prog);
             for arg in iter {
                 builder.arg(arg);
             }
@@ -481,10 +483,10 @@ fn launch_shell(command: Option<&[String]>) -> Result<()> {
     let mut args: Vec<&OsStr> = std::vec![cmd.get_program()];
     args.extend(cmd.get_args());
 
-    let cargs: Vec<_> = args
-        .into_iter()
-        .map(|arg| CString::new(arg.to_string_lossy().as_ref()).expect("Failed to convert arg to CString"))
-        .collect();
+    let cargs = args.into_iter().map(cstring_from_arg).collect::<Result<Vec<_>>>()?;
+    if cargs.is_empty() {
+        anyhow::bail!("empty command");
+    }
     for (key, val) in cmd.get_envs() {
         unsafe {
             match val {
@@ -496,8 +498,13 @@ fn launch_shell(command: Option<&[String]>) -> Result<()> {
         }
     }
 
-    execvp(&cargs[0], &cargs).expect("Failed to execvp");
+    execvp(&cargs[0], &cargs).map_err(|err| anyhow!("Failed to execvp: {err}"))?;
     unreachable!()
+}
+
+#[cfg(unix)]
+fn cstring_from_arg(arg: &OsStr) -> Result<CString> {
+    CString::new(arg.to_string_lossy().as_ref()).map_err(|err| anyhow!("command argument contains interior NUL: {err}"))
 }
 
 fn figterm_main(command: Option<&[String]>) -> Result<()> {
@@ -1084,6 +1091,43 @@ mod tests {
     #[test]
     fn term_keeps_one_line_of_scrollback() {
         assert_eq!(TERM_SCROLLBACK_LINES, 1);
+    }
+
+    #[test]
+    fn empty_command_does_not_panic() {
+        let err = build_shell_command(Some(&[])).unwrap_err();
+        assert!(
+            err.to_string().contains("empty command"),
+            "an empty wrap argv must fail, not unwrap the program name"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrap_argv_with_interior_nul_does_not_panic() {
+        use std::ffi::OsStr;
+        let err = cstring_from_arg(OsStr::new("bad\0arg")).unwrap_err();
+        assert!(
+            err.to_string().contains("NUL"),
+            "interior NUL must be a Result, not a CString expect"
+        );
+    }
+
+    #[test]
+    fn launch_shell_does_not_unwrap_cstring_or_exec() {
+        let production = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains(&["expect(", "\"Failed to convert arg to CString\")"].concat())
+                && !production.contains(&["expect(", "\"Failed to execvp\")"].concat()),
+            "a NUL in the wrap argv or a failed execvp must return Err, not panic ecterm"
+        );
+        assert!(
+            production.contains("cstring_from_arg") && production.contains("Failed to execvp"),
+            "unix wrap still converts args and execs the parent shell"
+        );
     }
 
     #[test]

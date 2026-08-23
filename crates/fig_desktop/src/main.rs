@@ -242,8 +242,13 @@ async fn async_main() -> ExitCode {
             let _ = update::check_for_update(false, false).await;
         });
     }
-    runtime.run().await.unwrap();
-    ExitCode::SUCCESS
+    match runtime.run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            error!(%err, "desktop event loop failed");
+            ExitCode::FAILURE
+        },
+    }
 }
 
 /// Overlay placement is X11-only. Unset Wayland when DISPLAY is set unless
@@ -471,5 +476,21 @@ mod tests {
         // `kill(pid, 0)` and would read as still running.
         child.wait().expect("reap");
         assert!(wait_for_exit(&[pid], Duration::from_millis(500)).await);
+    }
+}
+
+#[cfg(test)]
+mod panic_safety {
+    #[test]
+    fn desktop_run_does_not_unwrap_the_event_loop() {
+        let src = include_str!("main.rs");
+        assert!(
+            !src.contains(&["runtime.run().await", ".unwrap()"].concat()),
+            "a failed event loop must return ExitCode::FAILURE, not panic"
+        );
+        assert!(
+            src.contains("runtime.run().await"),
+            "the desktop still runs the event loop"
+        );
     }
 }

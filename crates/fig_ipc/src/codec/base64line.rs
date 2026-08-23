@@ -62,8 +62,8 @@ impl<T: Message> Encoder<T> for Base64LineCodec<T> {
 
         if self.compressed {
             let mut f = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
-            f.write_all(&encoded_message).unwrap();
-            encoded_message = f.finish().unwrap();
+            f.write_all(&encoded_message)?;
+            encoded_message = f.finish()?;
         }
 
         let base64_encoded = BASE64_STANDARD.encode(encoded_message);
@@ -149,6 +149,22 @@ mod tests {
 
         // Just make sure the size is at least somewhat smaller, the real value is closer to 0.5
         assert!(ratio < 0.9);
+    }
+
+    #[test]
+    fn compressed_encode_does_not_unwrap() {
+        let src = include_str!("base64line.rs");
+        let start = src.find("fn encode(").expect("encode");
+        let end = src[start..].find("\n}").expect("encode body") + start;
+        let body = &src[start..end];
+        assert!(
+            !body.contains(".unwrap()"),
+            "gzip encode must return io::Error, not panic the remote IPC path"
+        );
+        assert!(
+            body.contains("write_all(&encoded_message)?") && body.contains("f.finish()?"),
+            "gzip still compresses the protobuf body"
+        );
     }
 
     #[test]

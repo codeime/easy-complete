@@ -31,7 +31,7 @@ pub struct WinChild {
 impl WinChild {
     fn child_has_completed(&mut self) -> io::Result<Option<ExitStatus>> {
         let mut status: DWORD = 0;
-        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
+        let proc = crate::recover_mutex(&self.proc).try_clone()?;
         let res = unsafe { GetExitCodeProcess(proc.as_raw_handle() as _, &mut status) };
         if crate::pty::win32_bool_succeeded(res as i32) {
             if status == STILL_ACTIVE {
@@ -45,7 +45,7 @@ impl WinChild {
     }
 
     fn do_kill(&mut self) -> io::Result<()> {
-        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
+        let proc = crate::recover_mutex(&self.proc).try_clone()?;
         let res = unsafe { TerminateProcess(proc.as_raw_handle() as _, 1) };
         let err = io::Error::last_os_error();
         if crate::pty::win32_bool_succeeded(res as i32) {
@@ -56,6 +56,16 @@ impl WinChild {
     }
 }
 
+fn clone_child_killer(proc: io::Result<OwnedHandle>) -> Box<dyn ChildKiller + Send + Sync> {
+    match proc {
+        Ok(proc) => Box::new(WinChildKiller { proc }),
+        Err(err) => {
+            error!(%err, "failed to clone ConPTY process handle for killer");
+            Box::new(FailedChildKiller)
+        },
+    }
+}
+
 impl ChildKiller for WinChild {
     fn kill(&mut self) -> io::Result<()> {
         self.do_kill().ok();
@@ -63,8 +73,7 @@ impl ChildKiller for WinChild {
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
-        Box::new(WinChildKiller { proc })
+        clone_child_killer(crate::recover_mutex(&self.proc).try_clone())
     }
 }
 
@@ -72,6 +81,9 @@ impl ChildKiller for WinChild {
 pub struct WinChildKiller {
     proc: OwnedHandle,
 }
+
+#[derive(Debug)]
+struct FailedChildKiller;
 
 impl ChildKiller for WinChildKiller {
     fn kill(&mut self) -> io::Result<()> {
@@ -85,8 +97,17 @@ impl ChildKiller for WinChildKiller {
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-        let proc = self.proc.try_clone().unwrap();
-        Box::new(WinChildKiller { proc })
+        clone_child_killer(self.proc.try_clone())
+    }
+}
+
+impl ChildKiller for FailedChildKiller {
+    fn kill(&mut self) -> io::Result<()> {
+        Err(io::Error::other("failed to clone ConPTY process handle"))
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(FailedChildKiller)
     }
 }
 
@@ -99,7 +120,7 @@ impl Child for WinChild {
         if let Ok(Some(status)) = self.try_wait() {
             return Ok(status);
         }
-        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
+        let proc = crate::recover_mutex(&self.proc).try_clone()?;
         unsafe {
             WaitForSingleObject(proc.as_raw_handle() as _, INFINITE);
         }

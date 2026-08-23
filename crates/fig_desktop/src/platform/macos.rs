@@ -231,13 +231,13 @@ impl PlatformStateImpl {
     }
 
     //
-    fn method_type_encoding(ret: &Encoding, args: &[Encoding]) -> CString {
+    fn method_type_encoding(ret: &Encoding, args: &[Encoding]) -> Option<CString> {
         let mut types = ret.as_str().to_owned();
         // First two arguments are always self and the selector
         types.push_str(<*mut Object>::encode().as_str());
         types.push_str(Sel::encode().as_str());
         types.extend(args.iter().map(|e| e.as_str()));
-        CString::new(types).unwrap()
+        crate::utils::c_string_without_nul(types)
     }
 
     fn override_app_delegate_method<F>(sel: Sel, func: F)
@@ -260,7 +260,10 @@ impl PlatformStateImpl {
             let cls: *mut Class = msg_send![delegate, class];
             let encs = F::Args::encodings();
             let encs = encs.as_ref();
-            let types = Self::method_type_encoding(&F::Ret::encode(), encs);
+            let Some(types) = Self::method_type_encoding(&F::Ret::encode(), encs) else {
+                warn!("skipping app delegate override; type encoding is not a valid C string");
+                return;
+            };
             let res = class_addMethod(cls, sel, func.imp(), types.as_ptr());
             trace!(sel =% sel.name(), %res, "class_addMethod on app delegate");
         }
@@ -365,7 +368,10 @@ impl PlatformStateImpl {
                 ) -> BOOL {
                     trace!("application_should_handle_reopen");
 
-                    let proxy = GLOBAL_PROXY.get().unwrap();
+                    let Some(proxy) = GLOBAL_PROXY.get() else {
+                        warn!("dock reopen before event loop proxy is ready");
+                        return YES;
+                    };
 
                     if let Err(err) = proxy.send_event(Event::WindowEvent {
                         window_id: SETTINGS_ID,
