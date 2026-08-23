@@ -117,7 +117,7 @@ pub enum InputMethodDebugAction {
 pub enum DebugSubcommand {
     /// Debug the app
     App,
-    /// Switch to another branch of a Fig.js app
+    /// Switch the debug build channel for overlay or settings
     Build {
         #[arg(value_enum)]
         app: App,
@@ -162,7 +162,7 @@ pub enum DebugSubcommand {
         #[arg(long, requires("watch"), default_value_t = 0.25)]
         rate: f64,
     },
-    /// Open up the devtools of a specific webview
+    /// Show the overlay or settings window
     Devtools { app: App },
     /// Disables sourcing of user shell config and instead uses a minimal shell config
     Shell,
@@ -261,7 +261,7 @@ impl DebugSubcommand {
                     if let Err(err) =
                         fig_ipc::local::set_log_level(level.as_ref().clone().unwrap_or_else(|| "DEBUG".into())).await
                     {
-                        println!("Could not set log level for fig_desktop: {err}");
+                        println!("Could not set log level for {PRODUCT_NAME}: {err}");
                     }
                 }
 
@@ -273,7 +273,7 @@ impl DebugSubcommand {
                     };
 
                     if let Err(err) = fig_ipc::local::set_log_level("INFO".into()).await {
-                        println!("Could not restore log level for fig_desktop: {err}");
+                        println!("Could not restore log level for {PRODUCT_NAME}: {err}");
                     }
 
                     std::process::exit(code);
@@ -454,7 +454,10 @@ impl DebugSubcommand {
                 }
                 println!("\n\n\n-------\nFinished writing to {}", outfile.display());
                 println!("Please send this file to the development team");
-                println!("Or attach it to a Github issue (run '{}')", "fig issue".magenta());
+                println!(
+                    "Or attach it to a Github issue (run '{}')",
+                    format!("{CLI_BINARY_NAME} issue").magenta()
+                );
             },
             #[cfg(target_os = "macos")]
             DebugSubcommand::VerifyCodesign => {

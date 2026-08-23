@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn omitted_priority_matches_webview_default() {
+    fn omitted_priority_defaults_to_fifty() {
         assert_eq!(Suggestion::new("status", "", "subcommand").priority, 50);
         assert_eq!(
             Suggestion::new("status", "", "subcommand")
@@ -621,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn string_query_term_matches_webview_separator_behavior() {
+    fn string_query_term_uses_separator_suffix() {
         assert_eq!(query_term_for("~/foo", Some("/")), "foo");
         assert_eq!(query_term_for("a/b/c", Some("/")), "c");
         assert_eq!(query_term_for("foo", Some("/")), "foo");

@@ -156,7 +156,7 @@ impl AppSubcommand {
                             if !already_seen_hint {
                                 println!(
                                     "(To turn off automatic updates, run {})",
-                                    "fig settings app.disableAutoupdates true".magenta()
+                                    format!("{CLI_BINARY_NAME} settings app.disableAutoupdates true").magenta()
                                 );
                                 state::set_value("DISPLAYED_AUTOUPDATE_SETTINGS_HINT", true)?;
                             }
@@ -180,7 +180,7 @@ impl AppSubcommand {
                             trace!("autoupdates are disabled.");
 
                             println!("A new version of {PRODUCT_NAME} is available. (Autoupdates are disabled)");
-                            println!("To update, run: {}", "fig update".magenta());
+                            println!("To update, run: {}", format!("{CLI_BINARY_NAME} update").magenta());
                         }
                     }
                 } else {
@@ -193,7 +193,7 @@ impl AppSubcommand {
                         if !already_seen_hint {
                             println!(
                                 "(To turn off autolaunch, run {})",
-                                "fig settings app.disableAutolaunch true".magenta()
+                                format!("{CLI_BINARY_NAME} settings app.disableAutolaunch true").magenta()
                             );
                             fig_settings::state::set_value("DISPLAYED_AUTOLAUNCH_SETTINGS_HINT", true)?;
                         }

@@ -393,6 +393,12 @@ mod tests {
             linux.contains("-p fig_desktop") && macos.contains("-p fig_desktop"),
             "dist still builds fig_desktop, which links fig_desktop_api"
         );
+        assert!(
+            !workspace.contains("features = [\"full\"]")
+                && workspace.contains("rt-multi-thread")
+                && workspace.contains("\"signal\""),
+            "workspace tokio lists used features instead of full"
+        );
     }
 
     #[test]

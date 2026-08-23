@@ -338,7 +338,7 @@ export const processes: Process[] = [
   {
     bin: "easy-complete",
     crate: "fig_desktop",
-    role: "Native app host — owns the autocomplete overlay and dashboard (React apps in wry WebViews), system tray and window management.",
+    role: "Native app host — owns the GPUI autocomplete overlay and settings window, system tray and window management.",
   },
   {
     bin: "ecterm",
@@ -347,7 +347,7 @@ export const processes: Process[] = [
   },
   {
     bin: "ec",
-    crate: "q_cli",
+    crate: "ec_cli",
     role: "CLI entry point — setup, integrations, diagnostic, settings and more.",
   },
 ];

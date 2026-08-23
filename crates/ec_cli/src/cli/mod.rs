@@ -413,4 +413,16 @@ mod test {
         assert!(help.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
         assert!(help.contains("https://github.com/chen86860/easy-complete"));
     }
+
+    #[test]
+    fn debug_help_copy_is_native_era() {
+        let src = include_str!("debug/mod.rs");
+        assert!(!src.contains("specific webview"));
+        assert!(!src.contains("Fig.js"));
+        assert!(!src.contains("\"fig issue\""));
+        let app = include_str!("app/mod.rs");
+        assert!(!app.contains("\"fig update\"") && !app.contains("\"fig settings"));
+        let local = include_str!("internal/local_state.rs");
+        assert!(!local.contains("\"fig launch\""));
+    }
 }

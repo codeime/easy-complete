@@ -899,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn script_timeout_matches_webview_default_and_max_priority() {
+    fn script_timeout_default_and_max_priority() {
         assert_eq!(DEFAULT_SCRIPT_TIMEOUT_MS, 5_000);
         assert_eq!(effective_script_timeout_ms(5_000, None, None), 5_000);
         assert_eq!(effective_script_timeout_ms(5_000, Some(6_000), None), 6_000);
@@ -1252,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn split_on_wins_over_post_process_like_the_webview() {
+    fn split_on_wins_over_post_process() {
         // Fig's `getScriptSuggestions` is `if (splitOn) … else if (postProcess)`.
         // A spec that declares both never sees its hook run.
         let dir = tempfile::tempdir().unwrap();

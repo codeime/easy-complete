@@ -1102,13 +1102,29 @@ mod tests {
     }
 
     #[test]
-    fn clean_output_matches_webview() {
+    fn clean_output_strips_cr_ansi_and_blank_lines() {
         assert_eq!(clean_output("\n\r\nhello\x1b[?25h\n\n"), "hello");
         assert_eq!(clean_output("a\r\nb"), "a\nb");
     }
 
     #[test]
-    fn execute_command_reads_only_the_webview_fields() {
+    fn js_host_generate_runtime_tests_do_not_use_webview_fn_names() {
+        let matches = ["matches", "webview"].join("_");
+        let like = ["like", "the", "webview"].join("_");
+        for src in [
+            include_str!("js_host.rs"),
+            include_str!("generate.rs"),
+            include_str!("runtime.rs"),
+        ] {
+            assert!(
+                !src.contains(&matches) && !src.contains(&like),
+                "engine tests should use native-era names"
+            );
+        }
+    }
+
+    #[test]
+    fn execute_command_maps_command_args_cwd_env_timeout() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("demo_custom_0.js"),

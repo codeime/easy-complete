@@ -22,6 +22,6 @@ pub use macos::main;
 
 #[cfg(not(target_os = "macos"))]
 fn main() -> ExitCode {
-    println!("Fig input method is only supported on macOS");
+    println!("Easy Complete input method is only supported on macOS");
     ExitCode::FAILURE
 }

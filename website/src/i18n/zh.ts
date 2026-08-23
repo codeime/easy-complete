@@ -110,7 +110,7 @@ const processesZh: Process[] = [
   {
     bin: "easy-complete",
     crate: "fig_desktop",
-    role: "原生应用宿主——承载补全浮层与设置面板(运行在 wry WebView 里的 React 应用)、系统托盘和窗口管理",
+    role: "原生应用宿主——承载 GPUI 补全浮层与设置面板、系统托盘和窗口管理",
   },
   {
     bin: "ecterm",
@@ -119,7 +119,7 @@ const processesZh: Process[] = [
   },
   {
     bin: "ec",
-    crate: "q_cli",
+    crate: "ec_cli",
     role: "命令行入口——setup、integrations、diagnostic、settings 等子命令",
   },
 ];

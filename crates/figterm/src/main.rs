@@ -547,7 +547,7 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
         Err(err) => {
             if !fig_settings::state::get_bool_or("pty.suppress_log_error", false) {
                 // let id = capture_anyhow(&err);
-                eprintln!("Fig failed to init logger: {err:?}");
+                eprintln!("{PRODUCT_NAME} failed to init logger: {err:?}");
             }
             None
         },

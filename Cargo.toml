@@ -139,7 +139,23 @@ time = { version = "0.3.39", features = [
     "macros",
     "serde",
 ] }
-tokio = { version = "1.47.1", features = ["full"] }
+# Union of features workspace members actually call. `full` also enables
+# parking_lot (tokio's alternate mutex backend); we do not need it.
+# `net` is Unix sockets and Windows named pipes. `signal` is SIGWINCH
+# (ecterm) and ctrl_c. `rt-multi-thread` is the desktop/CLI runtime.
+tokio = { version = "1.47.1", features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
 tokio-tungstenite = "0.30.0"
 tokio-util = { version = "0.7.16", features = ["codec", "compat"] }
 toml = "1.1.0"
