@@ -1,3 +1,10 @@
+//! Integration install/status used by local IPC and the settings permission gate.
+//!
+//! This used to live in `fig_desktop_api`, a leftover from the WebView request
+//! bridge. Overlay and settings are GPUI now; only this install dispatcher
+//! survived, so it belongs in the desktop host.
+
+use std::borrow::Cow;
 use std::fmt::Display;
 
 use anstream::adapter::strip_str;
@@ -17,9 +24,54 @@ use fig_util::Shell;
 #[cfg(target_os = "linux")]
 use tracing::error;
 
-use super::RequestResult;
+pub type RequestResult = Result<Box<ServerOriginatedSubMessage>, InstallError>;
 
-#[allow(dead_code)]
+#[derive(Debug)]
+pub enum InstallError {
+    Custom(Cow<'static, str>),
+    Wrapped {
+        context: Option<Cow<'static, str>>,
+        source: Box<InstallError>,
+    },
+    Std(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for InstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstallError::Custom(v) => f.write_str(v),
+            InstallError::Wrapped {
+                context: Some(context), ..
+            } => f.write_str(context),
+            InstallError::Wrapped { source, .. } => source.fmt(f),
+            InstallError::Std(v) => v.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for InstallError {}
+
+impl InstallError {
+    pub fn from_std(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        InstallError::Wrapped {
+            context: None,
+            source: Box::new(InstallError::Std(Box::new(error))),
+        }
+    }
+}
+
+impl From<String> for InstallError {
+    fn from(s: String) -> Self {
+        InstallError::Custom(s.into())
+    }
+}
+
+impl From<&'static str> for InstallError {
+    fn from(s: &'static str) -> Self {
+        InstallError::Custom(s.into())
+    }
+}
+
 async fn integration_status(integration: impl fig_integrations::Integration) -> ServerOriginatedSubMessage {
     ServerOriginatedSubMessage::InstallResponse(InstallResponse {
         response: Some(Response::InstallationStatus(match integration.is_installed().await {
@@ -29,7 +81,7 @@ async fn integration_status(integration: impl fig_integrations::Integration) -> 
     })
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // used on non-macos Status arms
 fn integration_unsupported() -> ServerOriginatedSubMessage {
     ServerOriginatedSubMessage::InstallResponse(InstallResponse {
         response: Some(Response::InstallationStatus(InstallationStatus::NotSupported.into())),
@@ -213,17 +265,11 @@ where
                             "Desktop entry installation is only supported for AppImage bundles.",
                         ))
                     } else {
-                        let exec_path = ctx.env().get("APPIMAGE").map_err(super::Error::from_std)?;
-                        let entry_path = ctx
-                            .env()
-                            .current_dir()
-                            .map_err(super::Error::from_std)?
-                            .join("share/applications/q-desktop.desktop");
-                        let icon_path = ctx
-                            .env()
-                            .current_dir()
-                            .map_err(super::Error::from_std)?
-                            .join("share/icons/hicolor/128x128/apps/q-desktop.png");
+                        let exec_path = ctx.env().get("APPIMAGE").map_err(InstallError::from_std)?;
+                        let entry_path = fig_util::directories::appimage_desktop_entry_path(ctx)
+                            .map_err(InstallError::from_std)?;
+                        let icon_path = fig_util::directories::appimage_desktop_entry_icon_path(ctx)
+                            .map_err(InstallError::from_std)?;
                         let desktop_integration =
                             DesktopEntryIntegration::new(ctx, Some(entry_path), Some(icon_path), Some(exec_path.into()));
                         match action {
@@ -254,7 +300,7 @@ where
             cfg_if::cfg_if! {
                 if #[cfg(target_os = "linux")] {
                     let ctx = ctx.context();
-                    let integration = AutostartIntegration::new(&ctx).map_err(super::Error::from_std)?;
+                    let integration = AutostartIntegration::new(&ctx).map_err(InstallError::from_std)?;
                     match action {
                         InstallAction::Install => integration_result(integration.install().await),
                         InstallAction::Uninstall => integration_result(integration.uninstall().await),
@@ -305,6 +351,10 @@ mod tests {
     use fig_os_shim::{Context, ContextProvider};
     use fig_proto::fig::server_originated_message::Submessage;
     use fig_settings::{Settings, State};
+    #[cfg(target_os = "linux")]
+    use fig_util::consts::APP_PROCESS_NAME;
+    #[cfg(target_os = "linux")]
+    use fig_util::consts::linux::DESKTOP_ENTRY_NAME;
     #[cfg(target_os = "linux")]
     use fig_util::directories::{appimage_desktop_entry_icon_path, appimage_desktop_entry_path};
 
@@ -374,8 +424,18 @@ mod tests {
         let fs = ctx.fs();
         let entry_path = appimage_desktop_entry_path(&ctx).unwrap();
         let icon_path = appimage_desktop_entry_icon_path(&ctx).unwrap();
+        assert!(
+            entry_path.ends_with(DESKTOP_ENTRY_NAME),
+            "AppImage desktop entry must use DESKTOP_ENTRY_NAME, not q-desktop.desktop"
+        );
+        assert!(
+            icon_path.ends_with(format!("{APP_PROCESS_NAME}.png")),
+            "AppImage icon must use APP_PROCESS_NAME, not q-desktop.png"
+        );
         fs.create_dir_all(entry_path.parent().unwrap()).await.unwrap();
-        fs.write(&entry_path, "[Desktop Entry]\nExec=q-desktop").await.unwrap();
+        fs.write(&entry_path, format!("[Desktop Entry]\nExec={APP_PROCESS_NAME}"))
+            .await
+            .unwrap();
         fs.create_dir_all(icon_path.parent().unwrap()).await.unwrap();
         fs.write(&icon_path, "image").await.unwrap();
         let ctx = TestContext {
@@ -384,7 +444,6 @@ mod tests {
             state: State::new_fake(),
         };
 
-        // Test installation
         assert_status(&ctx, InstallComponent::DesktopEntry, InstallationStatus::NotInstalled).await;
         let request = InstallRequest {
             component: InstallComponent::DesktopEntry.into(),
@@ -394,7 +453,6 @@ mod tests {
         assert_eq!(ctx.state.get_bool("appimage.manageDesktopEntry").unwrap(), Some(true));
         assert_status(&ctx, InstallComponent::DesktopEntry, InstallationStatus::Installed).await;
 
-        // Test uninstallation
         let request = InstallRequest {
             component: InstallComponent::DesktopEntry.into(),
             action: InstallAction::Uninstall.into(),
@@ -408,7 +466,6 @@ mod tests {
     #[tokio::test]
     async fn test_autostart_entry_installation_and_uninstallation() {
         let ctx = Context::builder().with_test_home().await.unwrap().build_fake();
-        // Create global desktop entry
         {
             let global_path = global_entry_path(&ctx);
             ctx.fs().create_dir_all(global_path.parent().unwrap()).await.unwrap();
@@ -420,7 +477,6 @@ mod tests {
             state: State::new_fake(),
         };
 
-        // Test installation
         assert_status(&ctx, InstallComponent::AutostartEntry, InstallationStatus::NotInstalled).await;
         let request = InstallRequest {
             component: InstallComponent::AutostartEntry.into(),
@@ -433,7 +489,6 @@ mod tests {
             "Autostart entry should have been installed."
         );
 
-        // Test uninstallation
         let request = InstallRequest {
             component: InstallComponent::AutostartEntry.into(),
             action: InstallAction::Uninstall.into(),

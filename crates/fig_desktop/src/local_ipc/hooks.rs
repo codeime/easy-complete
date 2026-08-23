@@ -1,10 +1,7 @@
 use anyhow::Result;
-use fig_proto::local::{
-    CaretPositionHook, ClearAutocompleteCacheHook, EventHook, FileChangedHook, FocusedWindowDataHook,
-};
+use fig_proto::local::{CaretPositionHook, FileChangedHook, FocusedWindowDataHook};
 use tao::dpi::{LogicalPosition, LogicalSize};
 
-use crate::bootstrap::WindowId;
 use crate::event::{WindowEvent, WindowPosition};
 use crate::platform::PlatformState;
 use crate::{AUTOCOMPLETE_ID, Event, EventLoopProxy};
@@ -72,35 +69,13 @@ pub async fn focused_window_data(
     Ok(())
 }
 
-pub async fn event(hook: EventHook, proxy: &EventLoopProxy) -> Result<()> {
-    let window_event = WindowEvent::Event {
-        event_name: hook.event_name.into(),
-        payload: hook.payload.map(|s| s.into()),
-    };
-
-    if hook.apps.is_empty() {
-        proxy.send_event_or_warn(Event::WindowEventAll { window_event });
-    } else {
-        for app in hook.apps {
-            proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: WindowId(app.into()),
-                window_event: window_event.clone(),
-            });
-        }
-    }
-
+pub async fn event() -> Result<()> {
+    // WebView JS event bus is gone. Native overlay does not subscribe.
     Ok(())
 }
 
-pub async fn clear_autocomplete_cache(hook: ClearAutocompleteCacheHook, proxy: &EventLoopProxy) -> Result<()> {
-    proxy.send_event(Event::WindowEvent {
-        window_id: AUTOCOMPLETE_ID,
-        window_event: WindowEvent::Event {
-            event_name: "clear-cache".into(),
-            payload: Some(serde_json::to_string(&hook.clis)?.into()),
-        },
-    })?;
-
+pub async fn clear_autocomplete_cache() -> Result<()> {
+    // WebView `clear-cache` is gone. Engine caches are request-keyed.
     Ok(())
 }
 

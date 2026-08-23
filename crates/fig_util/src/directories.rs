@@ -9,9 +9,10 @@ use time::OffsetDateTime;
 
 #[cfg(unix)]
 use crate::RUNTIME_DIR_NAME;
+use crate::consts::linux::DESKTOP_ENTRY_NAME;
 use crate::env_var::{Q_BUNDLE_METADATA_PATH, Q_PARENT};
 use crate::system_info::{in_cloudshell, is_remote};
-use crate::{BACKUP_DIR_NAME, DATA_DIR_NAME, TAURI_PRODUCT_NAME};
+use crate::{APP_PROCESS_NAME, BACKUP_DIR_NAME, DATA_DIR_NAME, TAURI_PRODUCT_NAME};
 
 macro_rules! utf8_dir {
     ($name:ident, $($arg:ident: $type:ty),*) => {
@@ -525,7 +526,11 @@ pub fn appimage_desktop_entry_path<Ctx: EnvProvider>(ctx: &Ctx) -> Result<PathBu
     if !ctx.env().in_appimage() {
         return Err(DirectoryError::NotAppImage);
     }
-    Ok(ctx.env().current_dir()?.join("share/applications/q-desktop.desktop"))
+    Ok(ctx
+        .env()
+        .current_dir()?
+        .join("share/applications")
+        .join(DESKTOP_ENTRY_NAME))
 }
 
 /// The path to the icon bundled with the AppImage to be used for the desktop entry file.
@@ -538,7 +543,7 @@ pub fn appimage_desktop_entry_icon_path<Ctx: EnvProvider>(ctx: &Ctx) -> Result<P
     Ok(ctx
         .env()
         .current_dir()?
-        .join("share/icons/hicolor/128x128/apps/q-desktop.png"))
+        .join(format!("share/icons/hicolor/128x128/apps/{APP_PROCESS_NAME}.png")))
 }
 
 utf8_dir!(home_dir);
@@ -630,6 +635,23 @@ mod linux_tests {
     fn linux_data_prefix_is_easy_complete_not_a_webview_path() {
         assert_eq!(DATA_DIR_NAME, "easy-complete");
         assert_eq!(crate::consts::linux::PACKAGE_NAME, DATA_DIR_NAME);
+    }
+
+    #[test]
+    fn appimage_bundle_paths_use_product_desktop_entry_names() {
+        assert_eq!(DESKTOP_ENTRY_NAME, "easy-complete.desktop");
+        assert!(
+            !DESKTOP_ENTRY_NAME.contains("q-desktop"),
+            "AppImage desktop entry must not keep the q-desktop filename"
+        );
+        let src = include_str!("directories.rs");
+        let old_desktop = ["q-desktop", ".desktop"].concat();
+        let old_icon = ["q-desktop", ".png"].concat();
+        assert!(
+            !src.contains(&old_desktop) && !src.contains(&old_icon),
+            "AppImage path helpers must not hardcode q-desktop filenames"
+        );
+        assert!(src.contains("DESKTOP_ENTRY_NAME") && src.contains("APP_PROCESS_NAME"));
     }
 }
 

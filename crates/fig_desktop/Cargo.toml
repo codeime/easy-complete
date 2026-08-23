@@ -32,21 +32,16 @@ resource = "./autocomplete-icons/*"
 
 [features]
 default = []
-# console = ["tokio/tracing", "fig_log/console"]
-# Required for cargo-tauri CLI
-custom-protocol = []
 
 [dependencies]
+anstream.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
-base64.workspace = true
-bytes.workspace = true
 cfg-if.workspace = true
 clap.workspace = true
 dashmap.workspace = true
 ec_engine = { path = "../ec_engine" }
 ec_gpui = { path = "../ec_gpui" }
-fig_desktop_api.workspace = true
 fig_telemetry.workspace = true
 fig_install.workspace = true
 fig_integrations = { workspace = true, features = ["dispatch"] }

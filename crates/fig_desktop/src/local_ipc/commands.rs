@@ -15,11 +15,10 @@ use tao::event_loop::ControlFlow;
 use tracing::error;
 
 use super::{LocalResponse, LocalResult};
-use crate::bootstrap::DASHBOARD_SIZE;
-use crate::bootstrap::notification::NotificationsState;
+use crate::bootstrap::SETTINGS_SIZE;
 use crate::event::{Event, WindowEvent};
 use crate::platform::PlatformState;
-use crate::{AUTOCOMPLETE_ID, DASHBOARD_ID, EventLoopProxy, platform};
+use crate::{AUTOCOMPLETE_ID, EventLoopProxy, SETTINGS_ID, platform};
 
 pub async fn debug(command: DebugModeCommand, proxy: &EventLoopProxy) -> LocalResult {
     static DEBUG_MODE: Mutex<bool> = Mutex::new(false);
@@ -102,7 +101,7 @@ pub async fn open_ui_element(command: OpenUiElementCommand, proxy: &EventLoopPro
     match command.element() {
         UiElement::Settings => {
             proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: DASHBOARD_ID.clone(),
+                window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(vec![
                     WindowEvent::NavigateRelative {
                         path: "/preferences".into(),
@@ -119,7 +118,7 @@ pub async fn open_ui_element(command: OpenUiElementCommand, proxy: &EventLoopPro
             };
 
             proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: DASHBOARD_ID.clone(),
+                window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(events),
             });
         },
@@ -144,7 +143,7 @@ where
 {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            use fig_desktop_api::requests::install::install;
+            use crate::install_request::install;
             use fig_proto::fig::{InstallRequest, InstallComponent, InstallAction};
 
             install(
@@ -180,10 +179,10 @@ pub fn log_level(LogLevelCommand { level }: LogLevelCommand) -> LocalResult {
 pub async fn login(proxy: &EventLoopProxy) -> LocalResult {
     proxy
         .send_event(Event::WindowEvent {
-            window_id: DASHBOARD_ID,
+            window_id: SETTINGS_ID,
             window_event: WindowEvent::Batch(vec![
                 WindowEvent::UpdateWindowGeometry {
-                    size: Some(DASHBOARD_SIZE),
+                    size: Some(SETTINGS_SIZE),
                     position: None,
                     anchor: None,
                     tx: None,
@@ -209,7 +208,7 @@ pub async fn logout(proxy: &EventLoopProxy) -> LocalResult {
 
     proxy
         .send_event(Event::WindowEvent {
-            window_id: DASHBOARD_ID,
+            window_id: SETTINGS_ID,
             window_event: WindowEvent::Batch(vec![WindowEvent::Reload, WindowEvent::Show]),
         })
         .map_err(|err| error!(?err))
@@ -226,16 +225,14 @@ pub async fn logout(proxy: &EventLoopProxy) -> LocalResult {
 pub fn dump_state(
     command: DumpStateCommand,
     figterm_state: &FigtermState,
-    notifications_state: &NotificationsState,
     platform_state: &PlatformState,
 ) -> LocalResult {
     let json = match command.r#type() {
         DumpStateType::DumpStateFigterm => {
             serde_json::to_string_pretty(&figterm_state).unwrap_or_else(|err| format!("unable to dump: {err}"))
         },
-        DumpStateType::DumpStateWebNotifications => {
-            serde_json::to_string_pretty(&notifications_state).unwrap_or_else(|err| format!("unable to dump: {err}"))
-        },
+        // WebView window subscription map is gone. Keep the proto/CLI name.
+        DumpStateType::DumpStateWebNotifications => "{}".to_string(),
         DumpStateType::DumpStatePlatform => {
             serde_json::to_string_pretty(&platform_state).unwrap_or_else(|err| format!("unable to dump: {err}"))
         },

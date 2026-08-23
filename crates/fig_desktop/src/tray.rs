@@ -15,7 +15,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::bootstrap::LOGIN_PATH;
 use crate::event::{Event, ShowMessageNotification, WindowEvent};
-use crate::{AUTOCOMPLETE_ID, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget};
+use crate::{AUTOCOMPLETE_ID, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID};
 
 // macro_rules! icon {
 //     ($icon:literal) => {{
@@ -69,12 +69,6 @@ fn tray_update(proxy: &EventLoopProxy) {
 
 pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
     match &*menu_event.id().0 {
-        "dashboard-devtools" => {
-            proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: DASHBOARD_ID,
-                window_event: WindowEvent::Devtools,
-            });
-        },
         "autocomplete-devtools" => {
             proxy.send_event_or_warn(Event::WindowEvent {
                 window_id: AUTOCOMPLETE_ID,
@@ -87,18 +81,9 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
         "quit" => {
             proxy.send_event_or_warn(Event::ControlFlow(ControlFlow::Exit));
         },
-        "dashboard" => {
-            proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: DASHBOARD_ID.clone(),
-                window_event: WindowEvent::Batch(vec![
-                    WindowEvent::NavigateRelative { path: "/".into() },
-                    WindowEvent::Show,
-                ]),
-            });
-        },
         LOGIN_MENU_ID => {
             proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: DASHBOARD_ID.clone(),
+                window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(vec![
                     WindowEvent::NavigateRelative {
                         path: LOGIN_PATH.into(),
@@ -109,7 +94,7 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
         },
         "settings" => {
             proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: DASHBOARD_ID.clone(),
+                window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(vec![
                     WindowEvent::NavigateRelative {
                         path: "/autocomplete".into(),
@@ -120,7 +105,7 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
         },
         "not-working" => {
             proxy.send_event_or_warn(Event::WindowEvent {
-                window_id: DASHBOARD_ID.clone(),
+                window_id: SETTINGS_ID.clone(),
                 window_event: WindowEvent::Batch(vec![
                     WindowEvent::NavigateRelative { path: "/help".into() },
                     WindowEvent::Show,

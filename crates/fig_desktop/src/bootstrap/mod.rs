@@ -4,23 +4,19 @@
 //! now. Do not put wry / WKWebView back.
 
 pub mod menu;
-pub mod notification;
 pub mod window_id;
 
-use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use fig_os_shim::Context;
 use fig_remote_ipc::figterm::FigtermState;
-use fnv::FnvBuildHasher;
 use gpui::AppContext as _;
 use tao::dpi::LogicalSize;
 use tao::window::Theme as TaoTheme;
 use tracing::{debug, error, warn};
 
 use self::menu::menu_bar;
-use self::notification::NotificationsState;
-pub use self::window_id::{AUTOCOMPLETE_ID, DASHBOARD_ID, WindowId};
+pub use self::window_id::{AUTOCOMPLETE_ID, SETTINGS_ID, WindowId};
 use crate::event::{Event, WindowEvent};
 use crate::notification_bus::{JsonNotification, NOTIFICATION_BUS};
 use crate::platform::{PlatformBoundEvent, PlatformState};
@@ -29,7 +25,7 @@ use crate::remote_ipc::RemoteHook;
 use crate::tray::build_tray;
 use crate::{EventLoopProxy, EventLoopWindowTarget, file_watcher, local_ipc};
 
-pub const DASHBOARD_SIZE: LogicalSize<f64> = LogicalSize::new(820.0, 640.0);
+pub const SETTINGS_SIZE: LogicalSize<f64> = LogicalSize::new(820.0, 640.0);
 
 pub const AUTOCOMPLETE_WINDOW_TITLE: &str = ec_gpui::OVERLAY_WINDOW_TITLE;
 
@@ -43,17 +39,13 @@ fn map_theme(theme: &str) -> Option<TaoTheme> {
     }
 }
 
-pub type FigIdMap = HashSet<WindowId, FnvBuildHasher>;
-
 pub struct AppRuntime {
-    pub(crate) fig_id_map: FigIdMap,
     pub(crate) event_rx: flume::Receiver<Event>,
     pub(crate) proxy: EventLoopProxy,
     pub(crate) figterm_state: Arc<FigtermState>,
     pub(crate) platform_state: Arc<PlatformState>,
-    pub(crate) notifications_state: Arc<NotificationsState>,
     pub(crate) context: Arc<Context>,
-    pub(crate) show_dashboard_after_normal_launch: bool,
+    pub(crate) show_settings_after_normal_launch: bool,
 }
 
 /// The platform layer reaches for this from callbacks that carry no state of
@@ -70,7 +62,7 @@ fn diagnostic_exit(message: &str) -> ! {
 impl AppRuntime {
     #[allow(unused_variables)]
     #[allow(unused_mut)]
-    pub fn new(context: Arc<Context>, visible: bool, show_dashboard_after_normal_launch: bool) -> Self {
+    pub fn new(context: Arc<Context>, visible: bool, show_settings_after_normal_launch: bool) -> Self {
         #[cfg(target_os = "macos")]
         if !visible {
             use tao::platform::macos::ActivationPolicy;
@@ -88,17 +80,14 @@ impl AppRuntime {
 
         let figterm_state = Arc::new(FigtermState::default());
         let platform_state = Arc::new(PlatformState::new(proxy.clone()));
-        let notifications_state = Arc::new(NotificationsState::default());
 
         Self {
-            fig_id_map: Default::default(),
             event_rx,
             proxy,
             figterm_state,
             platform_state,
-            notifications_state,
             context,
-            show_dashboard_after_normal_launch,
+            show_settings_after_normal_launch,
         }
     }
 
@@ -106,21 +95,15 @@ impl AppRuntime {
     pub async fn run(mut self) -> anyhow::Result<()> {
         let window_target = EventLoopWindowTarget;
         self.platform_state
-            .handle(
-                PlatformBoundEvent::Initialize,
-                &window_target,
-                &self.fig_id_map,
-                &self.notifications_state,
-            )
+            .handle(PlatformBoundEvent::Initialize, &window_target)
             .expect("Failed to initialize platform state");
 
         {
             let platform_state = self.platform_state.clone();
             let figterm_state = self.figterm_state.clone();
-            let notifications_state = self.notifications_state.clone();
             let proxy = self.proxy.clone();
             tokio::spawn(async move {
-                match local_ipc::start_local_ipc(platform_state, figterm_state, notifications_state, proxy).await {
+                match local_ipc::start_local_ipc(platform_state, figterm_state, proxy).await {
                     Ok(_) => (),
                     Err(err) => error!("Unable to start local ipc: {:?}", err),
                 }
@@ -131,12 +114,11 @@ impl AppRuntime {
             fig_util::directories::local_remote_socket_path().unwrap(),
             self.figterm_state.clone(),
             RemoteHook {
-                notifications_state: self.notifications_state.clone(),
                 proxy: self.proxy.clone(),
             },
         ));
 
-        file_watcher::setup_listeners(self.notifications_state.clone(), self.proxy.clone()).await;
+        file_watcher::setup_listeners(self.proxy.clone()).await;
 
         init_notification_listeners(self.proxy.clone()).await;
 
@@ -206,12 +188,10 @@ impl AppRuntime {
         };
         let event_rx = self.event_rx;
         let proxy = self.proxy.clone();
-        let fig_id_map = self.fig_id_map;
         let figterm_state = self.figterm_state;
         let platform_state = self.platform_state;
-        let notifications_state = self.notifications_state;
         let context = self.context;
-        let show_dashboard_after_normal_launch = self.show_dashboard_after_normal_launch;
+        let show_settings_after_normal_launch = self.show_settings_after_normal_launch;
 
         crate::gpui_host::start_application(move |cx| {
             let overlay = crate::overlay::OverlayController::start(
@@ -222,12 +202,10 @@ impl AppRuntime {
                 platform_state.clone(),
             )?;
             let host = cx.new(|_| crate::gpui_host::DesktopHost {
-                fig_id_map,
                 figterm_state,
                 platform_state,
-                notifications_state,
                 context,
-                show_dashboard_after_normal_launch,
+                show_settings_after_normal_launch,
                 proxy,
                 window_target,
                 overlay,
@@ -280,7 +258,7 @@ async fn init_notification_listeners(proxy: EventLoopProxy) {
                 let enabled = !notification.into_bool().unwrap_or(false);
                 debug!(%enabled, "Autocomplete");
                 proxy.send_event_or_warn(Event::WindowEvent {
-                    window_id: AUTOCOMPLETE_ID,
+                    window_id: AUTOCOMPLETE_ID.clone(),
                     window_event: WindowEvent::SetEnabled(enabled),
                 });
             }

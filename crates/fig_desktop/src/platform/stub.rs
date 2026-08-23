@@ -9,8 +9,7 @@ use tao::dpi::Position;
 use tracing::info;
 
 use super::{PlatformBoundEvent, PlatformWindow};
-use crate::bootstrap::notification::NotificationsState;
-use crate::bootstrap::{FigIdMap, WindowId};
+use crate::bootstrap::WindowId;
 use crate::utils::Rect;
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
@@ -35,8 +34,6 @@ impl PlatformStateImpl {
         self: &Arc<Self>,
         event: PlatformBoundEvent,
         _window_target: &EventLoopWindowTarget,
-        _window_map: &FigIdMap,
-        _notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
         if matches!(event, PlatformBoundEvent::Initialize) {
             info!("platform stub: no caret source; overlay stays hidden");
@@ -88,22 +85,11 @@ mod tests {
     fn stub_handles_caret_events_as_no_ops() {
         let (proxy, _rx) = crate::event_loop::channel();
         let state = Arc::new(PlatformStateImpl::new(proxy));
-        let notifications = Arc::new(NotificationsState::default());
         state
-            .handle(
-                PlatformBoundEvent::CaretPositionUpdateRequested,
-                &EventLoopWindowTarget,
-                &FigIdMap::default(),
-                &notifications,
-            )
+            .handle(PlatformBoundEvent::CaretPositionUpdateRequested, &EventLoopWindowTarget)
             .expect("caret request is a no-op");
         state
-            .handle(
-                PlatformBoundEvent::Initialize,
-                &EventLoopWindowTarget,
-                &FigIdMap::default(),
-                &notifications,
-            )
+            .handle(PlatformBoundEvent::Initialize, &EventLoopWindowTarget)
             .expect("initialize is a no-op");
     }
 }

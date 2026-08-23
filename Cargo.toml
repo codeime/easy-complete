@@ -9,9 +9,7 @@ members = [
     "tests/figterm2",
 ]
 # `cargo test` / `cargo build` without --workspace only builds crates/ec_cli.
-# fig_desktop_api is the leftover install-request crate still linked by fig_desktop
-# (macOS dist needs it). ec_overlay_spike is a Linux overlay lab binary and is
-# not in any dist profile.
+# ec_overlay_spike is a Linux overlay lab binary and is not in any dist profile.
 default-members = ["crates/ec_cli"]
 
 [workspace.package]
@@ -56,7 +54,6 @@ crossterm = { version = "0.29.0", features = ["event-stream", "events"] }
 dashmap = "6.0.1"
 dirs = "5.0.0"
 eyre = "0.6.8"
-fig_desktop_api = { path = "crates/fig_desktop_api" }
 fig_telemetry = { path = "crates/fig_telemetry" }
 fig_diagnostic = { path = "crates/fig_diagnostic" }
 fig_install = { path = "crates/fig_install" }

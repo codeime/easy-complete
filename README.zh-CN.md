@@ -227,8 +227,7 @@ cargo test -p <crate_name>                                        # 测试某个
 ```
 
 不带 `-p` / `--workspace` 的 `cargo test` / `cargo build` 只构建 `crates/ec_cli`
-（`default-members`）。`fig_desktop_api` 仍由 `fig_desktop` 链接（macOS 发运需要它）。
-`ec_overlay_spike` 是 Linux 浮层实验二进制，不会打进安装物。
+（`default-members`）。`ec_overlay_spike` 是 Linux 浮层实验二进制，不会打进安装物。
 
 ### TypeScript
 

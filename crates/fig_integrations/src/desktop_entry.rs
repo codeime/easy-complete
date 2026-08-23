@@ -402,9 +402,9 @@ mod tests {
 
     const TEST_DESKTOP_ENTRY: &str = r#"[Desktop Entry]
 Categories=Development;
-Exec=q-desktop
-Icon=q-desktop
-Name=q_desktop
+Exec=easy-complete
+Icon=easy-complete
+Name=Easy Complete
 Terminal=false
 Type=Application"#;
 

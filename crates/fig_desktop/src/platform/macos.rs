@@ -14,7 +14,6 @@ use cocoa::base::{YES, id};
 use core_graphics::display::CGRect;
 use core_graphics::window::CGWindowID;
 use fig_integrations::input_method::InputMethod;
-use fig_proto::fig::{AccessibilityChangeNotification, Notification, NotificationType};
 use fig_proto::local::caret_position_hook::Origin;
 use fig_util::Terminal;
 use macos_utils::accessibility::accessibility_is_enabled;
@@ -31,12 +30,11 @@ use tao::platform::macos::ActivationPolicy;
 use tracing::{debug, error, trace, warn};
 
 use super::{PlatformBoundEvent, PlatformWindow};
-use crate::bootstrap::notification::NotificationsState;
-use crate::bootstrap::{FigIdMap, GLOBAL_PROXY, WindowId};
+use crate::bootstrap::{GLOBAL_PROXY, WindowId};
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::hide_overlay_on_element_change;
 use crate::utils::Rect;
-use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget};
+use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID};
 
 pub const DEFAULT_CARET_WIDTH: f64 = 10.0;
 
@@ -214,7 +212,7 @@ pub fn set_activation_policy(policy: ActivationPolicy) {
     }
 }
 
-fn apply_autocomplete_window_level(_window_map: &FigIdMap, terminal_level: Option<i64>) {
+fn apply_autocomplete_window_level(terminal_level: Option<i64>) {
     let above = match terminal_level {
         None | Some(0) => unsafe { CGWindowLevelForKey(kCGFloatingWindowLevelKey) as i64 },
         Some(level) => level,
@@ -272,8 +270,6 @@ impl PlatformStateImpl {
         self: &Arc<Self>,
         event: PlatformBoundEvent,
         window_target: &EventLoopWindowTarget,
-        window_map: &FigIdMap,
-        notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
         debug!("Handling platform event: {:?}", event);
         match event {
@@ -339,7 +335,7 @@ impl PlatformStateImpl {
                                     },
                                     Event::PlatformBoundEvent(PlatformBoundEvent::FullscreenStateUpdated {
                                         fullscreen: is_fullscreen,
-                                        dashboard_visible: None,
+                                        settings_visible: None,
                                     }),
                                 ]);
                             },
@@ -372,7 +368,7 @@ impl PlatformStateImpl {
                     let proxy = GLOBAL_PROXY.get().unwrap();
 
                     if let Err(err) = proxy.send_event(Event::WindowEvent {
-                        window_id: DASHBOARD_ID,
+                        window_id: SETTINGS_ID,
                         window_event: WindowEvent::Show,
                     }) {
                         warn!(%err, "Error sending event");
@@ -439,7 +435,7 @@ impl PlatformStateImpl {
                     focused.replace(window);
                 }
 
-                apply_autocomplete_window_level(window_map, level);
+                apply_autocomplete_window_level(level);
 
                 Ok(())
             },
@@ -447,7 +443,7 @@ impl PlatformStateImpl {
                 let level = crate::utils::recover_mutex(&self.focused_window)
                     .as_ref()
                     .and_then(|window| window.get_level());
-                apply_autocomplete_window_level(window_map, level);
+                apply_autocomplete_window_level(level);
 
                 Ok(())
             },
@@ -459,14 +455,14 @@ impl PlatformStateImpl {
             },
             PlatformBoundEvent::FullscreenStateUpdated {
                 fullscreen,
-                dashboard_visible,
+                settings_visible,
             } => {
                 let policy = if fullscreen {
                     ActivationPolicy::Accessory
                 } else {
-                    let dashboard_visible = dashboard_visible.unwrap_or_else(crate::settings_ui::is_open);
+                    let settings_visible = settings_visible.unwrap_or_else(crate::settings_ui::is_open);
 
-                    if dashboard_visible {
+                    if settings_visible {
                         ActivationPolicy::Regular
                     } else {
                         ActivationPolicy::Accessory
@@ -523,25 +519,6 @@ impl PlatformStateImpl {
                 //     });
                 // }
 
-                let proxy = self.proxy.clone();
-                let notifications_state = notifications_state.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = notifications_state
-                        .broadcast_notification_all(
-                            &NotificationType::NotifyOnAccessibilityChange,
-                            Notification {
-                                r#type: Some(fig_proto::fig::notification::Type::AccessibilityChangeNotification(
-                                    AccessibilityChangeNotification { enabled },
-                                )),
-                            },
-                            &proxy,
-                        )
-                        .await
-                    {
-                        error!(%err, "Failed to broadcast notification");
-                    }
-                });
-
                 self.proxy.send_event(Event::ReloadAccessibility).ok();
 
                 Ok(())
@@ -553,12 +530,12 @@ impl PlatformStateImpl {
                 visible,
             } => {
                 // Update activation policy
-                if window_id == DASHBOARD_ID && focused {
+                if window_id == SETTINGS_ID && focused {
                     debug!("Sending FullscreenStateUpdated");
                     self.proxy
                         .send_event(Event::PlatformBoundEvent(PlatformBoundEvent::FullscreenStateUpdated {
                             fullscreen,
-                            dashboard_visible: Some(visible),
+                            settings_visible: Some(visible),
                         }))
                         .ok();
                 }

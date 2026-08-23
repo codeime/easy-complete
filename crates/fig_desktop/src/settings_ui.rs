@@ -14,7 +14,7 @@ use gpui::{
 use tracing::error;
 
 use crate::EventLoopProxy;
-use crate::bootstrap::DASHBOARD_ID;
+use crate::bootstrap::SETTINGS_ID;
 use crate::event::{Event, WindowEvent};
 use crate::permissions::{self, PermId, PermReady, PermissionSnapshot};
 use crate::platform::PlatformBoundEvent;
@@ -1857,7 +1857,7 @@ pub fn open_settings_window(cx: &mut App, proxy: EventLoopProxy) -> anyhow::Resu
             window.on_window_should_close(cx, move |_window, _cx| {
                 close_proxy
                     .send_event(Event::WindowEvent {
-                        window_id: DASHBOARD_ID,
+                        window_id: SETTINGS_ID,
                         window_event: WindowEvent::Close,
                     })
                     .ok();
@@ -1956,12 +1956,12 @@ pub fn set_settings_section(handle: &SettingsHandle, path: &str, cx: &mut App) {
         .ok();
 }
 
-pub fn notify_dashboard_visible(proxy: &EventLoopProxy, visible: bool) {
+pub fn notify_settings_visible(proxy: &EventLoopProxy, visible: bool) {
     SETTINGS_OPEN.store(visible, Ordering::Relaxed);
     proxy
         .send_event(Event::PlatformBoundEvent(PlatformBoundEvent::FullscreenStateUpdated {
             fullscreen: false,
-            dashboard_visible: Some(visible),
+            settings_visible: Some(visible),
         }))
         .ok();
 }

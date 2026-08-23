@@ -2,29 +2,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use base64::prelude::*;
-use bytes::BytesMut;
-use fig_proto::fig::server_originated_message::Submessage as ServerOriginatedSubMessage;
-use fig_proto::fig::{
-    EditBufferChangedNotification, HistoryUpdatedNotification, LocationChangedNotification, Notification,
-    NotificationType, Process, ProcessChangedNotification, ServerOriginatedMessage, ShellPromptReturnedNotification,
-};
 use fig_proto::local::{EditBufferHook, InterceptedKeyHook, PostExecHook, PreExecHook, PromptHook};
-use fig_proto::prost::Message;
 use fig_proto::remote::clientbound;
 use fig_remote_ipc::figterm::{FigtermState, SessionMetrics};
 use time::OffsetDateTime;
-use tracing::{debug, error};
+use tracing::debug;
 use uuid::Uuid;
 
-use crate::bootstrap::notification::NotificationsState;
-use crate::event::{EmitEventName, Event, WindowEvent};
+use crate::event::{Event, WindowEvent};
 use crate::platform::PlatformBoundEvent;
 use crate::{AUTOCOMPLETE_ID, EventLoopProxy};
 
 #[derive(Debug, Clone)]
 pub struct RemoteHook {
-    pub notifications_state: Arc<NotificationsState>,
     pub proxy: EventLoopProxy,
 }
 
@@ -66,53 +56,6 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
             }
         });
 
-        // GPUI never inserts here. Skip UTF-16 / protobuf / base64 unless a
-        // window is actually subscribed.
-        if !self.notifications_state.subscriptions.is_empty() {
-            let utf16_cursor_position = hook
-                .text
-                .get(..hook.cursor as usize)
-                .map(|s| s.encode_utf16().count() as i32);
-
-            for sub in self.notifications_state.subscriptions.iter() {
-                let message_id = match sub.get(&NotificationType::NotifyOnEditbuffferChange) {
-                    Some(id) => *id,
-                    None => continue,
-                };
-
-                let hook = hook.clone();
-                let message = ServerOriginatedMessage {
-                    id: Some(message_id),
-                    submessage: Some(ServerOriginatedSubMessage::Notification(Notification {
-                        r#type: Some(fig_proto::fig::notification::Type::EditBufferNotification(
-                            EditBufferChangedNotification {
-                                context: hook.context,
-                                buffer: Some(hook.text),
-                                cursor: utf16_cursor_position,
-                                session_id: Some(session_id.into()),
-                            },
-                        )),
-                    })),
-                };
-
-                let mut encoded = BytesMut::new();
-                if let Err(err) = message.encode(&mut encoded) {
-                    error!(%err, "Failed to encode edit buffer change notification");
-                    continue;
-                }
-
-                debug!(%message_id, "Sending edit buffer change notification");
-
-                self.proxy.send_event_or_warn(Event::WindowEvent {
-                    window_id: sub.key().clone(),
-                    window_event: WindowEvent::Emit {
-                        event_name: EmitEventName::Notification,
-                        payload: BASE64_STANDARD.encode(encoded).into(),
-                    },
-                });
-            }
-        }
-
         let empty_edit_buffer = hook.text.trim().is_empty();
 
         if !empty_edit_buffer {
@@ -145,63 +88,9 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
         session_id: Uuid,
         figterm_state: &Arc<FigtermState>,
     ) -> Result<Option<clientbound::response::Response>> {
-        let mut cwd_changed = false;
-        let mut new_cwd = None;
         figterm_state.with(&session_id, |session| {
-            if let (Some(old_context), Some(new_context)) = (&session.context, &hook.context) {
-                cwd_changed = old_context.current_working_directory != new_context.current_working_directory;
-                new_cwd.clone_from(&new_context.current_working_directory);
-            }
-
             session.apply_context(hook.context.clone());
         });
-
-        if cwd_changed {
-            if let Err(err) = self
-                .notifications_state
-                .broadcast_notification_all(
-                    &NotificationType::NotifyOnLocationChange,
-                    Notification {
-                        r#type: Some(fig_proto::fig::notification::Type::LocationChangedNotification(
-                            LocationChangedNotification {
-                                session_id: Some(session_id.to_string()),
-                                host_name: hook.context.as_ref().and_then(|ctx| ctx.hostname.clone()),
-                                user_name: None,
-                                directory: new_cwd,
-                            },
-                        )),
-                    },
-                    &self.proxy,
-                )
-                .await
-            {
-                error!(%err, "Failed to broadcast LocationChangedNotification");
-            }
-        }
-
-        if let Err(err) = self
-            .notifications_state
-            .broadcast_notification_all(
-                &NotificationType::NotifyOnPrompt,
-                Notification {
-                    r#type: Some(fig_proto::fig::notification::Type::ShellPromptReturnedNotification(
-                        ShellPromptReturnedNotification {
-                            session_id: Some(session_id.to_string()),
-                            shell: hook.context.as_ref().map(|ctx| Process {
-                                pid: ctx.pid,
-                                executable: ctx.process_name.clone(),
-                                directory: ctx.current_working_directory.clone(),
-                                env: vec![],
-                            }),
-                        },
-                    )),
-                },
-                &self.proxy,
-            )
-            .await
-        {
-            error!(%err, "Failed to broadcast ShellPromptReturnedNotification");
-        }
 
         Ok(None)
     }
@@ -221,27 +110,6 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
             window_event: WindowEvent::Hide,
         })?;
 
-        self.notifications_state
-            .broadcast_notification_all(
-                &NotificationType::NotifyOnProcessChanged,
-                Notification {
-                    r#type: Some(fig_proto::fig::notification::Type::ProcessChangeNotification(
-                        ProcessChangedNotification {
-                        session_id: Some(session_id.to_string()),
-                        new_process: // TODO: determine active application based on tty
-                        hook.context.as_ref().map(|ctx| Process {
-                            pid: ctx.pid,
-                            executable: ctx.process_name.clone(),
-                            directory: ctx.current_working_directory.clone(),
-                            env: vec![],
-                        }),
-                    },
-                    )),
-                },
-                &self.proxy,
-            )
-            .await?;
-
         Ok(None)
     }
 
@@ -254,28 +122,6 @@ impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
         figterm_state.with_update(session_id, |session| {
             session.apply_context(hook.context.clone());
         });
-
-        self.notifications_state
-            .broadcast_notification_all(
-                &NotificationType::NotifyOnHistoryUpdated,
-                Notification {
-                    r#type: Some(fig_proto::fig::notification::Type::HistoryUpdatedNotification(
-                        HistoryUpdatedNotification {
-                            command: hook.command.clone(),
-                            process_name: hook.context.as_ref().and_then(|ctx| ctx.process_name.clone()),
-                            current_working_directory: hook
-                                .context
-                                .as_ref()
-                                .and_then(|ctx| ctx.current_working_directory.clone()),
-                            session_id: Some(session_id.to_string()),
-                            hostname: hook.context.as_ref().and_then(|ctx| ctx.hostname.clone()),
-                            exit_code: hook.exit_code,
-                        },
-                    )),
-                },
-                &self.proxy,
-            )
-            .await?;
 
         Ok(None)
     }
@@ -304,15 +150,11 @@ mod tests {
         let production = src.split("#[cfg(test)]").next().expect("production");
         assert!(
             !production.contains(".unwrap()"),
-            "remote_ipc must not unwrap send_event or protobuf encode"
+            "remote_ipc must not unwrap send_event"
         );
         assert!(
-            production.contains("send_event_or_warn"),
-            "closed event loop must match EventLoopProxy::send_event_or_warn"
-        );
-        assert!(
-            production.contains("Failed to encode edit buffer change notification"),
-            "encode failure must log instead of panicking"
+            !production.contains("WindowEvent::Emit") && !production.contains("BASE64_STANDARD"),
+            "WebView protobuf/base64 notification emit is gone"
         );
     }
 }

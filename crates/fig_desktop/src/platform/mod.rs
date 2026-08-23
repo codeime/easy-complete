@@ -5,8 +5,7 @@ use macos_utils::window_server::ApplicationSpecifier;
 use serde::Serialize;
 use tao::dpi::Position;
 
-use crate::bootstrap::notification::NotificationsState;
-use crate::bootstrap::{FigIdMap, WindowId};
+use crate::bootstrap::WindowId;
 use crate::utils::Rect;
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
@@ -51,12 +50,8 @@ impl PlatformState {
         self: &Arc<Self>,
         event: PlatformBoundEvent,
         window_target: &EventLoopWindowTarget,
-        window_map: &FigIdMap,
-        notifications_state: &Arc<NotificationsState>,
     ) -> anyhow::Result<()> {
-        self.clone()
-            .0
-            .handle(event, window_target, window_map, notifications_state)
+        self.clone().0.handle(event, window_target)
     }
 
     /// Position the window at the given coordinates
@@ -97,7 +92,7 @@ pub enum PlatformBoundEvent {
     EditBufferChanged,
     FullscreenStateUpdated {
         fullscreen: bool,
-        dashboard_visible: Option<bool>,
+        settings_visible: Option<bool>,
     },
     AccessibilityUpdated {
         enabled: bool,

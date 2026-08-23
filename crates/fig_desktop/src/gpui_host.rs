@@ -10,8 +10,7 @@ use tao::event_loop::ControlFlow;
 use tracing::{debug, error, info, trace};
 use tray_icon::TrayIcon;
 
-use crate::bootstrap::notification::NotificationsState;
-use crate::bootstrap::{AUTOCOMPLETE_ID, DASHBOARD_ID, FigIdMap, WindowId};
+use crate::bootstrap::{AUTOCOMPLETE_ID, SETTINGS_ID, WindowId};
 use crate::event::{Event, ShowMessageNotification, WindowEvent};
 use crate::overlay::OverlayController;
 use crate::platform::PlatformState;
@@ -24,13 +23,11 @@ use fig_remote_ipc::figterm::FigtermState;
 use fig_util::consts::PRODUCT_NAME;
 
 pub struct DesktopHost {
-    pub fig_id_map: FigIdMap,
     pub figterm_state: Arc<FigtermState>,
     pub platform_state: Arc<PlatformState>,
-    pub notifications_state: Arc<NotificationsState>,
     #[allow(dead_code)]
     pub context: Arc<Context>,
-    pub show_dashboard_after_normal_launch: bool,
+    pub show_settings_after_normal_launch: bool,
     pub proxy: EventLoopProxy,
     pub window_target: EventLoopWindowTarget,
     pub overlay: OverlayController,
@@ -105,12 +102,7 @@ impl DesktopHost {
                 }
             },
             Event::PlatformBoundEvent(native_event) => {
-                if let Err(err) = self.platform_state.handle(
-                    native_event,
-                    &self.window_target,
-                    &self.fig_id_map,
-                    &self.notifications_state,
-                ) {
+                if let Err(err) = self.platform_state.handle(native_event, &self.window_target) {
                     debug!(%err, "Failed to handle native event");
                 }
             },
@@ -177,7 +169,7 @@ impl DesktopHost {
 
     fn dispatch_window_event(&mut self, window_id: WindowId, window_event: WindowEvent, cx: &mut App) {
         match window_id {
-            id if id == DASHBOARD_ID => self.dispatch_settings_event(window_event, cx),
+            id if id == SETTINGS_ID => self.dispatch_settings_event(window_event, cx),
             id if id == AUTOCOMPLETE_ID => match window_event {
                 WindowEvent::Hide | WindowEvent::Close => self.overlay.hide(cx),
                 WindowEvent::SetEnabled(enabled) => self.overlay.set_enabled(enabled, cx),
@@ -215,7 +207,7 @@ impl DesktopHost {
     fn show_settings(&mut self, cx: &mut App) {
         if let Some(handle) = &self.settings {
             if crate::settings_ui::focus_settings(handle, cx) {
-                crate::settings_ui::notify_dashboard_visible(&self.proxy, true);
+                crate::settings_ui::notify_settings_visible(&self.proxy, true);
                 self.refresh_settings_permissions();
                 return;
             }
@@ -223,7 +215,7 @@ impl DesktopHost {
         match crate::settings_ui::open_settings_window(cx, self.proxy.clone()) {
             Ok(handle) => {
                 self.settings = Some(handle);
-                crate::settings_ui::notify_dashboard_visible(&self.proxy, true);
+                crate::settings_ui::notify_settings_visible(&self.proxy, true);
                 self.refresh_settings_permissions();
             },
             Err(err) => error!(%err, "Failed to open native settings"),
@@ -240,7 +232,7 @@ impl DesktopHost {
         if let Some(handle) = self.settings.take() {
             crate::settings_ui::close_settings(&handle, cx);
         }
-        crate::settings_ui::notify_dashboard_visible(&self.proxy, false);
+        crate::settings_ui::notify_settings_visible(&self.proxy, false);
     }
 }
 
@@ -298,23 +290,23 @@ pub fn start_application(
                     crate::platform::set_activation_policy(*crate::utils::recover_mutex(
                         &crate::platform::ACTIVATION_POLICY,
                     ));
-                    let show_settings = (host.show_dashboard_after_normal_launch
+                    let show_settings = (host.show_settings_after_normal_launch
                         && !crate::platform::launched_as_login_item())
                         || crate::permissions::accessibility_is_missing();
                     if show_settings {
                         host.proxy
                             .send_event(Event::WindowEvent {
-                                window_id: DASHBOARD_ID,
+                                window_id: SETTINGS_ID,
                                 window_event: WindowEvent::Show,
                             })
                             .ok();
                     }
                 }
                 #[cfg(not(target_os = "macos"))]
-                if host.show_dashboard_after_normal_launch {
+                if host.show_settings_after_normal_launch {
                     host.proxy
                         .send_event(Event::WindowEvent {
-                            window_id: DASHBOARD_ID,
+                            window_id: SETTINGS_ID,
                             window_event: WindowEvent::Show,
                         })
                         .ok();

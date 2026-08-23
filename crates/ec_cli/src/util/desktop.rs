@@ -202,7 +202,7 @@ fn launch_linux_desktop(ctx: std::sync::Arc<fig_os_shim::Context>, state: &fig_s
                 },
             }
         }
-        // Fall back to calling q-desktop if on the user's path
+        // Fall back to the desktop process name on PATH.
     }
 
     Command::new(APP_PROCESS_NAME)

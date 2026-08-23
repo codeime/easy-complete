@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use fig_desktop_api::requests::install::install;
 use fig_os_shim::{Context, ContextArcProvider, ContextProvider};
 use fig_proto::fig::install_response::{InstallationStatus, Response};
 use fig_proto::fig::result::Result as ProtoResultEnum;
@@ -15,6 +14,7 @@ use tracing::warn;
 
 use crate::EventLoopProxy;
 use crate::event::Event;
+use crate::install_request::install;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PermId {

@@ -505,8 +505,8 @@ async fn install_appimage_binaries(ctx: &Context) -> anyhow::Result<()> {
 
 /// The AppImage is executed by mounting to a temporary directory and running the desktop binary.
 /// The current working directory of the desktop app essentially looks like this:
-/// - <tempdir>/bin/q
-/// - <tempdir>/bin/qterm
+/// - <tempdir>/bin/ec
+/// - <tempdir>/bin/ecterm
 ///
 /// Thus, we can access and copy the bundled binaries from the AppImage to the provided
 /// `destination`.
@@ -746,7 +746,12 @@ echo "{binary_name} {version}"
             let entry_path = appimage_desktop_entry_path(&ctx).unwrap();
             let icon_path = appimage_desktop_entry_icon_path(&ctx).unwrap();
             fs.create_dir_all(&entry_path.parent().unwrap()).await.unwrap();
-            fs.write(&entry_path, "[Desktop Entry]\nExec=q-desktop").await.unwrap();
+            fs.write(
+                &entry_path,
+                format!("[Desktop Entry]\nExec={}", fig_util::APP_PROCESS_NAME),
+            )
+            .await
+            .unwrap();
             fs.create_dir_all(icon_path.parent().unwrap()).await.unwrap();
             fs.write(&icon_path, "image").await.unwrap();
             let state = State::from_slice(&[("appimage.manageDesktopEntry", true.into())]);
@@ -771,7 +776,12 @@ echo "{binary_name} {version}"
             let entry_path = appimage_desktop_entry_path(&ctx).unwrap();
             let icon_path = appimage_desktop_entry_icon_path(&ctx).unwrap();
             fs.create_dir_all(&entry_path.parent().unwrap()).await.unwrap();
-            fs.write(&entry_path, "[Desktop Entry]\nExec=q-desktop").await.unwrap();
+            fs.write(
+                &entry_path,
+                format!("[Desktop Entry]\nExec={}", fig_util::APP_PROCESS_NAME),
+            )
+            .await
+            .unwrap();
             fs.create_dir_all(icon_path.parent().unwrap()).await.unwrap();
             fs.write(&icon_path, "image").await.unwrap();
             let state = State::new_fake();

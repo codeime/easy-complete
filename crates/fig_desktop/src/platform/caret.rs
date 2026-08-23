@@ -404,7 +404,6 @@ mod tests {
         );
         assert!(src.join("bootstrap/mod.rs").exists());
         let bootstrap = include_str!("../bootstrap/mod.rs");
-        let notifications = include_str!("../bootstrap/notification.rs");
         assert!(
             bootstrap.contains("pub struct AppRuntime"),
             "desktop bootstrap type is AppRuntime"
@@ -414,16 +413,20 @@ mod tests {
             "WKWebView host name must stay gone"
         );
         assert!(
-            !notifications.contains("struct WebviewNotificationsState"),
-            "notification state must not keep the WebView name"
+            !src.join("bootstrap/notification.rs").exists(),
+            "WebView window notification subscription map is gone"
         );
         assert!(
-            !bootstrap.contains("WryIdMap"),
+            !bootstrap.contains("WryIdMap") && !bootstrap.contains("FigIdMap"),
             "WKWebView window-id map is gone with the WebView host"
         );
         assert!(
             !bootstrap.contains("api_handler_tx"),
             "disconnected WebView JS handler channel is gone"
+        );
+        assert!(
+            bootstrap.contains("SETTINGS_ID") && !bootstrap.contains("DASHBOARD_ID"),
+            "settings window id is SETTINGS_ID, not the WebView dashboard name"
         );
         assert_eq!(crate::AUTOCOMPLETE_WINDOW_TITLE, ec_gpui::OVERLAY_WINDOW_TITLE);
         assert_eq!(ec_gpui::OVERLAY_WINDOW_TITLE, "Easy Complete");
@@ -490,7 +493,12 @@ mod tests {
         );
         assert!(
             linux.contains("-p fig_desktop") && macos.contains("-p fig_desktop"),
-            "dist still builds fig_desktop, which links fig_desktop_api"
+            "dist still builds fig_desktop"
+        );
+        assert!(
+            !workspace.contains("fig_desktop_api")
+                && !std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_desktop_api")).exists(),
+            "install dispatcher lives in fig_desktop; the leftover API crate is gone"
         );
         assert!(
             !workspace.contains("features = [\"full\"]")

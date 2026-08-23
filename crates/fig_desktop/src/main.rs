@@ -9,6 +9,7 @@ mod settings_ui;
 mod bootstrap;
 mod file_watcher;
 mod install;
+mod install_request;
 #[cfg(target_os = "linux")]
 mod linux_tray;
 mod local_ipc;
@@ -25,7 +26,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use bootstrap::AppRuntime;
-pub use bootstrap::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID};
+pub use bootstrap::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, SETTINGS_ID};
 use clap::Parser;
 use event::Event;
 use fig_log::{LogArgs, initialize_logging};

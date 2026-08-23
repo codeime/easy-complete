@@ -2661,10 +2661,9 @@ name = "fig_desktop"
 version = "2.2.2"
 dependencies = [
  "accessibility-sys",
+ "anstream 1.0.0",
  "anyhow",
  "async-trait",
- "base64 0.23.1",
- "bytes",
  "cfg-if",
  "clap",
  "cocoa 0.26.0",
@@ -2674,7 +2673,6 @@ dependencies = [
  "dispatch",
  "ec_engine",
  "ec_gpui",
- "fig_desktop_api",
  "fig_install",
  "fig_integrations",
  "fig_ipc",
@@ -2731,22 +2729,6 @@ dependencies = [
  "libfuzzer-sys",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "fig_desktop_api"
-version = "2.2.2"
-dependencies = [
- "anstream 1.0.0",
- "cfg-if",
- "fig_integrations",
- "fig_os_shim",
- "fig_proto",
- "fig_settings",
- "fig_util",
- "macos-utils",
- "tokio",
- "tracing",
 ]
 
 [[package]]
