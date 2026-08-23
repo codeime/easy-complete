@@ -351,7 +351,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 
 ## 8. 当前执行指针
 
-- 分支：`fix/cross-platform-audit-1` @ `8ba16257`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
+- 分支：`fix/cross-platform-audit-1` @ `719377b3`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
 - **发运：** 仍只有 macOS Apple Silicon DMG。Linux / Windows 是 WIP，不是产品（无 Linux 包、无 Windows 安装器）。
 - 本文件就是 M0 的文档交付物
 - 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `clippy -D warnings`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
@@ -364,7 +364,8 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - 2026-08-23 续 6（`54dee500`）：本机 Ubuntu 上 `cargo test -p fig_desktop` 全绿（115 + 1 ignored）。AppImage autostart 走 `set_enabled_in(ctx)`：AppImage 链到本地 desktop entry（不是 FUSE `current_exe`），前缀安装写 `--is-startup` 文件；`app.launchOnStartup` 仍是门闩。设置权限门在非 macOS 只看 shell integration，不因 Accessibility/IME 卡住。figterm mutex/rwlock poison 恢复；`UnixTerminal::Drop` warn 而不是 unwrap；history SQLite 改独立 `std::thread`（不再用 forever `spawn_blocking` 占 blocking pool）。去掉空的 `WryIdMap` / JS handler channel。`webview/` 模块名未改（rename churn）。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。Linux tarball 已按变更二进制重打。
 - 2026-08-23 续 7（`8ba16257`）：P1-2 已关。`fig_desktop/src/webview/` 改名为 `bootstrap/`，`WebviewManager` → `AppRuntime`，通知状态去掉 WebView 前缀。行为不变。`fig_desktop_api` 仍由 `fig_desktop` 链接（macOS 发运），与 `ec_overlay_spike` 都**不**在 `default-members`；dist 脚本不打 spike。本机 `cargo test -p fig_desktop` 116 + 1 ignored。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。Linux tarball 已按变更二进制重打。
 - 2026-08-23 续 8（review `8ba16257`）：干净，无代码修复。无残留 `crate::webview` / `WebviewManager` / `WebviewNotificationsState`；`src/webview/` 不存在。macOS 菜单 / ActivationPolicy / Sparkle / GPUI host 只改了类型名。留下的 “webview” 字样不是 bootstrap 模块：Sparkle `show_webview`（弹更新 UI）、`ec debug devtools` 帮助文案、以及对照旧 WebView 行为的单测名。本机 `cargo test -p fig_desktop` 116 + 1 ignored；`fig_desktop_api` 3 passed；`clippy -D warnings` on fig_desktop / fig_desktop_api / fig_util / ec_overlay_spike 绿；`ec engine complete --buffer "git ch"` 含 `checkout`；`cargo fmt --all -- --check` 绿。未测 macOS AX/IME/DMG，未假装 Windows live runtime。未开 remote_ipc unwrap / tokenize / X11 cache。
-- 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要把 `mesa-vulkan-drivers` 写进 rust-linux job，**不要复活考古 `platform/linux/` / `platform/windows.rs`**，不要把 `webview/` 目录名请回来。
+- 2026-08-23 续 9（`719377b3`）：R2-4 / R2-5 / R2-3。`remote_ipc` 关闭环走 `send_event_or_warn`，protobuf encode 失败 `error!` + continue，不再 naked unwrap（`rg 'send_event\(.*unwrap' crates/fig_desktop` 只剩测试）。`figterm` `EventHandler` 的 `main_loop_sender` 与 socket/history 一样 `error!`。`Engine::complete` 只 `tokenize` 一次，把 `(tokens, ends_with_space, buffer)` 传给 `lookup::complete`，ranking root 复用已解析 token。未开 X11 cache / history OnceLock / README / overlay title。本机 `cargo clippy --offline -p fig_desktop -p figterm -p ec_engine -- -D warnings` 绿；`cargo test --offline -p fig_desktop` 117 + 1 ignored；`figterm` 37 + 1 ignored + cli 1 + linux_shell_hooks 3；`ec_engine` 212；`ec engine complete --buffer "git ch"` 含 `checkout`。未测 macOS AX/IME/DMG，未假装 Windows live runtime。
+- 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要把 `mesa-vulkan-drivers` 写进 rust-linux job，**不要复活考古 `platform/linux/` / `platform/windows.rs`**，不要把 `webview/` 目录名请回来。未做：X11 overlay 连接缓存、history OnceLock、README 分支名、浮层标题。
 
 进度勾选：
 
