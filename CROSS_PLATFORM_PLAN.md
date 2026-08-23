@@ -351,7 +351,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 
 ## 8. 当前执行指针
 
-- 分支：`fix/cross-platform-audit-1`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
+- 分支：`fix/cross-platform-audit-1` @ `0ddd0de2`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
 - **发运：** 仍只有 macOS Apple Silicon DMG。Linux / Windows 是 WIP，不是产品（无 Linux 包、无 Windows 安装器）。
 - 本文件就是 M0 的文档交付物
 - 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `clippy -D warnings`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
@@ -360,7 +360,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - 2026-08-23 续 2（本机 Ubuntu `DISPLAY=:2`）：`scripts/build-linux.sh` **真的打出了** `dist/linux/easy-complete-2.2.2-x86_64.tar.gz`（`--locked`，IR 840/734/1480）。`install-linux.sh --prefix` 装进临时目录后，前缀里的 `ec engine complete --buffer "git ch"` 含 `checkout`（不设 `EC_SPECS_DIR`）；`--uninstall` 只清该前缀，**不会**删掉指向别的 PREFIX 的 autostart。D3 浮层：无 Vulkan ICD 时 GPUI 0.2.2 在创建窗口前 panic（`NoSupportedDeviceFound`）；装 lavapipe 后进程能住，`--no-dashboard` 且**不注入 caret** 时 xwininfo/xdotool 看不到 `Fig Autocomplete`（浮层只在 show 时才建窗）。没有用窗口矩形兜底。tarball / README 标明 Linux 未发运。
 - 2026-08-23 续 3（`DISPLAY=:2` 真终端 caret）：IBus 1.5.32 私有总线没有 `org.freedesktop.DBus.Monitoring`，监听改为 BecomeMonitor 失败则 `AddMatch` `eavesdrop='true'`（与 `dbus-monitor` 相同）。at-spi2 2.56 的 `Name` / `CaretOffset` / `Parent` 走属性，方法作回退。D2：X11 分类终端只在 IBus **已经订阅**时让 AT-SPI 让路。手测：`GTK_IM_MODULE=ibus` 的 xfce4-terminal → `bash (ecterm)` → `git ch`，`Fig Autocomplete` **IsViewable**，再打一个字母浮层 X +10（字符宽）。无窗口矩形兜底。GNOME Wayland 上的 AT-SPI 路径未手测。
 - 2026-08-23 续 4（M2 + D3）：泛 `CI=true` **不再**挡住 wrap（只拦 `GITHUB_ACTIONS` / `Q_CI`；不要把 `Q_FORCE_FIGTERM_LAUNCH` 写进 rc）。本机 `ecterm` + bash/zsh/fish OSC 697 钩子把 `git ch` 送到 mock `remote.sock`，引擎 stdout 含 `checkout`（无 caret、无浮层）。D3：map 后再发 `_NET_WM_STATE_ABOVE`；`ec-overlay-spike` 在 `:2` 上 `_NET_WM_WINDOW_TYPE_NOTIFICATION` + ABOVE，且不是 `_NET_ACTIVE_WINDOW`。`setup.sh` 仍只装编译依赖（GTK 托盘 / X11 / Vulkan 头），不装 WebKit；caret 运行时依赖 IBus/AT-SPI 不写进 apt。
-- 2026-08-23 续 5（审计收口）：`platform/mod.rs` 活路是 macos / linux_caret / windows_caret / stub。考古 `platform/linux/**` 与 `platform/windows.rs` **已删除，勿恢复、勿翻 cfg**。`local_webview_data_dir` 已去掉；Linux uninstall 只清 `easy-complete` 数据前缀。figterm history SQLite 走 `spawn_blocking`。desktop IPC `send_event` 关闭环时 warn 而不是 unwrap。`get_current_buffer` 原地 truncate。同一次 complete 快照 `AutocompleteFlags`。非 Mac 屏幕列表改名 `overlay_screens`。`GLOBAL_PROXY.set` / `spawn_engine` 失败走可诊断退出。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。
+- 2026-08-23 续 5（`0ddd0de2` 审计收口）：`platform/mod.rs` 活路是 macos / linux_caret / windows_caret / stub。考古 `platform/linux/**` 与 `platform/windows.rs` **已删除，勿恢复、勿翻 cfg**。`local_webview_data_dir` 已去掉；Linux uninstall 只清 `easy-complete` 数据前缀。figterm history SQLite 走 `spawn_blocking`。desktop IPC `send_event` 关闭环时 warn 而不是 unwrap。`get_current_buffer` 原地 truncate。同一次 complete 快照 `AutocompleteFlags`。非 Mac 屏幕列表改名 `overlay_screens`。`GLOBAL_PROXY.set` / `spawn_engine` 失败走可诊断退出。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。
 - 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要把 `mesa-vulkan-drivers` 写进 rust-linux job，**不要复活考古 `platform/linux/` / `platform/windows.rs`**。
 
 进度勾选：
