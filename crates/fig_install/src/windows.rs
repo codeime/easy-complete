@@ -12,7 +12,7 @@ pub(crate) async fn update(
     _relaunch_dashboard: bool,
 ) -> Result<(), Error> {
     Err(Error::UpdateFailed(
-        "Windows updater is not restored; zip/MSI needs a later packaging PR".into(),
+        crate::update_os_policy::WINDOWS_UPDATER_UNAVAILABLE.into(),
     ))
 }
 

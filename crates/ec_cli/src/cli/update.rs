@@ -13,7 +13,10 @@ pub struct UpdateArgs {}
 impl UpdateArgs {
     pub async fn execute(self) -> Result<ExitCode> {
         if !cfg!(target_os = "macos") {
-            bail!("{PRODUCT_NAME} updates are only supported on macOS");
+            bail!(
+                "{}",
+                fig_install::update_os_policy::cli_updates_only_on_macos(PRODUCT_NAME)
+            );
         }
 
         if fig_util::system_info::is_remote() {

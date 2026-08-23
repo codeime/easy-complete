@@ -9,6 +9,9 @@ pub mod macos;
 /// DMG hash / mount-point / `.app` layout. Compiled on every OS so Linux CI
 /// pins them. Live `hdiutil` stays `cfg(macos)`.
 mod macos_update_policy;
+/// Windows zip/MSI and Linux tar.zst updater honesty. Compiled on every OS
+/// so Linux CI pins them. Live download/unpack stays `cfg(os)`.
+pub mod update_os_policy;
 #[cfg(windows)]
 mod windows;
 

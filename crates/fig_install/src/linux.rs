@@ -85,7 +85,7 @@ pub(crate) async fn update_minimal(
     _relaunch_dashboard: bool,
 ) -> Result<(), Error> {
     Err(Error::UpdateFailed(
-        "Linux updater is not restored; tar.zst unpacking needs a later packaging PR".into(),
+        crate::update_os_policy::LINUX_MINIMAL_UPDATER_UNAVAILABLE.into(),
     ))
 }
 
@@ -115,7 +115,7 @@ async fn update_full_ctx(
 ) -> Result<(), Error> {
     if !ctx.env().in_appimage() {
         return Err(Error::UpdateFailed(
-            "Updating is only supported from the AppImage".into(),
+            crate::update_os_policy::LINUX_FULL_UPDATER_REQUIRES_APPIMAGE.into(),
         ));
     }
     let current_appimage_path = ctx

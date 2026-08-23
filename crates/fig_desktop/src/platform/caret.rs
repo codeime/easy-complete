@@ -866,6 +866,13 @@ mod tests {
                 && !util_lib.contains("#[cfg(target_os = \"macos\")]\npub mod launchd_plist"),
             "LaunchAgent plist XML is compiled on every OS so Linux CI pins --is-startup"
         );
+        let install_lib = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_install/src/lib.rs"));
+        assert!(
+            install_lib.contains("pub mod update_os_policy")
+                && !install_lib.contains("#[cfg(windows)]\nmod update_os_policy")
+                && install_lib.contains("#[cfg(windows)]\nmod windows"),
+            "Windows zip/MSI updater honesty is compiled on every OS; live windows.rs stays cfg(windows)"
+        );
         assert!(
             !workspace.contains("features = [\"full\"]")
                 && workspace.contains("rt-multi-thread")
