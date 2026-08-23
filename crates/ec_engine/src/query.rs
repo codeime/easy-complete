@@ -53,6 +53,45 @@ pub fn match_score(name: &str, query: &str, fuzzy: bool) -> Option<MatchScore> {
         });
     }
 
+    // Shell names are almost always ASCII. Skip two `to_lowercase` allocations
+    // per name (filegen filter + ranking, which scores each row once).
+    if name.is_ascii() && query.is_ascii() {
+        return match_score_ascii(name, query, fuzzy);
+    }
+
+    match_score_unicode(name, query, fuzzy)
+}
+
+fn match_score_ascii(name: &str, query: &str, fuzzy: bool) -> Option<MatchScore> {
+    if name.eq_ignore_ascii_case(query) {
+        return Some(MatchScore {
+            kind: MatchKind::ExactInsensitive,
+            score: -1,
+        });
+    }
+    if name.starts_with(query) {
+        return Some(MatchScore {
+            kind: MatchKind::PrefixCase,
+            score: -2,
+        });
+    }
+    if ascii_starts_with_ignore_case(name, query) {
+        return Some(MatchScore {
+            kind: MatchKind::PrefixInsensitive,
+            score: -3,
+        });
+    }
+    if fuzzy {
+        fuzzy_match(name, query).map(|fuzzy| MatchScore {
+            kind: MatchKind::Fuzzy,
+            score: fuzzy.score,
+        })
+    } else {
+        None
+    }
+}
+
+fn match_score_unicode(name: &str, query: &str, fuzzy: bool) -> Option<MatchScore> {
     let name_lower = name.to_lowercase();
     let query_lower = query.to_lowercase();
     if name_lower == query_lower {
@@ -87,11 +126,18 @@ pub fn match_score(name: &str, query: &str, fuzzy: bool) -> Option<MatchScore> {
     }
 }
 
+fn ascii_starts_with_ignore_case(name: &str, query: &str) -> bool {
+    name.len() >= query.len() && name.as_bytes()[..query.len()].eq_ignore_ascii_case(query.as_bytes())
+}
+
 pub fn matches_query(name: &str, query: &str, fuzzy: bool) -> bool {
     query.is_empty() || match_score(name, query, fuzzy).is_some()
 }
 
 pub fn starts_with_ignore_case(name: &str, query: &str) -> bool {
+    if name.is_ascii() && query.is_ascii() {
+        return ascii_starts_with_ignore_case(name, query);
+    }
     name.to_lowercase().starts_with(&query.to_lowercase())
 }
 
@@ -353,5 +399,36 @@ mod tests {
         assert_eq!(cmp_ignore_ascii_case("Git", "git"), Ordering::Equal);
         assert_eq!(cmp_ignore_ascii_case("gi", "git"), Ordering::Less);
         assert_eq!(cmp_ignore_ascii_case("gzip", "git"), Ordering::Greater);
+    }
+
+    #[test]
+    fn ascii_match_score_keeps_exact_then_prefix_buckets() {
+        assert_eq!(match_score("git", "git", true).unwrap().kind, MatchKind::ExactCase);
+        assert_eq!(
+            match_score("Git", "git", true).unwrap().kind,
+            MatchKind::ExactInsensitive
+        );
+        assert_eq!(
+            match_score("GIT", "Gi", true).unwrap().kind,
+            MatchKind::PrefixInsensitive
+        );
+        assert_eq!(
+            match_score("git-status", "git", true).unwrap().kind,
+            MatchKind::PrefixCase
+        );
+        assert_eq!(
+            match_score_ascii("Git", "git", true).unwrap().kind,
+            match_score_unicode("Git", "git", true).unwrap().kind
+        );
+        assert_eq!(
+            match_score_ascii("git-status", "git", false).unwrap().kind,
+            match_score_unicode("git-status", "git", false).unwrap().kind
+        );
+        assert_eq!(
+            match_score_ascii("checkout", "ckt", true).unwrap().kind,
+            match_score_unicode("checkout", "ckt", true).unwrap().kind
+        );
+        assert!(starts_with_ignore_case("Checkout", "ch"));
+        assert!(!starts_with_ignore_case("status", "ch"));
     }
 }

@@ -34,22 +34,11 @@ use super::{PlatformBoundEvent, PlatformWindow};
 use crate::bootstrap::notification::NotificationsState;
 use crate::bootstrap::{FigIdMap, GLOBAL_PROXY, WindowId};
 use crate::event::{Event, WindowEvent, WindowPosition};
+use crate::platform::caret::hide_overlay_on_element_change;
 use crate::utils::Rect;
 use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget};
 
 pub const DEFAULT_CARET_WIDTH: f64 = 10.0;
-
-/// IME-only terminals (Otty, Ghostty, Kitty, …) report the caret through IMK,
-/// not AX, so an in-window focused-element change is noise we cannot follow
-/// rather than a pane switch we should park the list for. No built-in terminal
-/// is both IME and xterm; that guard is for a custom terminal declaring both,
-/// where the AX pane switch is the real signal.
-fn hide_overlay_on_element_change(bundle_id: &str) -> bool {
-    !matches!(
-        Terminal::from_bundle_id(bundle_id),
-        Some(terminal) if terminal.supports_macos_input_method() && !terminal.is_xterm()
-    )
-}
 
 // See for other window level keys
 // https://github.com/phracker/MacOSX-SDKs/blob/master/MacOSX10.8.sdk/System/Library/Frameworks/CoreGraphics.framework/Versions/A/Headers/CGWindowLevel.h
@@ -722,23 +711,4 @@ impl PlatformStateImpl {
 
 pub const fn autocomplete_active() -> bool {
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::hide_overlay_on_element_change;
-
-    #[test]
-    fn ime_terminals_keep_the_overlay_on_element_change() {
-        assert!(!hide_overlay_on_element_change("io.appmakes.otty"));
-        assert!(!hide_overlay_on_element_change("com.mitchellh.ghostty"));
-        assert!(!hide_overlay_on_element_change("net.kovidgoyal.kitty"));
-    }
-
-    #[test]
-    fn ax_terminals_still_hide_on_element_change() {
-        assert!(hide_overlay_on_element_change("com.googlecode.iterm2"));
-        assert!(hide_overlay_on_element_change("com.apple.Terminal"));
-        assert!(hide_overlay_on_element_change("com.microsoft.VSCode"));
-    }
 }

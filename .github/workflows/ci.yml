@@ -125,10 +125,10 @@ jobs:
           key: ci-linux
 
       - name: Clippy (headless crates)
-        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
+        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
 
       - name: Test (headless crates)
-        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
+        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
 
       - name: Headless engine complete
         run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"
@@ -141,13 +141,13 @@ jobs:
       - name: Test (GPUI overlay policy)
         run: cargo test --locked -p ec_gpui
 
-      # Pure geometry; no DISPLAY. Pins IBus/AT-SPI/Win32 caret conversion so
-      # Linux CI covers the Windows F4 mapping without a Windows host.
-      - name: Test (caret conversion)
-        run: cargo test --locked -p fig_desktop -- platform::caret
-
-      - name: Test (overlay placement)
-        run: cargo test --locked -p fig_desktop -- overlay::
+      # Full fig_desktop unit/policy suite on Linux: linux_caret (IBus/AT-SPI
+      # match rules + mock-bus tests that skip without dbus-daemon), shared
+      # caret conversion (including Win32 F4), overlay placement, and
+      # include_str pins for macos.rs. Not a live X11/IBus/AT-SPI session,
+      # not live Accessibility/IME, not live HWND.
+      - name: Test (desktop host)
+        run: cargo test --locked -p fig_desktop
 
   rust-windows:
     name: Rust (Windows)
@@ -172,10 +172,10 @@ jobs:
           key: ci-windows
 
       - name: Clippy (headless crates)
-        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
+        run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm --color always -- -D warnings
 
       - name: Test (headless crates)
-        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
+        run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm
 
       - name: Headless engine complete
         run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"
@@ -186,8 +186,9 @@ jobs:
       - name: Test (GPUI overlay policy)
         run: cargo test --locked -p ec_gpui
 
-      - name: Test (caret conversion)
-        run: cargo test --locked -p fig_desktop -- platform::caret
-
-      - name: Test (overlay placement)
-        run: cargo test --locked -p fig_desktop -- overlay::
+      # Same fig_desktop suite as rust-linux. linux_caret is cfg(linux) so it
+      # is not compiled here. Named-pipe accept/connect stays cfg(windows);
+      # GetGUIThreadInfo, SetWindowPos against a real HWND, and ConPTY I/O
+      # are still not exercised.
+      - name: Test (desktop host)
+        run: cargo test --locked -p fig_desktop

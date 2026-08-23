@@ -129,7 +129,7 @@ impl Frecency {
             .filter(|(command, _)| query.is_empty() || crate::query::matches_query(command, query, fuzzy))
             .filter_map(|(command, _)| {
                 let command = command.trim_end();
-                seen.insert(command.to_string()).then_some(command)
+                seen.insert(command).then_some(command)
             })
             .take(HISTORY_LIMIT)
             .map(|command| {
@@ -163,7 +163,7 @@ impl Frecency {
                 if suffix.is_empty() || (!query.is_empty() && !crate::query::matches_query(suffix, query, fuzzy)) {
                     return None;
                 }
-                seen.insert(suffix.to_string()).then_some(suffix.to_string())
+                seen.insert(suffix).then_some(suffix)
             })
             .take(HISTORY_LIMIT)
             .map(|suffix| {
@@ -172,7 +172,7 @@ impl Frecency {
                     .get(first_word)
                     .copied()
                     .map_or(50, history_priority_base);
-                Suggestion::new(suffix.clone(), "past command", "history")
+                Suggestion::new(suffix, "past command", "history")
                     .with_insert_value(suffix)
                     .with_priority(priority)
             })
@@ -359,11 +359,18 @@ pub fn apply_with_acceptance(
         // Running the scorer with fuzzy enabled here is safe for both modes:
         // non-fuzzy results contain no scattered matches, while fuzzy results
         // retain the old exact/prefix/fuzzy ordering.
-        result.suggestions.sort_by(|a, b| {
-            compare_auto_execute(a, b)
-                .then_with(|| compare_match(a, b, &query))
-                .then_with(|| compare_priority(b, a, history_counts, acceptance, root_command, !alphabetical))
+        // Score once per row: `sort_by` would otherwise re-run `match_score`
+        // (and its lowercase work) on every comparison.
+        let mut scored: Vec<(Option<MatchScore>, Suggestion)> = std::mem::take(&mut result.suggestions)
+            .into_iter()
+            .map(|suggestion| (best_match(&suggestion, &query), suggestion))
+            .collect();
+        scored.sort_by(|(left_score, left), (right_score, right)| {
+            compare_auto_execute(left, right)
+                .then_with(|| compare_precomputed_match(*left_score, *right_score))
+                .then_with(|| compare_priority(right, left, history_counts, acceptance, root_command, !alphabetical))
         });
+        result.suggestions = scored.into_iter().map(|(_, suggestion)| suggestion).collect();
     }
 
     // This mirrors the old `deduplicateSuggestions` guard. It intentionally
@@ -444,9 +451,7 @@ fn effective_priority_score(
     priority
 }
 
-fn compare_match(left: &Suggestion, right: &Suggestion, query: &str) -> Ordering {
-    let left_score = best_match(left, query);
-    let right_score = best_match(right, query);
+fn compare_precomputed_match(left_score: Option<MatchScore>, right_score: Option<MatchScore>) -> Ordering {
     match (left_score, right_score) {
         (Some(left), Some(right)) => left
             .bucket()
@@ -503,23 +508,22 @@ pub fn merge_history(result: &mut CompleteResult, tokens: &[String], frecency: &
     // suggestion's `name` array. The IR keeps the selected spelling plus its
     // primary spelling; those are the alias identities that survive the
     // flattening step (displayName is presentation text, not an alias).
-    let static_names: HashSet<String> = result
-        .suggestions
-        .iter()
-        .flat_map(|suggestion| {
-            [Some(suggestion.name.as_str()), suggestion.primary_name.as_deref()]
-                .into_iter()
-                .flatten()
-                .map(str::to_string)
-        })
-        .collect();
-
-    for item in history {
-        if static_names.contains(&item.name) {
-            continue;
-        }
-        result.suggestions.push(item);
-    }
+    let extra: Vec<Suggestion> = {
+        let static_names: HashSet<&str> = result
+            .suggestions
+            .iter()
+            .flat_map(|suggestion| {
+                [Some(suggestion.name.as_str()), suggestion.primary_name.as_deref()]
+                    .into_iter()
+                    .flatten()
+            })
+            .collect();
+        history
+            .into_iter()
+            .filter(|item| !static_names.contains(item.name.as_str()))
+            .collect()
+    };
+    result.suggestions.extend(extra);
 }
 
 fn matching_term(result: &CompleteResult) -> &str {

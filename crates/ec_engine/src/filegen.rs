@@ -36,7 +36,7 @@ pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -
         if name.eq_ignore_ascii_case(".DS_Store") {
             continue;
         }
-        let is_dir = entry.path().is_dir();
+        let is_dir = entry_is_dir(&entry);
         if folders_only && !is_dir {
             continue;
         }
@@ -91,21 +91,40 @@ fn path_suggestion(name: String, is_dir: bool) -> Suggestion {
     Suggestion::new(name.clone(), kind, kind).with_insert_value(name)
 }
 
+/// Follow directory entries the way `Path::is_dir` does, but skip a `stat` for
+/// ordinary files and directories when `DirEntry::file_type` already knows.
+/// Symlinks still go through `path().is_dir()` so `link/` → `src/` stays a folder.
+fn entry_is_dir(entry: &fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(file_type) if file_type.is_dir() => true,
+        Ok(file_type) if file_type.is_symlink() => entry.path().is_dir(),
+        Ok(_) => false,
+        Err(_) => entry.path().is_dir(),
+    }
+}
+
 /// Approximate JavaScript's default `localeCompare` for the ASCII-heavy shell
 /// names produced by `ls`, while making ties deterministic across filesystems.
 /// Lowercase sorts before uppercase within an otherwise equal spelling (the
 /// ordering used by Node's default English locale in the old implementation).
 fn compare_file_names(left: &str, right: &str) -> Ordering {
-    let folded = left
-        .chars()
-        .map(|ch| ch.to_lowercase().collect::<String>())
-        .collect::<String>()
-        .cmp(
-            &right
-                .chars()
-                .map(|ch| ch.to_lowercase().collect::<String>())
-                .collect::<String>(),
-        );
+    // Same fold as concatenating `ch.to_lowercase()` per scalar, without a
+    // String per character on every comparison in the directory sort.
+    let mut left_fold = left.chars().flat_map(char::to_lowercase);
+    let mut right_fold = right.chars().flat_map(char::to_lowercase);
+    let folded = loop {
+        match (left_fold.next(), right_fold.next()) {
+            (Some(a), Some(b)) => {
+                let order = a.cmp(&b);
+                if order != Ordering::Equal {
+                    break order;
+                }
+            },
+            (None, Some(_)) => break Ordering::Less,
+            (Some(_), None) => break Ordering::Greater,
+            (None, None) => break Ordering::Equal,
+        }
+    };
     if folded != Ordering::Equal {
         return folded;
     }
@@ -480,6 +499,63 @@ mod tests {
             .map(|s| s.name)
             .collect();
         assert_eq!(names, vec!["Alpha", "beta", "zeta", ".Alpha", ".zeta", "../"]);
+    }
+
+    #[test]
+    fn compare_file_names_matches_concatenated_to_lowercase() {
+        fn allocating(left: &str, right: &str) -> Ordering {
+            let folded = left
+                .chars()
+                .map(|ch| ch.to_lowercase().collect::<String>())
+                .collect::<String>()
+                .cmp(
+                    &right
+                        .chars()
+                        .map(|ch| ch.to_lowercase().collect::<String>())
+                        .collect::<String>(),
+                );
+            if folded != Ordering::Equal {
+                return folded;
+            }
+            left.chars()
+                .zip(right.chars())
+                .find_map(|(left, right)| {
+                    if left == right {
+                        None
+                    } else if left.is_lowercase() != right.is_lowercase() {
+                        Some(if left.is_lowercase() {
+                            Ordering::Less
+                        } else {
+                            Ordering::Greater
+                        })
+                    } else {
+                        Some(left.cmp(&right))
+                    }
+                })
+                .unwrap_or_else(|| left.len().cmp(&right.len()))
+        }
+
+        for (left, right) in [
+            ("Alpha", "beta"),
+            ("file", "File"),
+            ("File", "file"),
+            ("İ", "i"),
+            ("ß", "ss"),
+            ("相対", "absolute"),
+            ("zeta", ".zeta"),
+        ] {
+            assert_eq!(
+                compare_file_names(left, right),
+                allocating(left, right),
+                "{left:?} vs {right:?}"
+            );
+            assert_eq!(
+                compare_file_names(right, left),
+                allocating(right, left),
+                "{right:?} vs {left:?}"
+            );
+        }
+        assert_eq!(compare_file_names("file", "File"), Ordering::Less);
     }
 
     #[cfg(unix)]

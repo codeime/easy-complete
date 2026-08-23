@@ -1,18 +1,33 @@
-//! Convert an IBus caret rectangle into overlay screen space.
+//! Shared caret conversion and overlay policy that must stay OS-agnostic.
 //!
 //! A terminal window rectangle is only used to turn *relative* IBus
 //! coordinates into a caret. It is never a placement fallback: if there is
 //! no usable caret, the overlay stays hidden.
 //!
-//! Callers live behind `cfg(target_os = "linux")` or
-//! `cfg(target_os = "windows")`. The module is compiled on every OS so the
-//! conversion tests run in macOS and Linux CI.
+//! Linux/Windows call the IBus/Win32 helpers; macOS calls
+//! [`hide_overlay_on_element_change`]. The module is compiled on every OS so
+//! Linux CI pins conversion and IME-vs-AX policy without AppKit.
 
 #![allow(dead_code)]
 
 use fig_proto::local::caret_position_hook::Origin;
+use fig_util::Terminal;
 use fig_util::terminal::PositioningKind;
 use tao::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
+
+/// IME-only terminals (Otty, Ghostty, Kitty, …) report the caret through IMK,
+/// not AX, so an in-window focused-element change is noise we cannot follow
+/// rather than a pane switch we should park the list for. No built-in terminal
+/// is both IME and xterm; that guard is for a custom terminal declaring both,
+/// where the AX pane switch is the real signal.
+///
+/// String policy, no AppKit. `macos.rs` calls this; Linux CI pins it.
+pub(crate) fn hide_overlay_on_element_change(bundle_id: &str) -> bool {
+    !matches!(
+        Terminal::from_bundle_id(bundle_id),
+        Some(terminal) if terminal.supports_macos_input_method() && !terminal.is_xterm()
+    )
+}
 
 /// Screen-space caret the overlay already consumes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -171,6 +186,29 @@ pub fn caret_origin_needs_screens(origin: Origin) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ime_terminals_keep_the_overlay_on_element_change() {
+        assert!(!hide_overlay_on_element_change("io.appmakes.otty"));
+        assert!(!hide_overlay_on_element_change("com.mitchellh.ghostty"));
+        assert!(!hide_overlay_on_element_change("net.kovidgoyal.kitty"));
+        let macos = include_str!("macos.rs");
+        assert!(
+            macos.contains("hide_overlay_on_element_change"),
+            "macos AX host still calls the shared policy"
+        );
+        assert!(
+            !macos.contains("fn hide_overlay_on_element_change"),
+            "do not fork the IME vs AX element-change policy back into macos.rs"
+        );
+    }
+
+    #[test]
+    fn ax_terminals_still_hide_on_element_change() {
+        assert!(hide_overlay_on_element_change("com.googlecode.iterm2"));
+        assert!(hide_overlay_on_element_change("com.apple.Terminal"));
+        assert!(hide_overlay_on_element_change("com.microsoft.VSCode"));
+    }
 
     #[test]
     fn null_ibus_rect_is_not_a_caret() {
@@ -370,6 +408,27 @@ mod tests {
         assert!(
             !overlay.contains("quartz_y_") && !overlay.contains("caret_y_in_quartz_space"),
             "overlay Y helpers must not keep quartz_y_* names"
+        );
+    }
+
+    #[test]
+    fn rust_linux_and_windows_ci_run_desktop_host_tests() {
+        let ci = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.github/workflows/ci.yml"));
+        assert!(
+            ci.contains("-p fig_log"),
+            "fig_log poison recovery belongs on rust-linux and rust-windows"
+        );
+        assert!(
+            !ci.contains("fig_desktop -- platform::caret"),
+            "desktop tests must not be filtered to caret conversion only"
+        );
+        assert!(
+            !ci.contains("fig_desktop -- overlay::"),
+            "overlay placement is covered by cargo test -p fig_desktop"
+        );
+        assert!(
+            ci.matches("cargo test --locked -p fig_desktop").count() >= 2,
+            "rust-linux and rust-windows both run the fig_desktop suite"
         );
     }
 
