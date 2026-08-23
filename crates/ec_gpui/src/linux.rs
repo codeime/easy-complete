@@ -8,8 +8,8 @@
 //! GNOME Wayland still has XWayland (`DISPLAY`); the overlay uses that.
 //! `overlay_screens` is empty without an X11 connection and the overlay parks.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tracing::debug;
@@ -26,8 +26,14 @@ use crate::overlay::OVERLAY_WINDOW_TITLE;
 /// Coalesce place/probe bursts onto one display connection and one RandR list.
 const X11_CACHE_TTL: Duration = Duration::from_millis(500);
 
+type OverlayScreen = (f64, f64, f64, f64);
+type CachedScreens = (Instant, Vec<OverlayScreen>);
+type InternedAtoms = Vec<(Box<[u8]>, xproto::Atom)>;
+
 static CACHED_X_WINDOW: AtomicU32 = AtomicU32::new(0);
 static X11_CONNECTS: AtomicU32 = AtomicU32::new(0);
+static DPI_SCALE: OnceLock<f64> = OnceLock::new();
+static INTERNED_ATOMS: OnceLock<Mutex<InternedAtoms>> = OnceLock::new();
 static X11: Mutex<X11Cache> = Mutex::new(X11Cache {
     display: None,
     retry_at: None,
@@ -38,9 +44,6 @@ struct X11Display {
     conn: RustConnection,
     screen_num: usize,
 }
-
-type OverlayScreen = (f64, f64, f64, f64);
-type CachedScreens = (Instant, Vec<OverlayScreen>);
 
 struct X11Cache {
     display: Option<X11Display>,
@@ -112,10 +115,9 @@ pub fn harden_overlay_window() {
 
 pub fn harden_overlay_window_titled(title: &str) {
     let _ = with_x11(|conn, screen_num| {
-        let Some(window) = find_window_by_title(conn, screen_num, title) else {
+        let Some(window) = overlay_x_window(conn, screen_num, title) else {
             return;
         };
-        CACHED_X_WINDOW.store(window, Ordering::Relaxed);
         apply_overlay_hints(conn, screen_num, window);
     });
 }
@@ -273,7 +275,16 @@ pub fn overlay_placement_scale() -> f64 {
             }
         }
     }
-    xft_dpi_scale().unwrap_or(1.0)
+    if let Some(scale) = DPI_SCALE.get() {
+        return *scale;
+    }
+    match xft_dpi_scale() {
+        Some(scale) => {
+            let _ = DPI_SCALE.set(scale);
+            scale
+        },
+        None => 1.0,
+    }
 }
 
 fn scale_from_xft_dpi_text(text: &str) -> Option<f64> {
@@ -307,10 +318,12 @@ fn xft_dpi_scale() -> Option<f64> {
 
 fn overlay_x_window(conn: &RustConnection, screen_num: usize, title: &str) -> Option<xproto::Window> {
     let cached = CACHED_X_WINDOW.load(Ordering::Relaxed);
-    if cached != 0 && window_title(conn, cached).as_deref() == Some(title) {
+    if cached != 0 {
+        // Trust the id until map/configure/unmap fails or the overlay is
+        // recreated (`invalidate_cached_overlay_x_window`). Re-reading
+        // WM_NAME on every place is a round-trip we already paid.
         return Some(cached);
     }
-    CACHED_X_WINDOW.store(0, Ordering::Relaxed);
     let window = find_window_by_title(conn, screen_num, title)?;
     CACHED_X_WINDOW.store(window, Ordering::Relaxed);
     Some(window)
@@ -382,7 +395,25 @@ fn announce_overlay_above(conn: &RustConnection, screen_num: usize, window: xpro
 }
 
 fn intern(conn: &RustConnection, name: &[u8]) -> Option<xproto::Atom> {
-    conn.intern_atom(false, name).ok()?.reply().ok().map(|reply| reply.atom)
+    {
+        let cache = interned_atoms();
+        if let Some((_, atom)) = cache.iter().find(|(cached, _)| cached.as_ref() == name) {
+            return Some(*atom);
+        }
+    }
+    let atom = conn.intern_atom(false, name).ok()?.reply().ok()?.atom;
+    let mut cache = interned_atoms();
+    if !cache.iter().any(|(cached, _)| cached.as_ref() == name) {
+        cache.push((name.to_vec().into_boxed_slice(), atom));
+    }
+    Some(atom)
+}
+
+fn interned_atoms() -> std::sync::MutexGuard<'static, InternedAtoms> {
+    INTERNED_ATOMS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
 }
 
 fn randr_screens(conn: &RustConnection, root: xproto::Window) -> anyhow::Result<Vec<(f64, f64, f64, f64)>> {
@@ -618,6 +649,52 @@ mod tests {
         assert!(
             production.contains("discard_display"),
             "a flush/IO failure must drop the cached display so the next place reconnects"
+        );
+    }
+
+    #[test]
+    fn overlay_trusts_cached_x_window_and_interns_once() {
+        let src = include_str!("linux.rs");
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        let harden = {
+            let start = production.find("pub fn harden_overlay_window_titled").expect("harden");
+            let rest = &production[start..];
+            let end = rest.find("\npub fn ").unwrap_or(rest.len());
+            &rest[..end]
+        };
+        assert!(
+            harden.contains("overlay_x_window(conn, screen_num, title)"),
+            "harden must reuse CACHED_X_WINDOW instead of walking the tree"
+        );
+        assert!(
+            !harden.contains("find_window_by_title"),
+            "harden must not find_window_by_title; overlay_x_window does that on a miss"
+        );
+        let overlay_x = {
+            let start = production.find("fn overlay_x_window").expect("overlay_x_window");
+            let rest = &production[start..];
+            let end = rest.find("\nfn ").unwrap_or(rest.len());
+            &rest[..end]
+        };
+        assert!(
+            overlay_x.contains("CACHED_X_WINDOW.load"),
+            "place/park/harden share overlay_x_window"
+        );
+        assert!(
+            !overlay_x.contains("window_title"),
+            "a non-zero CACHED_X_WINDOW must be trusted until invalidate/failure"
+        );
+        assert!(
+            overlay_x.contains("find_window_by_title(conn, screen_num, title)"),
+            "cache miss still finds by title"
+        );
+        assert!(
+            production.contains("INTERNED_ATOMS") && production.contains("interned_atoms"),
+            "intern must cache atoms instead of intern_atom per place"
+        );
+        assert!(
+            production.contains("static DPI_SCALE: OnceLock") && production.contains("DPI_SCALE.get()"),
+            "Xft dpi must be OnceLock'd after the first successful read"
         );
     }
 
