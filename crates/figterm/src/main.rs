@@ -991,8 +991,8 @@ fn main() {
     logger::stdio_debug_log(format!("{Q_LOG_LEVEL}={}", fig_log::get_log_level()));
 
     if !state::get_bool_or("qterm.enabled", true) {
-        println!("[NOTE] qterm is disabled. Autocomplete will not work.");
-        logger::stdio_debug_log("qterm is disabled. `qterm.enabled` == false");
+        println!("[NOTE] {PTY_BINARY_NAME} is disabled. Autocomplete will not work.");
+        logger::stdio_debug_log(format!("{PTY_BINARY_NAME} is disabled. `qterm.enabled` == false"));
         return;
     }
 
@@ -1022,6 +1022,26 @@ mod tests {
     #[test]
     fn hostname_does_not_need_sysinfo() {
         assert!(hostname().is_some_and(|name| !name.is_empty()));
+    }
+
+    #[test]
+    fn disabled_pty_note_uses_product_binary_name() {
+        let production = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains("[NOTE] qterm is disabled"),
+            "user-facing disable note must not say qterm"
+        );
+        assert!(
+            production.contains("[NOTE] {PTY_BINARY_NAME} is disabled"),
+            "disable note should name ecterm"
+        );
+        assert!(
+            production.contains("qterm.enabled"),
+            "the settings key stays qterm.enabled"
+        );
     }
 
     #[test]

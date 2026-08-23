@@ -618,7 +618,7 @@ impl DoctorCheck for FigIntegrationsCheck {
             });
         }
 
-        // Check that ~/.local/bin/qterm exists
+        // Check that ~/.local/bin/ecterm exists
         // TODO(grant): Check figterm exe exists
         // let figterm_path = fig_directories::fig_dir()
         //    .context("Could not find ~/.fig")?
@@ -665,7 +665,11 @@ struct PtySocketCheck;
 #[async_trait]
 impl DoctorCheck for PtySocketCheck {
     fn name(&self) -> Cow<'static, str> {
-        "Qterm Socket Check".into()
+        format!("{PTY_BINARY_NAME} socket exists").into()
+    }
+
+    fn analytics_event_name(&self) -> String {
+        "qterm_socket_check".into()
     }
 
     async fn check(&self, _: &()) -> Result<(), DoctorError> {
@@ -674,11 +678,12 @@ impl DoctorCheck for PtySocketCheck {
             Ok(session) => session,
             Err(_) => {
                 return Err(doctor_error!(
-                    "Qterm is not running, please restart your terminal. QTERM_SESSION_ID is unset."
+                    "{PTY_BINARY_NAME} is not running, please restart your terminal. {QTERM_SESSION_ID} is unset."
                 ));
             },
         };
-        let socket_path = fig_util::directories::figterm_socket_path(term_session).context("No qterm path")?;
+        let socket_path = fig_util::directories::figterm_socket_path(term_session)
+            .with_context(|| format!("No {PTY_BINARY_NAME} socket path"))?;
 
         check_socket_perms(&socket_path).await?;
 
@@ -2161,4 +2166,36 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod product_name_tests {
+    #[test]
+    fn pty_socket_check_does_not_say_qterm() {
+        let src = include_str!("mod.rs");
+        let start = src.find("struct PtySocketCheck").expect("PtySocketCheck");
+        let rest = &src[start..];
+        let end = rest.find("impl DoctorCheck<Option<Shell>>").unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(
+            !body.contains("\"Qterm Socket Check\""),
+            "doctor check name must not say Qterm"
+        );
+        assert!(
+            !body.contains("\"Qterm is not running"),
+            "doctor error must not say Qterm"
+        );
+        assert!(
+            body.contains("{PTY_BINARY_NAME} socket exists"),
+            "socket check should name ecterm"
+        );
+        assert!(
+            body.contains("qterm_socket_check"),
+            "analytics id stays qterm_socket_check"
+        );
+        assert!(
+            body.contains("{QTERM_SESSION_ID}"),
+            "the env var name is still QTERM_SESSION_ID"
+        );
+    }
 }
