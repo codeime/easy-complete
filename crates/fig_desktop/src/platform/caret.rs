@@ -137,6 +137,42 @@ pub fn caret_from_win32_client_caret(
     })
 }
 
+/// `GetGUIThreadInfo` + `ClientToScreen` result. A missing `hwndCaret` is not
+/// a window-rect fallback — the overlay parks. Compiled on every OS so Linux
+/// CI pins that contract; live GetGUIThreadInfo still needs a Windows host.
+pub fn win32_caret_from_gui_thread(
+    hwnd_caret_valid: bool,
+    client_left: i32,
+    client_top: i32,
+    client_right: i32,
+    client_bottom: i32,
+    screen_x: i32,
+    screen_y: i32,
+) -> Option<CaretOnScreen> {
+    if !hwnd_caret_valid {
+        return None;
+    }
+    caret_from_win32_client_caret(client_left, client_top, client_right, client_bottom, screen_x, screen_y)
+}
+
+/// What the 16 ms Win32 caret poll does with a miss after a hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Win32CaretPollAction {
+    Send,
+    Hide,
+    Idle,
+}
+
+pub fn win32_caret_poll_action(had_caret: bool, saw_caret: bool) -> (bool, Win32CaretPollAction) {
+    if saw_caret {
+        (true, Win32CaretPollAction::Send)
+    } else if had_caret {
+        (false, Win32CaretPollAction::Hide)
+    } else {
+        (false, Win32CaretPollAction::Idle)
+    }
+}
+
 /// `AtspiRole` from at-spi2-core. Frame/Window are the toplevels we may
 /// query for an IBus-relative origin; Application is the walk stop.
 pub const ATSPI_ROLE_FRAME: u32 = 23;
@@ -430,6 +466,10 @@ mod tests {
             ci.matches("cargo test --locked -p fig_desktop").count() >= 2,
             "rust-linux and rust-windows both run the fig_desktop suite"
         );
+        assert!(
+            ci.matches("cargo test --locked -p ec_gpui").count() >= 2,
+            "rust-linux and rust-windows both run the ec_gpui suite (macos_overlay / windows_overlay)"
+        );
     }
 
     #[test]
@@ -491,5 +531,57 @@ mod tests {
             },
             other => panic!("expected physical size, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn win32_missing_hwnd_caret_is_not_a_window_rect() {
+        assert!(win32_caret_from_gui_thread(false, 0, 0, 80, 24, 10, 20).is_none());
+        let caret = win32_caret_from_gui_thread(true, 4, 8, 12, 24, 104, 208).unwrap();
+        match caret.position {
+            Position::Physical(p) => {
+                assert_eq!(p.x, 104);
+                assert_eq!(p.y, 208);
+            },
+            other => panic!("expected physical position, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn win32_lost_caret_hides_the_overlay() {
+        assert_eq!(
+            win32_caret_poll_action(false, false),
+            (false, Win32CaretPollAction::Idle)
+        );
+        assert_eq!(win32_caret_poll_action(false, true), (true, Win32CaretPollAction::Send));
+        assert_eq!(win32_caret_poll_action(true, true), (true, Win32CaretPollAction::Send));
+        assert_eq!(
+            win32_caret_poll_action(true, false),
+            (false, Win32CaretPollAction::Hide)
+        );
+    }
+
+    #[test]
+    fn windows_caret_host_uses_the_shared_gui_thread_policy() {
+        let src = include_str!("windows_caret.rs");
+        assert!(
+            src.contains("win32_caret_from_gui_thread"),
+            "Win32 host must go through the shared hwndCaret gate"
+        );
+        assert!(
+            src.contains("win32_caret_poll_action"),
+            "lost-caret Hide must use the shared poll action"
+        );
+        assert!(
+            src.contains("WindowPosition::RelativeToCaret"),
+            "Win32 place is a caret, not a window rect"
+        );
+        assert!(
+            !src.contains("GetWindowRect") && !src.contains("PositionRelativeToRect"),
+            "missing hwndCaret must not fall back to the console window"
+        );
+        assert!(
+            !src.contains("caret_from_win32_client_caret("),
+            "do not fork the hwndCaret gate; call win32_caret_from_gui_thread"
+        );
     }
 }

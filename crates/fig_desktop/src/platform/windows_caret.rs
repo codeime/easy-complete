@@ -21,7 +21,9 @@ use crate::bootstrap::AUTOCOMPLETE_ID;
 use crate::bootstrap::notification::NotificationsState;
 use crate::bootstrap::{FigIdMap, WindowId};
 use crate::event::{Event, WindowEvent, WindowPosition};
-use crate::platform::caret::{CaretOnScreen, caret_from_win32_client_caret};
+use crate::platform::caret::{
+    CaretOnScreen, Win32CaretPollAction, win32_caret_from_gui_thread, win32_caret_poll_action,
+};
 use crate::utils::Rect;
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
@@ -86,18 +88,14 @@ fn spawn(proxy: EventLoopProxy) {
         .spawn(move || {
             let mut had_caret = false;
             loop {
-                match poll_caret() {
-                    Some(caret) => {
-                        had_caret = true;
-                        send_caret(&proxy, caret);
-                    },
-                    None => {
-                        if had_caret {
-                            hide(&proxy);
-                            had_caret = false;
-                        }
-                    },
+                let now = poll_caret();
+                let (next_had, action) = win32_caret_poll_action(had_caret, now.is_some());
+                match (action, now) {
+                    (Win32CaretPollAction::Send, Some(caret)) => send_caret(&proxy, caret),
+                    (Win32CaretPollAction::Hide, _) => hide(&proxy),
+                    _ => {},
                 }
+                had_caret = next_had;
                 thread::sleep(Duration::from_millis(16));
             }
         })
@@ -116,16 +114,24 @@ fn poll_caret() -> Option<CaretOnScreen> {
             ..Default::default()
         };
         GetGUIThreadInfo(tid, &mut info).ok()?;
-        if info.hwndCaret.is_invalid() {
-            return None;
-        }
+        let hwnd_caret_valid = !info.hwndCaret.is_invalid();
         let rect = info.rcCaret;
         let mut origin = POINT {
             x: rect.left,
             y: rect.top,
         };
-        let _ = ClientToScreen(info.hwndCaret, &mut origin);
-        caret_from_win32_client_caret(rect.left, rect.top, rect.right, rect.bottom, origin.x, origin.y)
+        if hwnd_caret_valid {
+            let _ = ClientToScreen(info.hwndCaret, &mut origin);
+        }
+        win32_caret_from_gui_thread(
+            hwnd_caret_valid,
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+            origin.x,
+            origin.y,
+        )
     }
 }
 

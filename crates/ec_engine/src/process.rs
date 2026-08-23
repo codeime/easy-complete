@@ -601,6 +601,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn windows_execute_full_still_waits_on_a_helper_thread() {
+        let src = include_str!("process.rs");
+        let start = src
+            .find("fn wait_child_output_threaded")
+            .expect("wait_child_output_threaded");
+        let rest = &src[start..];
+        let end = rest.find("/// [`execute`]").unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(
+            body.contains("wait_with_output") && body.contains("thread::spawn"),
+            "Windows executeCommand still buffers the whole pipe on a waiter; do not claim it polls"
+        );
+        assert!(
+            body.contains("stdout.truncate(MAX_STDOUT)"),
+            "Windows still truncates after wait, not while reading"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn returns_stdout_after_pipe_closes_even_if_child_hangs() {

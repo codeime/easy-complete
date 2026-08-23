@@ -70,4 +70,33 @@ mod tests {
         assert!(!named_pipe_validate_socket_checks_permissions());
         assert_eq!(NAMED_PIPE_CONNECT_BUDGET_SECS, 5);
     }
+
+    #[test]
+    fn windows_pipe_host_uses_the_shared_bind_and_retry_policy() {
+        let src = include_str!("windows_pipe.rs");
+        assert!(
+            src.contains("named_pipe_connect_retryable_os_error"),
+            "named-pipe connect retries FILE_NOT_FOUND / PIPE_BUSY from this module"
+        );
+        assert!(
+            src.contains("named_pipe_bind_requires_first_instance()"),
+            "bind must require first_pipe_instance"
+        );
+        assert!(
+            src.contains("named_pipe_accept_creates_next_instance_before_return"),
+            "accept must precreate the next instance"
+        );
+        assert!(
+            src.contains("first_pipe_instance("),
+            "ServerOptions still sets first_pipe_instance"
+        );
+        assert!(
+            src.contains("NAMED_PIPE_CONNECT_BUDGET_SECS"),
+            "connect budget is the shared constant, not a second number"
+        );
+        assert!(
+            !src.contains("fs::remove_file") && !src.contains("std::fs::remove_file"),
+            "named-pipe bind must not unlink a path the way Unix sockets do"
+        );
+    }
 }

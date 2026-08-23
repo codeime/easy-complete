@@ -10,6 +10,10 @@ mod linux_overlay;
 mod list;
 #[cfg(target_os = "macos")]
 mod macos;
+/// macOS overlay policy. Compiled on every OS so Linux CI pins
+/// `NSScreen.screens[0]` (not `mainScreen`), the Quartz→Cocoa Y flip, and
+/// the frame-echo schedule. `macos.rs` is still `cfg(macos)` and talks to AppKit.
+mod macos_overlay;
 mod overlay;
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod platform_stub;
@@ -39,9 +43,13 @@ pub use list::{
 pub use macos::{
     harden_overlay_window, harden_overlay_window_handle, harden_overlay_window_titled,
     invalidate_cached_overlay_x_window, overlay_placement_scale, overlay_screens, park_overlay_window_handle,
-    park_overlay_window_titled, polish_overlay_window_titled, quartz_y_to_cocoa_frame_y, set_overlay_frame_handle,
-    set_overlay_frame_titled, set_overlay_visible_handle, set_overlay_visible_titled, set_overlay_window_level,
+    park_overlay_window_titled, polish_overlay_window_titled, set_overlay_frame_handle, set_overlay_frame_titled,
+    set_overlay_visible_handle, set_overlay_visible_titled, set_overlay_window_level,
     set_overlay_window_level_for_title, system_appearance_is_dark,
+};
+pub use macos_overlay::{
+    macos_overlay_activates, macos_overlay_anchors_to_main_screen, macos_primary_screen_index,
+    quartz_y_to_cocoa_frame_y,
 };
 pub use overlay::{
     OVERLAY_WINDOW_TITLE, OverlayHandle, OverlayState, open_overlay_window, open_overlay_window_with_visibility,

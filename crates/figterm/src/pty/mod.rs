@@ -80,6 +80,28 @@ mod win32_bool_tests {
         assert!(!win32_hresult_succeeded(E_FAIL));
         assert!(win32_bool_succeeded(S_FALSE), "BOOL would misread S_FALSE as success");
     }
+
+    #[test]
+    fn conpty_create_and_resize_use_hresult_not_bool() {
+        let src = include_str!("win/pseudocon.rs");
+        assert!(
+            src.contains("win32_hresult_succeeded(result)"),
+            "CreatePseudoConsole / ResizePseudoConsole return HRESULT (0 = success)"
+        );
+        assert!(
+            !src.contains("win32_bool_succeeded"),
+            "do not feed ConPTY HRESULT to the TerminateProcess BOOL mapper"
+        );
+        let child = include_str!("win/mod.rs");
+        assert!(
+            child.contains("win32_bool_succeeded(res as i32)"),
+            "TerminateProcess / GetExitCodeProcess still use BOOL"
+        );
+        assert!(
+            child.contains("TerminateProcess"),
+            "Win32 child kill is TerminateProcess"
+        );
+    }
 }
 
 pub trait MasterPty {
