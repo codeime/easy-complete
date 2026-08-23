@@ -598,6 +598,13 @@ Type=Application"#;
                 false,
                 "AppImage should not install if user has removed permission",
             ),
+            (
+                vec![("APPIMAGE", "/app.appimage")],
+                vec![("app.launchOnStartup", true.into())],
+                vec![("appimage.manageDesktopEntry", true.into())],
+                true,
+                "AppImage should install when launchOnStartup and desktop-entry permission are both set",
+            ),
         ];
         for test in testcases {
             let (env, settings, state, expected, message) = test;

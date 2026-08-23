@@ -8,7 +8,7 @@ use tracing::level_filters::LevelFilter;
 use tracing::{debug, error};
 
 use crate::history::{HistoryCommand, HistorySender};
-use crate::{INSERT_ON_NEW_CMD, MainLoopEvent, shell_state_to_context};
+use crate::{INSERT_ON_NEW_CMD, MainLoopEvent, recover_mutex, shell_state_to_context};
 
 pub struct EventHandler {
     socket_sender: Sender<Hostbound>,
@@ -41,7 +41,7 @@ impl EventListener for EventHandler {
                 let hook = new_prompt_hook(Some(context));
                 let message = hook_to_message(hook);
 
-                let insert_on_new_cmd = INSERT_ON_NEW_CMD.lock().unwrap().take();
+                let insert_on_new_cmd = recover_mutex(&INSERT_ON_NEW_CMD).take();
 
                 if let Some(cwd) = &shell_state.local_context.current_working_directory {
                     if cwd.exists() {

@@ -254,3 +254,47 @@ pub fn accessibility_is_missing() -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_ready_matches_the_platform_gate() {
+        let ax_and_ime_broken = PermissionSnapshot {
+            accessibility: PermReady::Missing,
+            shell: PermReady::Ready,
+            input_method: PermReady::Error,
+            error: None,
+        };
+        let shell_missing = PermissionSnapshot {
+            accessibility: PermReady::Ready,
+            shell: PermReady::Missing,
+            input_method: PermReady::Ready,
+            error: None,
+        };
+        #[cfg(target_os = "macos")]
+        {
+            assert!(!ax_and_ime_broken.all_ready());
+            assert!(!shell_missing.all_ready());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(
+                ax_and_ime_broken.all_ready(),
+                "Linux/Windows settings must not wait on Accessibility/IME"
+            );
+            assert!(!shell_missing.all_ready());
+            assert!(!ax_and_ime_broken.still_checking());
+            assert!(
+                PermissionSnapshot {
+                    accessibility: PermReady::Checking,
+                    shell: PermReady::Ready,
+                    input_method: PermReady::Checking,
+                    error: None,
+                }
+                .all_ready()
+            );
+        }
+    }
+}

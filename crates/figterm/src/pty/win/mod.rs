@@ -31,7 +31,7 @@ pub struct WinChild {
 impl WinChild {
     fn child_has_completed(&mut self) -> io::Result<Option<ExitStatus>> {
         let mut status: DWORD = 0;
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
+        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
         let res = unsafe { GetExitCodeProcess(proc.as_raw_handle() as _, &mut status) };
         if crate::pty::win32_bool_succeeded(res as i32) {
             if status == STILL_ACTIVE {
@@ -45,7 +45,7 @@ impl WinChild {
     }
 
     fn do_kill(&mut self) -> io::Result<()> {
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
+        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
         let res = unsafe { TerminateProcess(proc.as_raw_handle() as _, 1) };
         let err = io::Error::last_os_error();
         if crate::pty::win32_bool_succeeded(res as i32) {
@@ -63,7 +63,7 @@ impl ChildKiller for WinChild {
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
+        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
         Box::new(WinChildKiller { proc })
     }
 }
@@ -99,7 +99,7 @@ impl Child for WinChild {
         if let Ok(Some(status)) = self.try_wait() {
             return Ok(status);
         }
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
+        let proc = crate::recover_mutex(&self.proc).try_clone().unwrap();
         unsafe {
             WaitForSingleObject(proc.as_raw_handle() as _, INFINITE);
         }
@@ -113,12 +113,12 @@ impl Child for WinChild {
     }
 
     fn process_id(&self) -> Option<u32> {
-        let res = unsafe { GetProcessId(self.proc.lock().unwrap().as_raw_handle() as _) };
+        let res = unsafe { GetProcessId(crate::recover_mutex(&self.proc).as_raw_handle() as _) };
         if res == 0 { None } else { Some(res) }
     }
 
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
-        let proc = self.proc.lock().unwrap();
+        let proc = crate::recover_mutex(&self.proc);
         Some(proc.as_raw_handle())
     }
 }
@@ -134,7 +134,7 @@ impl std::future::Future for WinChild {
                 struct PassRawHandleToWaiterThread(pub RawHandle);
                 unsafe impl Send for PassRawHandleToWaiterThread {}
 
-                let proc = match self.proc.lock().unwrap().try_clone() {
+                let proc = match crate::recover_mutex(&self.proc).try_clone() {
                     Ok(proc) => proc,
                     Err(err) => return Poll::Ready(Err(err.into())),
                 };
@@ -240,7 +240,7 @@ impl ConPtyAsyncMasterPty {
 
         {
             // spawn threads, initialize incoming receiver and transmitter channels.
-            let inner_lock = inner.lock().unwrap();
+            let inner_lock = crate::recover_mutex(&inner);
             let mut writable = inner_lock.writable.try_clone()?;
             let mut readable = inner_lock.readable.try_clone()?;
 
@@ -298,7 +298,7 @@ impl AsyncMasterPty for ConPtyAsyncMasterPty {
     }
 
     fn resize(&self, size: PtySize) -> anyhow::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = crate::recover_mutex(&self.inner);
         inner.resize(size.rows, size.cols, size.pixel_width, size.pixel_height)
     }
 }
@@ -311,7 +311,7 @@ impl MasterPty for ConPtyMasterPty {
 
 impl SlavePty for ConPtySlavePty {
     fn spawn_command(&self, builder: CommandBuilder) -> anyhow::Result<Box<dyn Child + Send + Sync>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = crate::recover_mutex(&self.inner);
         let child = inner.con.spawn_command(builder)?;
         Ok(Box::new(child))
     }

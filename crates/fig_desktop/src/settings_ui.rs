@@ -1479,7 +1479,6 @@ fn permission_gate_page(
     let rows = [(PermId::Shell, gate.shell)];
     let checking = gate.still_checking();
     let busy = repairing.is_some() || checking;
-    let ax_ready = gate.accessibility == PermReady::Ready;
 
     let mut list = div()
         .rounded(px(14.))
@@ -1491,7 +1490,13 @@ fn permission_gate_page(
         let state = *state;
         let (title, description, repair_label) = perm_label(id, zh);
         let can_repair = matches!(state, PermReady::Missing | PermReady::Error);
-        let blocked = id == PermId::Shell && !ax_ready;
+        // macOS still sequences shell repair behind Accessibility. Linux/Windows
+        // never ask for AX/IME, so a leftover Missing/Error bit must not hide
+        // the only row the gate can actually repair.
+        #[cfg(target_os = "macos")]
+        let blocked = id == PermId::Shell && gate.accessibility != PermReady::Ready;
+        #[cfg(not(target_os = "macos"))]
+        let blocked = false;
         let this_busy = repairing == Some(id);
         let enabled = can_repair && !busy && !blocked;
         let last = i + 1 == rows.len();
@@ -1983,22 +1988,32 @@ mod tests {
             PermReady::Checking,
             PermReady::Ready
         )));
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            !shows_permission_gate(&snapshot(PermReady::Checking, PermReady::Ready, PermReady::Checking)),
+            "Linux/Windows must not wait on macOS Accessibility/IME"
+        );
     }
 
     #[test]
     fn settings_show_the_gate_only_after_a_failed_check() {
-        assert!(shows_permission_gate(&snapshot(
-            PermReady::Missing,
-            PermReady::Ready,
-            PermReady::Ready
-        )));
         assert!(!shows_permission_gate(&snapshot(
             PermReady::Ready,
             PermReady::Ready,
             PermReady::Ready
         )));
+        #[cfg(target_os = "macos")]
+        assert!(shows_permission_gate(&snapshot(
+            PermReady::Missing,
+            PermReady::Ready,
+            PermReady::Ready
+        )));
         #[cfg(not(target_os = "macos"))]
         {
+            assert!(
+                !shows_permission_gate(&snapshot(PermReady::Missing, PermReady::Ready, PermReady::Ready)),
+                "Linux/Windows must not trap settings behind macOS Accessibility"
+            );
             assert!(
                 !shows_permission_gate(&snapshot(PermReady::Error, PermReady::Ready, PermReady::Missing)),
                 "Linux/Windows must not trap settings behind macOS Accessibility/IME"

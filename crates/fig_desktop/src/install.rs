@@ -450,7 +450,8 @@ async fn install_autostart_entry(
 ) -> anyhow::Result<()> {
     use fig_integrations::desktop_entry::should_install_autostart_entry;
 
-    fig_integrations::launch_at_login::set_enabled(should_install_autostart_entry(ctx, settings, state)).await?;
+    fig_integrations::launch_at_login::set_enabled_in(ctx, should_install_autostart_entry(ctx, settings, state))
+        .await?;
     Ok(())
 }
 
@@ -802,7 +803,7 @@ echo "{binary_name} {version}"
             // When
             install_autostart_entry(
                 &ctx,
-                &Settings::new_fake(),
+                &Settings::from_slice(&[("app.launchOnStartup", true.into())]),
                 &State::from_slice(&[("appimage.manageDesktopEntry", true.into())]),
             )
             .await
@@ -815,6 +816,39 @@ echo "{binary_name} {version}"
                     .is_installed()
                     .await
                     .is_ok()
+            );
+        }
+
+        #[tokio::test]
+        async fn test_autostart_entry_not_installed_without_launch_on_startup() {
+            let ctx = Context::builder()
+                .with_test_home()
+                .await
+                .unwrap()
+                .with_env_var("APPIMAGE", "/test.appimage")
+                .build_fake();
+            let fs = ctx.fs();
+            fs.create_dir_all(local_entry_path(&ctx).unwrap().parent().unwrap())
+                .await
+                .unwrap();
+            fs.write(local_entry_path(&ctx).unwrap(), "[Desktop Entry]")
+                .await
+                .unwrap();
+
+            install_autostart_entry(
+                &ctx,
+                &Settings::new_fake(),
+                &State::from_slice(&[("appimage.manageDesktopEntry", true.into())]),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                AutostartIntegration::to_local(&ctx)
+                    .unwrap()
+                    .is_installed()
+                    .await
+                    .is_err()
             );
         }
     }

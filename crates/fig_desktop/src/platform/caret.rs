@@ -323,6 +323,15 @@ mod tests {
             !platform_mod.contains("mod windows;\n") && !platform_mod.contains("mod windows; "),
             "old platform/windows.rs must stay uncompiled"
         );
+        let webview = include_str!("../webview/mod.rs");
+        assert!(
+            !webview.contains("WryIdMap"),
+            "WKWebView window-id map is gone with the WebView host"
+        );
+        assert!(
+            !webview.contains("api_handler_tx"),
+            "disconnected WebView JS handler channel is gone"
+        );
     }
 
     #[test]

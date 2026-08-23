@@ -71,6 +71,18 @@ static EXPECTED_BUFFER: Mutex<String> = Mutex::new(String::new());
 
 static SHELL_ENVIRONMENT_VARIABLES: Mutex<Vec<EnvironmentVariable>> = Mutex::new(Vec::new());
 static SHELL_ALIAS: Mutex<Option<String>> = Mutex::new(None);
+
+pub(crate) fn recover_mutex<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+pub(crate) fn recover_rwlock_read<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|err| err.into_inner())
+}
+
+pub(crate) fn recover_rwlock_write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(|err| err.into_inner())
+}
 /// Bumped by `UpdateShellContext` (`ec _ pre-cmd` at prompt). Edit-buffer
 /// frames send env/alias only when this changes, so the desktop session
 /// learns about a just-finished `export` without cloning env on every key.
@@ -142,11 +154,11 @@ fn shell_state_to_context(shell_state: &ShellState) -> local::ShellContext {
         session_id: shell_state.local_context.session_id.clone(),
         terminal: cached_parent_terminal(),
         hostname: cached_host_label(shell_state.local_context.username.as_deref()),
-        environment_variables: SHELL_ENVIRONMENT_VARIABLES.lock().unwrap().clone(),
+        environment_variables: recover_mutex(&SHELL_ENVIRONMENT_VARIABLES).clone(),
         qterm_version: Some(env!("CARGO_PKG_VERSION").into()),
         preexec: Some(shell_state.preexec),
         osc_lock: Some(shell_state.osc_lock),
-        alias: SHELL_ALIAS.lock().unwrap().clone(),
+        alias: recover_mutex(&SHELL_ALIAS).clone(),
     }
 }
 
@@ -163,12 +175,12 @@ fn edit_buffer_context(shell_state: &ShellState, include_environment: bool) -> l
             .as_ref()
             .map(|path| path.display().to_string()),
         environment_variables: if include_environment {
-            SHELL_ENVIRONMENT_VARIABLES.lock().unwrap().clone()
+            recover_mutex(&SHELL_ENVIRONMENT_VARIABLES).clone()
         } else {
             Vec::new()
         },
         alias: if include_environment {
-            SHELL_ALIAS.lock().unwrap().clone()
+            recover_mutex(&SHELL_ALIAS).clone()
         } else {
             None
         },
@@ -314,14 +326,30 @@ where
         });
     let preexec = term.shell_state().preexec;
 
-    let mut handle = INSERTION_LOCKED_AT.write().unwrap();
-    let insertion_locked = match handle.as_ref() {
+    let insertion_locked = insertion_lock_blocks(term);
+
+    trace!(%shell_enabled, %preexec, %insertion_locked, "can_send_edit_buffer");
+
+    shell_enabled && !insertion_locked && !preexec
+}
+
+/// Most keystrokes have no insertion lock. Take a write lock only when one is
+/// armed — `ecterm` runs this on every edit-buffer tick.
+fn insertion_lock_blocks<T>(term: &Term<T>) -> bool
+where
+    T: EventListener,
+{
+    if recover_rwlock_read(&INSERTION_LOCKED_AT).is_none() {
+        return false;
+    }
+    let mut handle = recover_rwlock_write(&INSERTION_LOCKED_AT);
+    match handle.as_ref() {
         Some(at) => {
             let lock_expired = at.elapsed().unwrap_or(Duration::ZERO) > Duration::from_millis(16);
             let should_unlock = lock_expired
                 || term
                     .get_current_buffer()
-                    .is_none_or(|buff| &buff.buffer == (&EXPECTED_BUFFER.lock().unwrap() as &String));
+                    .is_none_or(|buff| buff.buffer == *recover_mutex(&EXPECTED_BUFFER));
             if should_unlock {
                 handle.take();
                 if lock_expired {
@@ -335,12 +363,7 @@ where
             }
         },
         None => false,
-    };
-    drop(handle);
-
-    trace!(%shell_enabled, %preexec, %insertion_locked, "can_send_edit_buffer");
-
-    shell_enabled && !insertion_locked && !preexec
+    }
 }
 
 const Q_DISABLE_AUTOCOMPLETE: &str = "Q_DISABLE_AUTOCOMPLETE";
@@ -918,7 +941,7 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
                 }
                 // Check if to send the edit buffer because of timeout
                 _ = edit_buffer_interval.tick() => {
-                    let send_eb = INSERTION_LOCKED_AT.read().unwrap().is_some();
+                    let send_eb = recover_rwlock_read(&INSERTION_LOCKED_AT).is_some();
                     if send_eb && can_send_edit_buffer(&term) {
                         let cursor_coordinates = get_cursor_coordinates(&terminal);
                         if let Err(err) = send_edit_buffer(&term, &remote_sender, cursor_coordinates).await {
@@ -1000,6 +1023,30 @@ mod tests {
     #[test]
     fn term_keeps_one_line_of_scrollback() {
         assert_eq!(TERM_SCROLLBACK_LINES, 1);
+    }
+
+    #[test]
+    fn mutex_lock_recovers_from_poison() {
+        let mutex = Mutex::new(7u8);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("poison");
+        }));
+        assert_eq!(*recover_mutex(&mutex), 7);
+    }
+
+    #[test]
+    fn production_figterm_locks_recover_from_poison() {
+        for (name, src) in [
+            ("message.rs", include_str!("message.rs")),
+            ("event_handler.rs", include_str!("event_handler.rs")),
+        ] {
+            assert!(!src.contains(".lock().unwrap()"), "{name} still panics on mutex poison");
+            assert!(
+                !src.contains(".write().unwrap()"),
+                "{name} still panics on rwlock poison"
+            );
+        }
     }
 
     #[test]

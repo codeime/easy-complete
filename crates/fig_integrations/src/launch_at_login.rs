@@ -5,21 +5,30 @@
 
 use std::path::{Path, PathBuf};
 
+use fig_os_shim::Context;
 use fig_util::consts::APP_PROCESS_NAME;
 
 use crate::Result;
 
 /// Enable or disable launch at login for the current user.
 pub async fn set_enabled(enabled: bool) -> Result<()> {
+    set_enabled_in(&Context::new(), enabled).await
+}
+
+/// Same as [`set_enabled`], but writes through `ctx` so AppImage tests and the
+/// desktop install path share one writer instead of touching the real `$HOME`.
+pub async fn set_enabled_in(ctx: &Context, enabled: bool) -> Result<()> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
+            let _ = ctx;
             crate::login_item::set_enabled(enabled)
         } else if #[cfg(target_os = "linux")] {
-            linux::set_enabled(enabled).await
+            linux::set_enabled(ctx, enabled).await
         } else if #[cfg(windows)] {
+            let _ = ctx;
             windows::set_enabled(enabled)
         } else {
-            let _ = enabled;
+            let _ = (ctx, enabled);
             Err(Error::Custom("launch at login is not supported on this platform".into()))
         }
     }
@@ -65,15 +74,26 @@ pub(crate) fn startup_command(exec: &Path) -> String {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use fig_os_shim::{Context, FsProvider};
+    use fig_os_shim::Context;
     use fig_util::PRODUCT_NAME;
 
     use super::{Result, desktop_executable, startup_command};
     use crate::desktop_entry::local_autostart_path;
 
-    pub(super) async fn set_enabled(enabled: bool) -> Result<()> {
-        let ctx = Context::new();
-        let path = local_autostart_path(&ctx)?;
+    pub(super) async fn set_enabled(ctx: &Context, enabled: bool) -> Result<()> {
+        // AppImage's FUSE mount dies with the process. Symlink to the local
+        // desktop entry (Exec=$APPIMAGE) instead of writing current_exe.
+        if ctx.env().in_appimage() {
+            let integration = crate::desktop_entry::AutostartIntegration::new(ctx)?;
+            if enabled {
+                crate::Integration::install(&integration).await?;
+            } else {
+                crate::Integration::uninstall(&integration).await?;
+            }
+            return Ok(());
+        }
+
+        let path = local_autostart_path(ctx)?;
         let fs = ctx.fs();
         if !enabled {
             if fs.exists(&path) || fs.symlink_exists(&path).await {
@@ -83,7 +103,7 @@ mod linux {
         }
 
         if let Some(parent) = path.parent() {
-            if !parent.is_dir() {
+            if !fs.exists(parent) {
                 fs.create_dir_all(parent).await?;
             }
         }
@@ -181,5 +201,52 @@ mod tests {
         let contents = linux::autostart_desktop_contents(Path::new("/usr/local/bin/easy-complete"));
         assert!(contents.contains("Exec=\"/usr/local/bin/easy-complete\" --is-startup"));
         assert!(contents.contains("X-GNOME-Autostart-enabled=true"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn appimage_autostart_symlinks_the_local_desktop_entry() {
+        use crate::Integration;
+        use crate::desktop_entry::{AutostartIntegration, local_entry_path};
+
+        let ctx = Context::builder()
+            .with_test_home()
+            .await
+            .unwrap()
+            .with_env_var("APPIMAGE", "/test.appimage")
+            .build_fake();
+        let local = local_entry_path(&ctx).unwrap();
+        ctx.fs().create_dir_all(local.parent().unwrap()).await.unwrap();
+        ctx.fs().write(&local, "[Desktop Entry]").await.unwrap();
+
+        set_enabled_in(&ctx, true).await.unwrap();
+        AutostartIntegration::to_local(&ctx)
+            .unwrap()
+            .is_installed()
+            .await
+            .unwrap();
+
+        set_enabled_in(&ctx, false).await.unwrap();
+        assert!(
+            AutostartIntegration::to_local(&ctx)
+                .unwrap()
+                .is_installed()
+                .await
+                .is_err()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn prefix_autostart_writes_is_startup_into_the_fake_home() {
+        use crate::desktop_entry::local_autostart_path;
+
+        let ctx = Context::builder().with_test_home().await.unwrap().build_fake();
+        set_enabled_in(&ctx, true).await.unwrap();
+        let path = local_autostart_path(&ctx).unwrap();
+        let contents = ctx.fs().read_to_string(&path).await.unwrap();
+        assert!(contents.contains("--is-startup"), "{contents}");
+        set_enabled_in(&ctx, false).await.unwrap();
+        assert!(!ctx.fs().exists(&path));
     }
 }

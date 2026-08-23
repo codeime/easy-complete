@@ -21,7 +21,7 @@ use crate::interceptor::KeyInterceptor;
 use crate::pty::AsyncMasterPty;
 use crate::{
     EXPECTED_BUFFER, INSERT_ON_NEW_CMD, INSERTION_LOCKED_AT, MainLoopEvent, SHELL_ALIAS, SHELL_ENVIRONMENT_VARIABLES,
-    shell_state_to_context,
+    recover_mutex, recover_rwlock_write, shell_state_to_context,
 };
 
 fn working_directory(path: Option<&str>, shell_state: &ShellState) -> PathBuf {
@@ -59,7 +59,7 @@ fn working_directory(path: Option<&str>, shell_state: &ShellState) -> PathBuf {
 }
 
 fn create_command(executable: impl AsRef<Path>, working_directory: impl AsRef<Path>) -> Command {
-    let env = (*SHELL_ENVIRONMENT_VARIABLES.lock().unwrap())
+    let env = (*recover_mutex(&SHELL_ENVIRONMENT_VARIABLES))
         .clone()
         .into_iter()
         .filter_map(|EnvironmentVariable { key, value }| value.map(|value| (key, value)))
@@ -150,10 +150,10 @@ pub async fn process_figterm_request(
                     // // split text by cursor
                     // let (left, right) = buffer.split_at(position);
 
-                    INSERTION_LOCKED_AT.write().unwrap().replace(SystemTime::now());
+                    recover_rwlock_write(&INSERTION_LOCKED_AT).replace(SystemTime::now());
                     let expected = format!("{buffer}{text_to_insert}");
                     trace!(?expected, "lock set, expected buffer");
-                    *EXPECTED_BUFFER.lock().unwrap() = expected;
+                    *recover_mutex(&EXPECTED_BUFFER) = expected;
                 }
                 if let Some(ref insertion_buffer) = request.insertion_buffer {
                     if buffer.ne(insertion_buffer) {
@@ -229,18 +229,18 @@ pub async fn process_figterm_request(
             Ok(Some(response))
         },
         FigtermRequest::InsertOnNewCmd(command) => {
-            *INSERT_ON_NEW_CMD.lock().unwrap() = Some((command.text, command.bracketed, command.execute));
+            *recover_mutex(&INSERT_ON_NEW_CMD) = Some((command.text, command.bracketed, command.execute));
             Ok(None)
         },
         FigtermRequest::SetBuffer(_) => Err(anyhow::anyhow!("SetBuffer is not supported in figterm")),
         FigtermRequest::UpdateShellContext(request) => {
             let mut updated = false;
             if request.update_environment_variables {
-                *SHELL_ENVIRONMENT_VARIABLES.lock().unwrap() = request.environment_variables;
+                *recover_mutex(&SHELL_ENVIRONMENT_VARIABLES) = request.environment_variables;
                 updated = true;
             }
             if request.update_alias {
-                *SHELL_ALIAS.lock().unwrap() = request.alias;
+                *recover_mutex(&SHELL_ALIAS) = request.alias;
                 updated = true;
             }
             if updated {

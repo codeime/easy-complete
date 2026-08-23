@@ -294,9 +294,26 @@ impl Terminal for UnixTerminal {
 
 impl Drop for UnixTerminal {
     fn drop(&mut self) {
-        self.write.flush().unwrap();
-        self.write
-            .set_termios(&self.saved_termios, SetAttributeWhen::Now)
-            .expect("failed to restore original termios state");
+        if let Err(err) = self.write.flush() {
+            warn!(%err, "failed to flush terminal on drop");
+        }
+        if let Err(err) = self.write.set_termios(&self.saved_termios, SetAttributeWhen::Now) {
+            warn!(%err, "failed to restore original termios state");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn drop_does_not_panic_on_flush_or_termios() {
+        let src = include_str!("unix.rs");
+        let start = src.find("impl Drop for UnixTerminal").expect("Drop");
+        let rest = &src[start..];
+        let end = rest.find("#[cfg(test)]").unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(body.contains("warn!"), "Drop must log instead of panicking");
+        assert!(!body.contains("unwrap()"), "Drop must not unwrap flush/termios");
+        assert!(!body.contains("expect("), "Drop must not expect termios restore");
     }
 }
