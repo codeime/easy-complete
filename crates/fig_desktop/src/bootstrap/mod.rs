@@ -31,7 +31,7 @@ use crate::{EventLoopProxy, EventLoopWindowTarget, file_watcher, local_ipc};
 
 pub const DASHBOARD_SIZE: LogicalSize<f64> = LogicalSize::new(820.0, 640.0);
 
-pub const AUTOCOMPLETE_WINDOW_TITLE: &str = "Fig Autocomplete";
+pub const AUTOCOMPLETE_WINDOW_TITLE: &str = ec_gpui::OVERLAY_WINDOW_TITLE;
 
 pub const LOGIN_PATH: &str = "/";
 

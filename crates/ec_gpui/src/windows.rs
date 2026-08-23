@@ -20,8 +20,6 @@ use crate::windows_overlay::{
     windows_titled_overlay_places,
 };
 
-pub const OVERLAY_WINDOW_TITLE: &str = "Fig Autocomplete";
-
 pub fn overlay_placement_scale() -> f64 {
     unsafe {
         let hdc = GetDC(HWND::default());
@@ -92,8 +90,8 @@ pub fn set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f6
 
 pub fn park_overlay_window_titled(_title: &str) {}
 
-pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f64, primary_height: f64) -> f64 {
-    primary_origin_y + primary_height - quartz_y - height
+pub fn screen_y_to_frame_y(screen_y: f64, height: f64, primary_origin_y: f64, primary_height: f64) -> f64 {
+    primary_origin_y + primary_height - screen_y - height
 }
 
 pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {

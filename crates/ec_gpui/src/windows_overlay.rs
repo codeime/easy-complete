@@ -217,6 +217,21 @@ mod tests {
     }
 
     #[test]
+    fn windows_y_flip_is_not_named_quartz() {
+        let src = include_str!("windows.rs");
+        assert!(
+            src.contains("screen_y_to_frame_y"),
+            "off-Mac Y flip must use the screen-space name"
+        );
+        assert!(!src.contains("quartz_y_"), "windows.rs must not export quartz_y_*");
+        assert!(
+            !src.contains("Fig Autocomplete"),
+            "Windows overlay must not keep the Fig window name"
+        );
+        assert_eq!(crate::OVERLAY_WINDOW_TITLE, "Easy Complete");
+    }
+
+    #[test]
     fn virtual_screen_with_no_extent_is_not_a_placement_surface() {
         assert!(screens_from_virtual_metrics(0, 0, 0, 0).is_empty());
         assert!(screens_from_virtual_metrics(0, 0, 1920, 0).is_empty());

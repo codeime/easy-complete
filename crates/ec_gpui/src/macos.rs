@@ -10,6 +10,8 @@ use cocoa::foundation::{NSArray, NSPoint, NSRect, NSString};
 use objc::rc::autoreleasepool;
 use objc::{class, msg_send, sel, sel_impl};
 
+use crate::overlay::OVERLAY_WINDOW_TITLE;
+
 /// `NSWindowStyleMaskNonactivatingPanel` — overlay must not steal key focus.
 const NS_WINDOW_STYLE_NONACTIVATING_PANEL: u64 = 1 << 7;
 /// `NSWindowAnimationBehaviorNone`
@@ -19,9 +21,6 @@ const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
 const NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES: u64 = 1 << 0;
 const NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_AUXILIARY: u64 = 1 << 8;
 const NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY: u64 = 1 << 4;
-
-/// Title used to find the GPUI overlay `NSWindow` without touching the dashboard.
-pub const OVERLAY_WINDOW_TITLE: &str = "Fig Autocomplete";
 
 /// Invalidates queued frame requests when the overlay is hidden and lets only
 /// the newest position request bring the singleton overlay window forward.

@@ -1977,7 +1977,7 @@ fn overlay_bounds(
                 tao::dpi::Size::Logical(s) => LogicalSize::new(s.width, s.height),
                 tao::dpi::Size::Physical(s) => s.to_logical(1.0),
             };
-            caret.y = caret_y_in_quartz_space(caret.y, caret_size.height, origin, screens.first().copied());
+            caret.y = caret_y_in_screen_space(caret.y, caret_size.height, origin, screens.first().copied());
             let mut edges = screen_edges_containing(screens, caret.x, caret.y);
             let mut flip_bottom = edges.map(|(_, _, _, bottom)| bottom);
             let window_bottom = platform_state
@@ -2065,9 +2065,10 @@ fn place_overlay_at_caret(
     (x, y, on_left, is_above)
 }
 
-/// IME clients report Cocoa bottom-left coordinates, while AX and the overlay
-/// placement code use Quartz top-left coordinates.
-fn caret_y_in_quartz_space(
+/// Convert caret Y into top-left screen space (the overlay's placement space).
+/// `Origin::BottomLeft` is Cocoa / macOS IME; `Origin::TopLeft` is already
+/// screen Y on every backend.
+fn caret_y_in_screen_space(
     caret_y: f64,
     caret_height: f64,
     origin: Origin,
@@ -2364,7 +2365,7 @@ mod tests {
     }
 
     #[test]
-    fn should_add_space_matches_the_webview_without_extra_suffix_guards() {
+    fn should_add_space_matches_legacy_without_extra_suffix_guards() {
         assert_eq!(
             full_insertion_for_item("ignored", Some("value "), "arg", None, true, true, false),
             "value  "
@@ -2864,24 +2865,24 @@ mod tests {
     }
 
     #[test]
-    fn ime_bottom_left_caret_is_converted_to_quartz_top_left() {
+    fn ime_bottom_left_caret_is_converted_to_screen_top_left() {
         assert_eq!(
-            caret_y_in_quartz_space(120.0, 18.0, Origin::BottomLeft, Some((0.0, 0.0, 1440.0, 900.0)),),
+            caret_y_in_screen_space(120.0, 18.0, Origin::BottomLeft, Some((0.0, 0.0, 1440.0, 900.0)),),
             762.0
         );
         assert_eq!(
-            caret_y_in_quartz_space(120.0, 18.0, Origin::TopLeft, Some((0.0, 0.0, 1440.0, 900.0))),
+            caret_y_in_screen_space(120.0, 18.0, Origin::TopLeft, Some((0.0, 0.0, 1440.0, 900.0))),
             120.0
         );
         // Cocoa coordinates remain global across vertically arranged displays:
-        // values above the primary screen map to negative Quartz Y, while
+        // values above the primary screen map to negative top-left Y, while
         // values below it map past the primary screen height.
         assert_eq!(
-            caret_y_in_quartz_space(1_000.0, 18.0, Origin::BottomLeft, Some((0.0, 0.0, 1440.0, 900.0))),
+            caret_y_in_screen_space(1_000.0, 18.0, Origin::BottomLeft, Some((0.0, 0.0, 1440.0, 900.0))),
             -118.0
         );
         assert_eq!(
-            caret_y_in_quartz_space(-200.0, 18.0, Origin::BottomLeft, Some((0.0, 0.0, 1440.0, 900.0))),
+            caret_y_in_screen_space(-200.0, 18.0, Origin::BottomLeft, Some((0.0, 0.0, 1440.0, 900.0))),
             1_082.0
         );
     }

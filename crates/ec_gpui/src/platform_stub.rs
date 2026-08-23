@@ -4,8 +4,6 @@
 
 #![allow(dead_code)]
 
-pub const OVERLAY_WINDOW_TITLE: &str = "Fig Autocomplete";
-
 pub fn harden_overlay_window() {}
 
 pub fn harden_overlay_window_titled(_title: &str) {}
@@ -36,8 +34,8 @@ pub fn set_overlay_frame_handle(_window: &gpui::Window, _x: f64, _y: f64, _width
 
 pub fn park_overlay_window_titled(_title: &str) {}
 
-pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f64, primary_height: f64) -> f64 {
-    primary_origin_y + primary_height - quartz_y - height
+pub fn screen_y_to_frame_y(screen_y: f64, height: f64, primary_origin_y: f64, primary_height: f64) -> f64 {
+    primary_origin_y + primary_height - screen_y - height
 }
 
 pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {
@@ -53,6 +51,13 @@ mod tests {
         let start = src.find("pub fn overlay_screens()").expect("overlay_screens");
         let body = &src[start..src.find("#[cfg(test)]").unwrap_or(src.len())];
         assert!(!body.contains("screens_quartz"));
+        assert!(!body.contains("quartz_y_"));
+        assert!(src.contains("screen_y_to_frame_y"));
+    }
+
+    #[test]
+    fn screen_y_to_frame_y_keeps_the_previous_flip() {
+        assert_eq!(super::screen_y_to_frame_y(100.0, 140.0, 0.0, 900.0), 660.0);
     }
 }
 

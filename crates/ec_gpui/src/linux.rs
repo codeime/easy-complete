@@ -2,7 +2,7 @@
 //!
 //! GPUI's 0.2.2 X11 `window_handle` is unimplemented, so the overlay is found
 //! by title (same fallback macOS uses when the `NSWindow` pointer is missing).
-//! Coordinates are X11 top-left, matching the overlay's Quartz-style origin.
+//! Coordinates are X11 top-left, matching the overlay's top-left screen origin.
 //!
 //! Native Wayland has no placement API in GPUI 0.2.2 (no layer-shell).
 //! GNOME Wayland still has XWayland (`DISPLAY`); the overlay uses that.
@@ -21,7 +21,7 @@ use x11rb::protocol::xproto::{self, AtomEnum, ConfigureWindowAux, ConnectionExt,
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
-pub const OVERLAY_WINDOW_TITLE: &str = "Fig Autocomplete";
+use crate::overlay::OVERLAY_WINDOW_TITLE;
 
 /// Coalesce place/probe bursts onto one display connection and one RandR list.
 const X11_CACHE_TTL: Duration = Duration::from_millis(500);
@@ -202,8 +202,8 @@ fn checked_void(cookie: Result<VoidCookie<'_, RustConnection>, ConnectionError>)
     cookie.map(|cookie| cookie.check().is_ok()).unwrap_or(false)
 }
 
-pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f64, primary_height: f64) -> f64 {
-    primary_origin_y + primary_height - quartz_y - height
+pub fn screen_y_to_frame_y(screen_y: f64, height: f64, primary_origin_y: f64, primary_height: f64) -> f64 {
+    primary_origin_y + primary_height - screen_y - height
 }
 
 /// X11 / XWayland outputs in top-left screen space. Empty when there is no
@@ -459,6 +459,34 @@ mod tests {
             !body.contains("screens_quartz"),
             "non-Mac screen list must not keep the Quartz name"
         );
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        assert!(
+            production.contains("screen_y_to_frame_y"),
+            "off-Mac Y flip must use the screen-space name"
+        );
+        assert!(
+            !production.contains("quartz_y_"),
+            "Linux must not export quartz_y_* — that name is Cocoa-only"
+        );
+        assert!(
+            production.contains("find_window_by_title(conn, screen_num, title)"),
+            "GPUI 0.2.2 has no X11 window_handle; place/park find by title"
+        );
+        assert!(
+            production.contains("OVERLAY_WINDOW_TITLE"),
+            "find-by-title must use OVERLAY_WINDOW_TITLE, not a leftover Fig string"
+        );
+        assert!(
+            !production.contains("Fig Autocomplete"),
+            "Linux find-by-title must not keep the Fig window name"
+        );
+    }
+
+    #[test]
+    fn screen_y_to_frame_y_keeps_the_previous_flip() {
+        assert_eq!(super::screen_y_to_frame_y(100.0, 140.0, 0.0, 900.0), 660.0);
+        assert_eq!(super::screen_y_to_frame_y(100.0, 0.0, 0.0, 900.0), 800.0);
+        assert_eq!(super::screen_y_to_frame_y(50.0, 20.0, 200.0, 800.0), 930.0);
     }
 
     #[test]

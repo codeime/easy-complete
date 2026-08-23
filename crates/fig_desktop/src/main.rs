@@ -339,7 +339,7 @@ async fn allow_multiple_running_check(
                 if let Err(err) =
                     fig_ipc::local::open_ui_element(fig_proto::local::UiElement::MissionControl, page).await
                 {
-                    eprintln!("Failed to open Fig: {err}");
+                    eprintln!("Failed to open {PRODUCT_NAME}: {err}");
                 }
 
                 return Some(ExitCode::SUCCESS);
@@ -425,7 +425,7 @@ async fn allow_multiple_running_check(current_pid: u32, kill_old: bool, page: Op
         None => eprintln!("Opening {PRODUCT_NAME} Window..."),
     }
     if let Err(err) = fig_ipc::local::open_ui_element(fig_proto::local::UiElement::MissionControl, page).await {
-        eprintln!("Failed to open Fig: {err}");
+        eprintln!("Failed to open {PRODUCT_NAME}: {err}");
     }
     Some(ExitCode::SUCCESS)
 }

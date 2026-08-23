@@ -351,6 +351,26 @@ mod tests {
             !bootstrap.contains("api_handler_tx"),
             "disconnected WebView JS handler channel is gone"
         );
+        assert_eq!(crate::AUTOCOMPLETE_WINDOW_TITLE, ec_gpui::OVERLAY_WINDOW_TITLE);
+        assert_eq!(ec_gpui::OVERLAY_WINDOW_TITLE, "Easy Complete");
+        assert!(
+            !ec_gpui::OVERLAY_WINDOW_TITLE.contains("Fig"),
+            "overlay title is a product string"
+        );
+        let update = include_str!("../update.rs");
+        assert!(
+            !update.contains("show_webview") && !update.contains("WryId"),
+            "Sparkle prompt flag must not keep the WebView name"
+        );
+        let overlay = include_str!("../overlay.rs");
+        assert!(
+            overlay.contains("fn caret_y_in_screen_space"),
+            "caret Y conversion is screen space on every OS"
+        );
+        assert!(
+            !overlay.contains("quartz_y_") && !overlay.contains("caret_y_in_quartz_space"),
+            "overlay Y helpers must not keep quartz_y_* names"
+        );
     }
 
     #[test]

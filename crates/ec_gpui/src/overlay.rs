@@ -8,7 +8,14 @@ use gpui::{
 
 use crate::list::{DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_ROW_HEIGHT, DEFAULT_WIDTH, SuggestionList};
 
-use crate::{OVERLAY_WINDOW_TITLE, harden_overlay_window_handle, park_overlay_window_handle, set_overlay_frame_handle};
+use crate::{harden_overlay_window_handle, park_overlay_window_handle, set_overlay_frame_handle};
+
+/// Title of the GPUI overlay window.
+///
+/// Linux finds the X11 client by this string (GPUI 0.2.2 has no X11
+/// `window_handle`). macOS uses the same title when the `NSWindow` pointer is
+/// missing. Keep it distinct from the settings window title (`Settings`).
+pub const OVERLAY_WINDOW_TITLE: &str = "Easy Complete";
 
 /// Shared overlay entity: visibility, selection, and the suggestion rows.
 pub struct OverlayState {
@@ -653,6 +660,15 @@ mod window_option_tests {
         assert!(!shown.focus);
         assert!(shown.show);
         assert!(matches!(shown.kind, gpui::WindowKind::PopUp));
+    }
+
+    #[test]
+    fn overlay_window_title_is_easy_complete() {
+        assert_eq!(OVERLAY_WINDOW_TITLE, "Easy Complete");
+        assert!(
+            !OVERLAY_WINDOW_TITLE.contains("Fig"),
+            "overlay title is a product string, not the Fig fork name"
+        );
     }
 }
 

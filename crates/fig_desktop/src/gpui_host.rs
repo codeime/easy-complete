@@ -21,6 +21,7 @@ use crate::tray::{get_context_menu, get_icon};
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 use fig_os_shim::Context;
 use fig_remote_ipc::figterm::FigtermState;
+use fig_util::consts::PRODUCT_NAME;
 
 pub struct DesktopHost {
     pub fig_id_map: FigIdMap,
@@ -293,7 +294,7 @@ pub fn start_application(
         Ok((host, event_rx)) => {
             run(host.clone(), event_rx, cx);
             host.update(cx, |host, _cx| {
-                info!("Fig has started");
+                info!("{PRODUCT_NAME} has started");
                 #[cfg(target_os = "macos")]
                 {
                     crate::platform::set_activation_policy(*crate::platform::ACTIVATION_POLICY.lock().unwrap());

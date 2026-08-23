@@ -195,7 +195,7 @@ mod macos {
         unsafe { libc::pthread_main_np() != 0 }
     }
 
-    fn check_for_update_on_main(show_webview: bool) -> bool {
+    fn check_for_update_on_main(show_updater: bool) -> bool {
         let Some(controller) = ensure_controller(false) else {
             return false;
         };
@@ -203,7 +203,7 @@ mod macos {
         // SAFETY: SPUStandardUpdaterController exposes the checkForUpdates: action used by menu
         // items, while its updater exposes checkForUpdatesInBackground for silent checks.
         unsafe {
-            if show_webview {
+            if show_updater {
                 info!("Triggering user-initiated Sparkle update check");
                 let _: () = msg_send![controller, checkForUpdates: nil];
             } else {
@@ -235,16 +235,16 @@ mod macos {
         }
     }
 
-    pub fn check_for_update(show_webview: bool) -> bool {
+    pub fn check_for_update(show_updater: bool) -> bool {
         // Sparkle's checkForUpdates: and checkForUpdatesInBackground must be called on the
-        // main thread. When invoked from a tokio worker thread (e.g. via the WebView API
-        // handler), calling these selectors directly causes an ObjC exception that propagates
+        // main thread. When invoked from a tokio worker thread (e.g. via tray, settings, or
+        // IPC), calling these selectors directly causes an ObjC exception that propagates
         // through Rust's panic machinery as a foreign exception and triggers abort(). Dispatch
         // synchronously to the main queue to ensure the right thread context.
         if is_main_thread() {
-            check_for_update_on_main(show_webview)
+            check_for_update_on_main(show_updater)
         } else {
-            dispatch::Queue::main().exec_sync(move || check_for_update_on_main(show_webview))
+            dispatch::Queue::main().exec_sync(move || check_for_update_on_main(show_updater))
         }
     }
 }
@@ -258,11 +258,11 @@ pub fn start_automatic_checks() {
 pub fn start_automatic_checks() {}
 
 #[cfg(target_os = "macos")]
-pub async fn check_for_update(show_webview: bool, _relaunch_dashboard: bool) -> bool {
-    macos::check_for_update(show_webview)
+pub async fn check_for_update(show_updater: bool, _relaunch_dashboard: bool) -> bool {
+    macos::check_for_update(show_updater)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub async fn check_for_update(_show_webview: bool, _relaunch_dashboard: bool) -> bool {
+pub async fn check_for_update(_show_updater: bool, _relaunch_dashboard: bool) -> bool {
     false
 }
