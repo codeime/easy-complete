@@ -27,6 +27,9 @@ use uuid::Uuid;
 use crate::event::{Event, WindowPosition};
 use crate::event_loop::EventLoopProxy;
 use crate::platform::PlatformState;
+#[cfg(target_os = "macos")]
+use crate::platform::caret::macos_overlay_enable_from_live_ax;
+use crate::platform::caret::overlay_parks_caret_when_screens_empty;
 
 /// Overlay is always on. `EC_GPUI_OVERLAY=0` remains an emergency kill switch.
 pub fn gpui_overlay_enabled() -> bool {
@@ -289,8 +292,7 @@ impl OverlayController {
 
     pub fn apply_position(&mut self, position: WindowPosition, platform_state: &PlatformState, cx: &mut App) {
         let screens = overlay_screens();
-        #[cfg(not(target_os = "macos"))]
-        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens.is_empty() {
+        if refuse_caret_without_screens(position, &screens) {
             debug!("no screen list; refusing caret placement");
             *self.last_position.lock().unwrap_or_else(|err| err.into_inner()) = None;
             self.park_window(cx);
@@ -482,10 +484,11 @@ impl OverlayController {
             {
                 // AX grant can land while the cached `enabled` flag is still false (notification
                 // lag). Re-read the live TCC flag so the first keystroke after granting works.
-                if macos_utils::accessibility::accessibility_is_enabled()
-                    && gpui_overlay_enabled()
-                    && !fig_settings::settings::get_bool_or("autocomplete.disable", false)
-                {
+                if macos_overlay_enable_from_live_ax(
+                    macos_utils::accessibility::accessibility_is_enabled(),
+                    gpui_overlay_enabled(),
+                    fig_settings::settings::get_bool_or("autocomplete.disable", false),
+                ) {
                     self.enabled = true;
                 }
             }
@@ -1434,8 +1437,7 @@ fn layout_overlay(
         return false;
     }
     if let Some(position) = *last_position.lock().unwrap_or_else(|err| err.into_inner()) {
-        #[cfg(not(target_os = "macos"))]
-        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens.is_empty() {
+        if refuse_caret_without_screens(position, screens) {
             let _ = park_overlay_slot(window_slot, cx);
             return false;
         }
@@ -2016,6 +2018,15 @@ fn overlay_bounds(
                 is_above,
             )
         },
+    }
+}
+
+fn refuse_caret_without_screens(position: WindowPosition, screens: &[(f64, f64, f64, f64)]) -> bool {
+    match position {
+        WindowPosition::RelativeToCaret { origin, .. } => {
+            screens.is_empty() && overlay_parks_caret_when_screens_empty(cfg!(target_os = "macos"), origin)
+        },
+        _ => false,
     }
 }
 

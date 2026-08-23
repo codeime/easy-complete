@@ -20,7 +20,6 @@ use crate::install_request::install;
 pub enum PermId {
     Accessibility,
     Shell,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // Linux/Windows gate skips IME
     InputMethod,
 }
 
@@ -57,17 +56,43 @@ impl PermissionSnapshot {
     }
 
     pub fn all_ready(&self) -> bool {
-        self.shell == PermReady::Ready
-            && (!cfg!(target_os = "macos")
-                || (self.accessibility == PermReady::Ready && self.input_method == PermReady::Ready))
+        permission_snapshot_all_ready(
+            self.shell,
+            self.accessibility,
+            self.input_method,
+            crate::platform::caret::permission_gate_requires_ax_and_ime(cfg!(target_os = "macos")),
+        )
     }
 
     pub fn still_checking(&self) -> bool {
-        matches!(self.shell, PermReady::Checking)
-            || (cfg!(target_os = "macos")
-                && (matches!(self.accessibility, PermReady::Checking)
-                    || matches!(self.input_method, PermReady::Checking)))
+        permission_snapshot_still_checking(
+            self.shell,
+            self.accessibility,
+            self.input_method,
+            crate::platform::caret::permission_gate_requires_ax_and_ime(cfg!(target_os = "macos")),
+        )
     }
+}
+
+fn permission_snapshot_all_ready(
+    shell: PermReady,
+    accessibility: PermReady,
+    input_method: PermReady,
+    require_ax_and_ime: bool,
+) -> bool {
+    shell == PermReady::Ready
+        && (!require_ax_and_ime || (accessibility == PermReady::Ready && input_method == PermReady::Ready))
+}
+
+fn permission_snapshot_still_checking(
+    shell: PermReady,
+    accessibility: PermReady,
+    input_method: PermReady,
+    require_ax_and_ime: bool,
+) -> bool {
+    matches!(shell, PermReady::Checking)
+        || (require_ax_and_ime
+            && (matches!(accessibility, PermReady::Checking) || matches!(input_method, PermReady::Checking)))
 }
 
 struct InstallCtx {
@@ -189,15 +214,18 @@ pub async fn repair(id: PermId) -> Result<(), String> {
     Ok(())
 }
 
-fn repair_ids() -> &'static [PermId] {
-    #[cfg(target_os = "macos")]
-    {
+fn permission_repair_ids(require_ax_and_ime: bool) -> &'static [PermId] {
+    if require_ax_and_ime {
         &[PermId::Accessibility, PermId::Shell, PermId::InputMethod]
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
+    } else {
         &[PermId::Shell]
     }
+}
+
+fn repair_ids() -> &'static [PermId] {
+    permission_repair_ids(crate::platform::caret::permission_gate_requires_ax_and_ime(cfg!(
+        target_os = "macos"
+    )))
 }
 
 pub async fn repair_all() -> Result<(), String> {
@@ -273,10 +301,58 @@ mod tests {
             input_method: PermReady::Ready,
             error: None,
         };
+        let ax_checking = PermissionSnapshot {
+            accessibility: PermReady::Checking,
+            shell: PermReady::Ready,
+            input_method: PermReady::Checking,
+            error: None,
+        };
+        assert!(!permission_snapshot_all_ready(
+            PermReady::Ready,
+            PermReady::Missing,
+            PermReady::Error,
+            true
+        ));
+        assert!(permission_snapshot_all_ready(
+            PermReady::Ready,
+            PermReady::Missing,
+            PermReady::Error,
+            false
+        ));
+        assert!(!permission_snapshot_all_ready(
+            PermReady::Missing,
+            PermReady::Ready,
+            PermReady::Ready,
+            false
+        ));
+        assert!(permission_snapshot_all_ready(
+            PermReady::Ready,
+            PermReady::Checking,
+            PermReady::Checking,
+            false
+        ));
+        assert!(!permission_snapshot_still_checking(
+            PermReady::Ready,
+            PermReady::Checking,
+            PermReady::Checking,
+            false
+        ));
+        assert!(permission_snapshot_still_checking(
+            PermReady::Ready,
+            PermReady::Checking,
+            PermReady::Checking,
+            true
+        ));
+        assert_eq!(
+            permission_repair_ids(true),
+            &[PermId::Accessibility, PermId::Shell, PermId::InputMethod]
+        );
+        assert_eq!(permission_repair_ids(false), &[PermId::Shell]);
         #[cfg(target_os = "macos")]
         {
             assert!(!ax_and_ime_broken.all_ready());
             assert!(!shell_missing.all_ready());
+            assert!(ax_checking.still_checking());
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -286,15 +362,17 @@ mod tests {
             );
             assert!(!shell_missing.all_ready());
             assert!(!ax_and_ime_broken.still_checking());
-            assert!(
-                PermissionSnapshot {
-                    accessibility: PermReady::Checking,
-                    shell: PermReady::Ready,
-                    input_method: PermReady::Checking,
-                    error: None,
-                }
-                .all_ready()
-            );
+            assert!(ax_checking.all_ready());
         }
+        let src = include_str!("permissions.rs");
+        assert!(
+            src.contains("permission_gate_requires_ax_and_ime(cfg!(target_os = \"macos\"))"),
+            "the settings gate must take the shared macOS AX+IME flag, not a second cfg table"
+        );
+        let host = include_str!("gpui_host.rs");
+        assert!(
+            host.contains("autocomplete_may_run"),
+            "ReloadSettings enable must use the shared disable/AX gate"
+        );
     }
 }

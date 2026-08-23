@@ -9,6 +9,15 @@
 
 #![allow(dead_code)]
 
+use std::time::Duration;
+
+/// SIGTERM wait before SIGKILL. `open` on a live bundle only activates the
+/// old process, so the replacement must not launch until this wait (and the
+/// kill wait below) has actually emptied the PID list.
+pub const IME_SIGTERM_WAIT: Duration = Duration::from_millis(800);
+/// SIGKILL wait after the helper ignored SIGTERM.
+pub const IME_SIGKILL_WAIT: Duration = Duration::from_millis(400);
+
 /// What [`ime_launch_action`] tells the installer to do with the running helper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImeLaunchAction {
@@ -87,6 +96,21 @@ mod tests {
     #[test]
     fn a_matching_hash_keeps_imk_connections() {
         assert_eq!(ime_launch_action(true, Some("aaa"), Some("aaa")), ImeLaunchAction::Keep);
+    }
+
+    #[test]
+    fn replace_waits_for_sigterm_then_sigkill_before_open() {
+        assert_eq!(IME_SIGTERM_WAIT, Duration::from_millis(800));
+        assert_eq!(IME_SIGKILL_WAIT, Duration::from_millis(400));
+        let src = include_str!("input_method/mod.rs");
+        assert!(
+            src.contains("IME_SIGTERM_WAIT") && src.contains("IME_SIGKILL_WAIT"),
+            "IME stop must wait through the shared SIGTERM/SIGKILL budgets"
+        );
+        assert!(
+            !src.contains("Duration::from_millis(800)") && !src.contains("Duration::from_millis(400)"),
+            "do not fork the IME stop waits back into the AppKit module"
+        );
     }
 
     #[test]

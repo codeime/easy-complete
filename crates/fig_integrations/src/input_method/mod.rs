@@ -452,7 +452,7 @@ impl InputMethod {
         for &pid in pids {
             signal::kill(pid, Signal::SIGTERM).ok();
         }
-        if wait_for_exit(pids, Duration::from_millis(800)) {
+        if wait_for_exit(pids, crate::ime_launch::IME_SIGTERM_WAIT) {
             return;
         }
 
@@ -460,7 +460,7 @@ impl InputMethod {
         for &pid in pids {
             signal::kill(pid, Signal::SIGKILL).ok();
         }
-        wait_for_exit(pids, Duration::from_millis(400));
+        wait_for_exit(pids, crate::ime_launch::IME_SIGKILL_WAIT);
     }
 
     /// Caller must have established that none of our processes are running, so

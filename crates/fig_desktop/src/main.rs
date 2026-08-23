@@ -9,6 +9,7 @@ mod settings_ui;
 mod bootstrap;
 mod file_watcher;
 mod install;
+mod install_policy;
 mod install_request;
 #[cfg(target_os = "linux")]
 mod linux_tray;

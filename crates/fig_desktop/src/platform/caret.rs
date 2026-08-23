@@ -60,6 +60,66 @@ pub(crate) fn macos_settings_activation_policy(fullscreen: bool, settings_visibl
     }
 }
 
+/// A short AX timeout so one hung target app cannot freeze the desktop.
+pub(crate) const MACOS_AX_MESSAGING_TIMEOUT_SECS: f32 = 0.25;
+
+/// `CGWindowLevel` 0 is the normal window level. Only those windows become
+/// the AX follow target. A non-zero level (iTerm Quake, always-on-top) still
+/// updates overlay stacking via [`ec_gpui::macos_overlay_level_for_terminal`].
+pub(crate) fn macos_stores_focused_window_at_level(level: Option<i64>) -> bool {
+    level == Some(0)
+}
+
+/// Inputs for [`macos_overlay_enabled_for_focus`]. Packed so the AppKit host
+/// cannot drift a sixth `bool` past clippy, and Linux tests can name each
+/// flag.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MacosOverlayEnable {
+    pub is_known_terminal: bool,
+    pub integration_disabled: bool,
+    pub supports_ime: bool,
+    pub ime_enabled: bool,
+    pub autocomplete_disabled: bool,
+    pub accessibility_enabled: bool,
+}
+
+/// Whether the overlay may follow this focused terminal.
+///
+/// Unknown bundle IDs are off. IME terminals need the helper enabled; AX
+/// terminals do not. A per-process "needs restart" stamp used to gate this
+/// too and silently disabled autocomplete in every terminal that was already
+/// open when the IME was installed — do not put that back. Not live AX/IME.
+pub(crate) fn macos_overlay_enabled_for_focus(input: MacosOverlayEnable) -> bool {
+    input.is_known_terminal
+        && !input.integration_disabled
+        && (!input.supports_ime || input.ime_enabled)
+        && !input.autocomplete_disabled
+        && input.accessibility_enabled
+}
+
+/// Cached `enabled` can lag a live TCC grant. The next keystroke re-reads AX
+/// instead of waiting for the notification. `macos.rs` / `overlay.rs` call
+/// this; Linux CI pins it.
+pub(crate) fn macos_overlay_enable_from_live_ax(
+    live_ax: bool,
+    overlay_env_enabled: bool,
+    autocomplete_disabled: bool,
+) -> bool {
+    live_ax && overlay_env_enabled && !autocomplete_disabled
+}
+
+/// Autocomplete is off when the setting is set. macOS also needs AX; Linux
+/// and Windows pass `accessibility_granted = true` because they have no TCC.
+pub(crate) fn autocomplete_may_run(disabled: bool, accessibility_granted: bool) -> bool {
+    !disabled && accessibility_granted
+}
+
+/// Settings gate: only macOS waits on Accessibility + IME. Linux/Windows
+/// complete from PTY + the edit buffer.
+pub(crate) fn permission_gate_requires_ax_and_ime(os_is_macos: bool) -> bool {
+    os_is_macos
+}
+
 /// Screen-space caret the overlay already consumes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaretOnScreen {
@@ -250,6 +310,19 @@ pub fn caret_origin_needs_screens(origin: Origin) -> bool {
     matches!(origin, Origin::BottomLeft)
 }
 
+/// Empty `overlay_screens` on Linux/Windows means there is no display geometry
+/// to place against, so the list parks. macOS Quartz TopLeft is already global
+/// (AX), so a missing `NSScreen` list is not a placement fallback — it just
+/// skips monitor clamping. BottomLeft (IME) still needs the primary height to
+/// flip; without it the Y is not a caret.
+pub(crate) fn overlay_parks_caret_when_screens_empty(os_is_macos: bool, origin: Origin) -> bool {
+    if os_is_macos {
+        caret_origin_needs_screens(origin)
+    } else {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +360,123 @@ mod tests {
         assert!(
             !macos.contains("None | Some(0) =>"),
             "do not fork None|Some(0) → floating back into macos.rs"
+        );
+        assert!(
+            macos.contains("macos_stores_focused_window_at_level")
+                && macos.contains("macos_overlay_enabled_for_focus")
+                && macos.contains("MACOS_AX_MESSAGING_TIMEOUT_SECS"),
+            "AppKit host must use the shared overlay-enable / AX timeout / level-0 follow policy"
+        );
+        assert!(
+            !macos.contains("if level == Some(0)"),
+            "do not fork CGWindowLevel 0 as a literal beside macos_stores_focused_window_at_level"
+        );
+        assert!(
+            !macos.contains("AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)"),
+            "do not fork the 0.25s AX timeout beside MACOS_AX_MESSAGING_TIMEOUT_SECS"
+        );
+    }
+
+    #[test]
+    fn macos_overlay_enable_does_not_require_a_restart_stamp() {
+        let base = MacosOverlayEnable {
+            is_known_terminal: true,
+            integration_disabled: false,
+            supports_ime: false,
+            ime_enabled: false,
+            autocomplete_disabled: false,
+            accessibility_enabled: true,
+        };
+        assert!(!macos_overlay_enabled_for_focus(MacosOverlayEnable {
+            is_known_terminal: false,
+            ime_enabled: true,
+            ..base
+        }));
+        assert!(!macos_overlay_enabled_for_focus(MacosOverlayEnable {
+            integration_disabled: true,
+            ime_enabled: true,
+            ..base
+        }));
+        assert!(!macos_overlay_enabled_for_focus(MacosOverlayEnable {
+            supports_ime: true,
+            ime_enabled: false,
+            ..base
+        }));
+        assert!(macos_overlay_enabled_for_focus(MacosOverlayEnable {
+            supports_ime: true,
+            ime_enabled: true,
+            ..base
+        }));
+        assert!(macos_overlay_enabled_for_focus(base));
+        assert!(!macos_overlay_enabled_for_focus(MacosOverlayEnable {
+            ime_enabled: true,
+            autocomplete_disabled: true,
+            ..base
+        }));
+        assert!(!macos_overlay_enabled_for_focus(MacosOverlayEnable {
+            ime_enabled: true,
+            accessibility_enabled: false,
+            ..base
+        }));
+        let macos = include_str!("macos.rs");
+        assert!(
+            !macos.contains("needs_restart") && macos.contains("MacosOverlayEnable"),
+            "do not restore the per-process IME restart stamp"
+        );
+        assert!(
+            macos.contains("macos_overlay_enabled_for_focus("),
+            "focus-changed SetEnabled must go through the shared policy"
+        );
+    }
+
+    #[test]
+    fn macos_follows_ax_only_at_normal_window_level() {
+        assert!(macos_stores_focused_window_at_level(Some(0)));
+        assert!(!macos_stores_focused_window_at_level(None));
+        assert!(!macos_stores_focused_window_at_level(Some(3)));
+        assert!(!macos_stores_focused_window_at_level(Some(25)));
+        assert_eq!(MACOS_AX_MESSAGING_TIMEOUT_SECS, 0.25);
+    }
+
+    #[test]
+    fn macos_keystroke_reread_of_ax_still_respects_disable_flags() {
+        assert!(macos_overlay_enable_from_live_ax(true, true, false));
+        assert!(!macos_overlay_enable_from_live_ax(false, true, false));
+        assert!(!macos_overlay_enable_from_live_ax(true, false, false));
+        assert!(!macos_overlay_enable_from_live_ax(true, true, true));
+        assert!(autocomplete_may_run(false, true));
+        assert!(!autocomplete_may_run(true, true));
+        assert!(!autocomplete_may_run(false, false));
+        assert!(permission_gate_requires_ax_and_ime(true));
+        assert!(!permission_gate_requires_ax_and_ime(false));
+        let overlay = include_str!("../overlay.rs");
+        assert!(
+            overlay.contains("macos_overlay_enable_from_live_ax"),
+            "the first keystroke after an AX grant must re-read through the shared helper"
+        );
+        let host = include_str!("../gpui_host.rs");
+        assert!(
+            host.contains("autocomplete_may_run"),
+            "ReloadSettings must use the shared disable/AX gate"
+        );
+    }
+
+    #[test]
+    fn empty_screens_park_except_macos_top_left() {
+        assert!(overlay_parks_caret_when_screens_empty(false, Origin::TopLeft));
+        assert!(overlay_parks_caret_when_screens_empty(false, Origin::BottomLeft));
+        assert!(!overlay_parks_caret_when_screens_empty(true, Origin::TopLeft));
+        assert!(overlay_parks_caret_when_screens_empty(true, Origin::BottomLeft));
+        let overlay = include_str!("../overlay.rs");
+        assert!(
+            overlay.contains("overlay_parks_caret_when_screens_empty(cfg!(target_os = \"macos\")"),
+            "apply_position / layout_overlay must park through the shared empty-screens policy"
+        );
+        assert!(
+            !overlay.contains(
+                "#[cfg(not(target_os = \"macos\"))]\n        if matches!(position, WindowPosition::RelativeToCaret"
+            ),
+            "do not cfg-gate the empty-screens park beside the shared helper"
         );
     }
 

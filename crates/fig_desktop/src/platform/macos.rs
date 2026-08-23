@@ -33,7 +33,9 @@ use super::{PlatformBoundEvent, PlatformWindow};
 use crate::bootstrap::{GLOBAL_PROXY, WindowId};
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{
-    MacosActivationPolicy, hide_overlay_on_element_change, macos_ns_activation_policy, macos_settings_activation_policy,
+    MACOS_AX_MESSAGING_TIMEOUT_SECS, MacosActivationPolicy, MacosOverlayEnable, hide_overlay_on_element_change,
+    macos_ns_activation_policy, macos_overlay_enabled_for_focus, macos_settings_activation_policy,
+    macos_stores_focused_window_at_level,
 };
 use crate::utils::Rect;
 use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, EventLoopProxy, EventLoopWindowTarget, SETTINGS_ID};
@@ -280,7 +282,7 @@ impl PlatformStateImpl {
                 unsafe {
                     if AXIsProcessTrusted() {
                         // A short AX timeout so one hung target app cannot freeze the desktop.
-                        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25);
+                        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), MACOS_AX_MESSAGING_TIMEOUT_SECS);
                     }
                 }
 
@@ -400,7 +402,7 @@ impl PlatformStateImpl {
                 let current_terminal = Terminal::from_bundle_id(window.bundle_id.clone());
                 let level = window.get_level();
 
-                if level == Some(0) {
+                if macos_stores_focused_window_at_level(level) {
                     // Checking if IME is installed is async :(
                     let enabled_proxy = self.proxy.clone();
                     tokio::spawn(async move {
@@ -415,19 +417,17 @@ impl PlatformStateImpl {
                         // per-process "needs restart" stamp used to gate it too,
                         // which silently disabled autocomplete in every terminal
                         // that was already open when the IME was installed.
-                        let terminal_cursor_backing_installed = match current_terminal {
-                            Some(terminal) => {
-                                !terminal.supports_macos_input_method()
-                                    || InputMethod::default().is_enabled().unwrap_or(false)
-                            },
-                            None => false,
-                        };
-
-                        let is_enabled = !is_terminal_disabled
-                            && terminal_cursor_backing_installed
-                            && !fig_settings::settings::get_bool_or("autocomplete.disable", false)
-                            && accessibility_is_enabled();
-                        // && fig_request::fig_auth::is_logged_in();
+                        let supports_ime = current_terminal
+                            .as_ref()
+                            .is_some_and(|terminal| terminal.supports_macos_input_method());
+                        let is_enabled = macos_overlay_enabled_for_focus(MacosOverlayEnable {
+                            is_known_terminal: current_terminal.is_some(),
+                            integration_disabled: is_terminal_disabled,
+                            supports_ime,
+                            ime_enabled: supports_ime && InputMethod::default().is_enabled().unwrap_or(false),
+                            autocomplete_disabled: fig_settings::settings::get_bool_or("autocomplete.disable", false),
+                            accessibility_enabled: accessibility_is_enabled(),
+                        });
 
                         if let Err(err) = enabled_proxy.send_event(Event::WindowEvent {
                             window_id: AUTOCOMPLETE_ID,
@@ -490,7 +490,10 @@ impl PlatformStateImpl {
                     if enabled {
                         unsafe {
                             // A short AX timeout so one hung target app cannot freeze the desktop.
-                            AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25);
+                            AXUIElementSetMessagingTimeout(
+                                AXUIElementCreateSystemWide(),
+                                MACOS_AX_MESSAGING_TIMEOUT_SECS,
+                            );
                         }
                     }
                 });

@@ -90,28 +90,29 @@ fn reconcile_accessibility_permission(prompt_for_permissions: bool) -> bool {
 
     let enabled = accessibility_is_enabled();
     let previously_granted = fig_settings::state::get_bool_or(ACCESSIBILITY_GRANTED_KEY, false);
+    let action =
+        crate::install_policy::accessibility_reconcile_action(enabled, previously_granted, prompt_for_permissions);
 
-    if enabled {
-        record_accessibility_grant();
-        return false;
+    match action {
+        crate::install_policy::AccessibilityReconcileAction::RecordGrant => {
+            record_accessibility_grant();
+        },
+        crate::install_policy::AccessibilityReconcileAction::ClearGrantAndPrompt => {
+            info!("Accessibility permission was granted before but is no longer in effect, re-prompting");
+            // Clear it first so the next launch treats this as a plain missing permission and falls
+            // back to the tray warning rather than prompting again.
+            if let Err(err) = fig_settings::state::set_value(ACCESSIBILITY_GRANTED_KEY, false) {
+                warn!(%err, "Failed to clear Accessibility grant");
+            }
+            prompt_for_accessibility_permission();
+        },
+        crate::install_policy::AccessibilityReconcileAction::TrayOnly => {
+            info!("Accessibility permission is missing on a background launch, surfacing via the tray only");
+        },
+        crate::install_policy::AccessibilityReconcileAction::LeaveToLaunchPrompt => {},
     }
 
-    if previously_granted {
-        info!("Accessibility permission was granted before but is no longer in effect, re-prompting");
-        // Clear it first so the next launch treats this as a plain missing permission and falls
-        // back to the tray warning rather than prompting again.
-        if let Err(err) = fig_settings::state::set_value(ACCESSIBILITY_GRANTED_KEY, false) {
-            warn!(%err, "Failed to clear Accessibility grant");
-        }
-        prompt_for_accessibility_permission();
-        return true;
-    }
-
-    if !prompt_for_permissions {
-        info!("Accessibility permission is missing on a background launch, surfacing via the tray only");
-    }
-
-    false
+    crate::install_policy::accessibility_reconcile_already_prompted(action)
 }
 
 #[cfg(target_os = "macos")]
@@ -547,13 +548,11 @@ fn parse_version(output: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn should_run_install_script() -> bool {
-    let current_version = current_version();
-    let previous_version = match previous_version() {
-        Some(previous_version) => previous_version,
-        None => return true,
-    };
-
-    !is_cargo_debug_build() && current_version > previous_version
+    crate::install_policy::should_run_once_per_version_install(
+        is_cargo_debug_build(),
+        &current_version(),
+        previous_version().as_ref(),
+    )
 }
 
 /// The current version of the desktop app

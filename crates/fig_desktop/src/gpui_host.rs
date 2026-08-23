@@ -239,17 +239,16 @@ impl DesktopHost {
 }
 
 fn autocomplete_should_run() -> bool {
-    if fig_settings::settings::get_bool_or("autocomplete.disable", false) {
-        return false;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos_utils::accessibility::accessibility_is_enabled()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        PlatformState::accessibility_is_enabled().unwrap_or(true)
-    }
+    crate::platform::caret::autocomplete_may_run(fig_settings::settings::get_bool_or("autocomplete.disable", false), {
+        #[cfg(target_os = "macos")]
+        {
+            macos_utils::accessibility::accessibility_is_enabled()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            PlatformState::accessibility_is_enabled().unwrap_or(true)
+        }
+    })
 }
 
 pub fn run(host: Entity<DesktopHost>, event_rx: flume::Receiver<Event>, cx: &mut App) {
