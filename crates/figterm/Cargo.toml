@@ -77,5 +77,10 @@ winreg = "0.56.0"
 
 [dev-dependencies]
 assert_cmd.workspace = true
+ec_engine = { path = "../ec_engine" }
+fig_ipc.workspace = true
+fig_proto.workspace = true
+portable-pty.workspace = true
 predicates = "3.0.1"
 tempfile.workspace = true
+tokio.workspace = true

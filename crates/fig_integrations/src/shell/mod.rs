@@ -875,6 +875,24 @@ mod test {
     }
 
     #[test]
+    fn post_hooks_emit_osc_697_for_ecterm() {
+        let bash = include_str!("scripts/post.bash");
+        let zsh = include_str!("scripts/post.zsh");
+        let fish = include_str!("scripts/post.fish");
+        for (name, src) in [("bash", bash), ("zsh", zsh), ("fish", fish)] {
+            assert!(src.contains("697"), "{name} post hook must speak OSC 697");
+            assert!(
+                src.contains("StartPrompt") && src.contains("EndPrompt") && src.contains("NewCmd"),
+                "{name} post hook must wrap the prompt so ecterm can read the edit buffer"
+            );
+            assert!(src.contains("Shell="), "{name} post hook must report the shell name");
+        }
+        assert!(bash.contains("Shell=bash"));
+        assert!(zsh.contains("Shell=zsh"));
+        assert!(fish.contains("Shell=fish"));
+    }
+
+    #[test]
     fn shellcheck_bash_pre() {
         check_script(Shell::Bash, When::Pre);
     }
