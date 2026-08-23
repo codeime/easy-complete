@@ -419,8 +419,9 @@ impl Registry {
         if pos + 1 == self.loaded.len() {
             return;
         }
-        let cached = self.loaded.remove(pos).expect("index from position()");
-        self.loaded.push_back(cached);
+        if let Some(cached) = self.loaded.remove(pos) {
+            self.loaded.push_back(cached);
+        }
     }
 
     fn evict_oldest_spec(&mut self) {
@@ -1260,5 +1261,18 @@ mod tests {
         assert!(loaded.find_subcommand("list").is_some());
         let resolved = dscl.args[0].resolved_spec.as_deref().expect("resolved inline loadSpec");
         assert!(resolved.find_subcommand("list").is_some());
+    }
+
+    #[test]
+    fn loaded_spec_lru_does_not_expect_the_position_index() {
+        let src = include_str!("ir.rs");
+        let start = src.find("fn touch_loaded").expect("touch_loaded");
+        let body = &src[start..];
+        let end = body.find("\n    fn evict_oldest_spec").expect("evict_oldest_spec");
+        let body = &body[..end];
+        assert!(
+            !body.contains(".expect(") && body.contains("if let Some(cached) = self.loaded.remove(pos)"),
+            "spec LRU reorder must not panic if the deque and map desync"
+        );
     }
 }

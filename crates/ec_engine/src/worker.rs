@@ -181,7 +181,7 @@ impl EngineClient {
                         }
                     }
                     let JobKind::Complete { request, reply } = latest.kind else {
-                        unreachable!("drain_to_latest returns a completion job");
+                        continue;
                     };
                     // A caller can cancel its future while the job is waiting
                     // behind an in-flight attempt.  Do not initialize an
@@ -961,6 +961,14 @@ mod tests {
         assert!(
             !dispatch.contains("thread::Builder"),
             "dispatch must not spawn a thread per completion"
+        );
+        let drain_use = body
+            .find("let JobKind::Complete { request, reply } = latest.kind")
+            .expect("complete match after drain");
+        let arm = &body[drain_use..drain_use + 160];
+        assert!(
+            arm.contains("continue") && !arm.contains("unreachable!"),
+            "a non-complete drain result must skip the attempt, not panic the supervisor"
         );
     }
 

@@ -32,8 +32,9 @@ impl Cache {
         if pos + 1 == self.order.len() {
             return;
         }
-        let key = self.order.remove(pos).expect("index from position()");
-        self.order.push_back(key);
+        if let Some(key) = self.order.remove(pos) {
+            self.order.push_back(key);
+        }
     }
 
     fn get_fresh(&mut self, key: &str, mtime: Option<SystemTime>) -> Option<&[Suggestion]> {
@@ -237,5 +238,18 @@ mod tests {
         assert!(!cache.entries.contains_key("k1"));
         assert!(cache.entries.contains_key("k-new"));
         assert_eq!(cache.entries.len(), MAX_CACHED);
+    }
+
+    #[test]
+    fn lru_touch_does_not_expect_the_position_index() {
+        let src = include_str!("cobra.rs");
+        let start = src.find("fn touch(").expect("touch");
+        let body = &src[start..];
+        let end = body.find("\n    fn get_fresh").expect("get_fresh");
+        let body = &body[..end];
+        assert!(
+            !body.contains(".expect(") && body.contains("if let Some(key) = self.order.remove(pos)"),
+            "LRU reorder must not panic if the deque and map desync"
+        );
     }
 }

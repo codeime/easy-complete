@@ -84,6 +84,12 @@ pub enum FigMessageParseError {
     InvalidMessageType([u8; 8]),
     #[error("failed to convert int: {0}")]
     TryFromInt(#[from] TryFromIntError),
+    /// A frame whose body length plus the 18-byte prefix does not fit in
+    /// `usize`. Distinct from [`Self::Incomplete`]: waiting cannot complete
+    /// this frame, so parse/take consume the prefix the same way as
+    /// [`Self::TryFromInt`].
+    #[error("frame body length overflows addressable size")]
+    BodyLengthOverflow,
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -128,7 +134,11 @@ impl FigMessage {
         let message_len: u64 = body.len().try_into()?;
         let message_len_be = message_len.to_be_bytes();
 
-        dst.reserve(b"\x1b@".len() + message_type.header().len() + message_len_be.len() + body.len());
+        let prefix = b"\x1b@".len() + message_type.header().len() + message_len_be.len();
+        let Some(cap) = prefix.checked_add(body.len()) else {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "frame length overflows").into());
+        };
+        dst.reserve(cap);
         dst.extend_from_slice(b"\x1b@");
         dst.extend_from_slice(message_type.header());
         dst.extend_from_slice(&message_len_be);
@@ -187,9 +197,19 @@ impl FigMessage {
                 Self::FRAME_PREFIX_LEN - bytes.len(),
             ));
         }
-        let body_len = u64::from_be_bytes(bytes[10..Self::FRAME_PREFIX_LEN].try_into().expect("8 bytes"));
-        let body_len: usize = body_len.try_into()?;
-        let total = Self::FRAME_PREFIX_LEN + body_len;
+        let Some(len_slice) = bytes.get(10..Self::FRAME_PREFIX_LEN) else {
+            return Err(FigMessageParseError::Incomplete(
+                FigMessageComponent::BodySize,
+                Self::FRAME_PREFIX_LEN.saturating_sub(bytes.len()),
+            ));
+        };
+        let Ok(len_bytes) = <[u8; 8]>::try_from(len_slice) else {
+            return Err(FigMessageParseError::BodyLengthOverflow);
+        };
+        let body_len: usize = u64::from_be_bytes(len_bytes).try_into()?;
+        let Some(total) = Self::FRAME_PREFIX_LEN.checked_add(body_len) else {
+            return Err(FigMessageParseError::BodyLengthOverflow);
+        };
         if bytes.len() < total {
             return Err(FigMessageParseError::Incomplete(
                 FigMessageComponent::Body,
@@ -203,7 +223,7 @@ impl FigMessage {
         match Self::inspect_frame(src.chunk()) {
             Ok((total, message_type)) => {
                 src.advance(Self::FRAME_PREFIX_LEN);
-                let inner = src.copy_to_bytes(total - Self::FRAME_PREFIX_LEN);
+                let inner = src.copy_to_bytes(total.saturating_sub(Self::FRAME_PREFIX_LEN));
                 Ok((total, FigMessage { inner, message_type }))
             },
             Err(err @ FigMessageParseError::Incomplete(_, _)) => Err(err),
@@ -211,7 +231,7 @@ impl FigMessage {
                 src.advance(10.min(src.remaining()));
                 Err(err)
             },
-            Err(err @ FigMessageParseError::TryFromInt(_)) => {
+            Err(err @ (FigMessageParseError::TryFromInt(_) | FigMessageParseError::BodyLengthOverflow)) => {
                 src.advance(Self::FRAME_PREFIX_LEN.min(src.remaining()));
                 Err(err)
             },
@@ -237,7 +257,7 @@ impl FigMessage {
                 let _ = buf.split_to(skip);
                 Err(err)
             },
-            Err(err @ FigMessageParseError::TryFromInt(_)) => {
+            Err(err @ (FigMessageParseError::TryFromInt(_) | FigMessageParseError::BodyLengthOverflow)) => {
                 let skip = Self::FRAME_PREFIX_LEN.min(buf.len());
                 let _ = buf.split_to(skip);
                 Err(err)
@@ -286,13 +306,18 @@ impl<T: Message + Debug> FigProtobufEncodable for T {
         // body separately, wrap it, then copy it into the framed buffer.
         let body_len = self.encoded_len();
         let message_len: u64 = body_len.try_into()?;
-        let mut buf = BytesMut::with_capacity(FigMessage::FRAME_PREFIX_LEN + body_len);
+        let Some(cap) = FigMessage::FRAME_PREFIX_LEN.checked_add(body_len) else {
+            return Err(
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "protobuf frame length overflows").into(),
+            );
+        };
+        let mut buf = BytesMut::with_capacity(cap);
         buf.extend_from_slice(b"\x1b@");
         buf.extend_from_slice(FigMessageType::Protobuf.header());
         buf.extend_from_slice(&message_len.to_be_bytes());
         self.encode(&mut buf)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::WriteZero, err))?;
-        debug_assert_eq!(buf.len(), FigMessage::FRAME_PREFIX_LEN + body_len);
+        debug_assert_eq!(buf.len(), cap);
         Ok(buf.freeze())
     }
 }
@@ -449,6 +474,51 @@ mod tests {
         assert_eq!(caret_position.y, 456.0);
         assert_eq!(caret_position.width, 34.0);
         assert_eq!(caret_position.height, 61.0);
+    }
+
+    #[test]
+    fn overflowing_body_length_does_not_panic() {
+        let mut header = [0u8; FigMessage::FRAME_PREFIX_LEN];
+        header[..10].copy_from_slice(b"\x1b@fig-pbuf");
+        header[10..].copy_from_slice(&u64::MAX.to_be_bytes());
+        let mut buf = BytesMut::from(header.as_slice());
+        let err = FigMessage::take_from_bytes_mut(&mut buf).expect_err("unaddressable body");
+        assert!(
+            matches!(
+                err,
+                FigMessageParseError::BodyLengthOverflow | FigMessageParseError::TryFromInt(_)
+            ),
+            "overflow must not stall as Incomplete: {err:?}"
+        );
+        assert!(
+            buf.is_empty(),
+            "the 18-byte prefix must be consumed so the socket is dropped, not waited on"
+        );
+
+        let mut slice: &[u8] = &header;
+        let err = FigMessage::parse(&mut slice).expect_err("unaddressable body");
+        assert!(matches!(
+            err,
+            FigMessageParseError::BodyLengthOverflow | FigMessageParseError::TryFromInt(_)
+        ));
+        assert!(slice.is_empty(), "parse must consume the prefix on overflow");
+    }
+
+    #[test]
+    fn inspect_frame_does_not_unwrap_the_length_field() {
+        let src = include_str!("lib.rs");
+        let start = src.find("fn inspect_frame(").expect("inspect_frame");
+        let body = &src[start..];
+        let end = body.find("\n    pub fn parse(").expect("parse");
+        let body = &body[..end];
+        assert!(
+            !body.contains(".expect(") && !body.contains(".unwrap()"),
+            "length-field conversion must return a parse error, not panic"
+        );
+        assert!(
+            body.contains("checked_add(body_len)") && body.contains("BodyLengthOverflow"),
+            "prefix + body must not wrap usize"
+        );
     }
 
     #[test]

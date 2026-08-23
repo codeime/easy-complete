@@ -144,7 +144,9 @@ impl JsHost {
 
     fn with_inner<R>(f: impl FnOnce(&Inner) -> R) -> Option<R> {
         INNER.with(|cell| {
-            let mut slot = cell.borrow_mut();
+            // Nested hooks (a generateSpec walking another hook) must not
+            // panic the attempt thread on RefCell re-entry.
+            let mut slot = cell.try_borrow_mut().ok()?;
             if slot.is_none() {
                 let runtime = Runtime::new().ok()?;
                 runtime.set_memory_limit(MEMORY_LIMIT);
@@ -1608,5 +1610,20 @@ mod tests {
         });
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first[0].name, "alpha");
+    }
+
+    #[test]
+    fn nested_with_inner_does_not_panic() {
+        let outer = JsHost::with_inner(|_| JsHost::with_inner(|_| 1));
+        assert_eq!(outer, Some(None), "re-entry must return None instead of BorrowMutError");
+        let src = include_str!("js_host.rs");
+        let start = src.find("fn with_inner").expect("with_inner");
+        let body = &src[start..];
+        let end = body.find("\n    fn hook_source").expect("hook_source");
+        let body = &body[..end];
+        assert!(
+            body.contains("try_borrow_mut") && !body.contains("cell.borrow_mut()"),
+            "QuickJS TLS must not panic the attempt thread on nested hooks"
+        );
     }
 }

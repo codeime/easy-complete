@@ -84,8 +84,9 @@ impl<T: Clone> MtimeLru<T> {
                 let hit = value.clone();
                 if let Some(pos) = self.order.iter().position(|existing| existing == key) {
                     if pos + 1 != self.order.len() {
-                        let key = self.order.remove(pos).expect("index from position()");
-                        self.order.push_back(key);
+                        if let Some(key) = self.order.remove(pos) {
+                            self.order.push_back(key);
+                        }
                     }
                 }
                 return Some(hit);
@@ -105,8 +106,9 @@ impl<T: Clone> MtimeLru<T> {
             self.entries.insert(key.clone(), (mtime, value));
             if let Some(pos) = self.order.iter().position(|existing| existing == &key) {
                 if pos + 1 != self.order.len() {
-                    let key = self.order.remove(pos).expect("index from position()");
-                    self.order.push_back(key);
+                    if let Some(key) = self.order.remove(pos) {
+                        self.order.push_back(key);
+                    }
                 }
             }
             return;
@@ -972,6 +974,19 @@ mod tests {
         assert_eq!(
             cache.get(&format!("k{}", MAX_CACHED - 1), Some(t1)).as_deref(),
             Some(last.as_str())
+        );
+    }
+
+    #[test]
+    fn mtime_lru_does_not_expect_the_position_index() {
+        let src = include_str!("generate.rs");
+        let start = src.find("struct MtimeLru").expect("MtimeLru");
+        let body = &src[start..];
+        let end = body.find("static GIT_REFS").expect("GIT_REFS");
+        let body = &body[..end];
+        assert!(
+            !body.contains(".expect(") && body.contains("if let Some(key) = self.order.remove(pos)"),
+            "mtime LRU reorder must not panic if the deque and map desync"
         );
     }
 

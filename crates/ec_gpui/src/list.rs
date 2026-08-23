@@ -276,10 +276,11 @@ pub fn fuzzy_indexes(name: &str, query: &str) -> Option<Vec<usize>> {
     let next_beginning = next_beginning_indexes(chars.len(), &beginnings);
     let mut strict = vec![0usize; search.len()];
     let mut search_i = 0usize;
-    let mut target_i = if indexes[0] == 0 {
+    let first = *indexes.first()?;
+    let mut target_i = if first == 0 {
         0
     } else {
-        next_beginning[indexes[0] - 1]
+        next_beginning.get(first - 1).copied().unwrap_or(chars.len())
     };
     let mut success = false;
     loop {
@@ -292,7 +293,7 @@ pub fn fuzzy_indexes(name: &str, query: &str) -> Option<Vec<usize>> {
             // like fuzzysort's small backtracking pass.
             search_i -= 1;
             let last_match = strict[search_i];
-            target_i = next_beginning[last_match];
+            target_i = next_beginning.get(last_match).copied().unwrap_or(chars.len());
         } else if search[search_i] == lower[target_i] {
             strict[search_i] = target_i;
             search_i += 1;
@@ -302,7 +303,7 @@ pub fn fuzzy_indexes(name: &str, query: &str) -> Option<Vec<usize>> {
             }
             target_i += 1;
         } else {
-            let next = next_beginning[target_i];
+            let next = next_beginning.get(target_i).copied().unwrap_or(chars.len());
             if next >= chars.len() {
                 target_i = chars.len();
             } else {
@@ -1464,6 +1465,8 @@ mod tests {
     fn fuzzy_indexes_prefer_word_boundaries_and_consecutive_matches() {
         assert_eq!(fuzzy_indexes("fooBar", "fb"), Some(vec![0, 3]));
         assert_eq!(fuzzy_indexes("aXab", "ab"), Some(vec![0, 3]));
+        assert_eq!(fuzzy_indexes("checkout", ""), Some(Vec::new()));
+        assert_eq!(fuzzy_indexes("checkout", "z"), None);
     }
 
     #[test]

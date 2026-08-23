@@ -1614,7 +1614,10 @@ fn predicted_buffer_after_insert(buffer: &str, cursor: u32, insertion: &str, del
 }
 
 fn previous_char_boundary(text: &str, from: usize, count: usize) -> usize {
-    let mut boundary = from;
+    let mut boundary = from.min(text.len());
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
     for _ in 0..count {
         boundary = text[..boundary]
             .char_indices()
@@ -2230,6 +2233,8 @@ mod tests {
             predicted_buffer_after_insert("--message", 9, "= \x1b[D", 0),
             Some(("--message= ".into(), 10))
         );
+        assert_eq!(previous_char_boundary("é", 1, 1), 0);
+        assert_eq!(previous_char_boundary("ab", 99, 1), 1);
     }
 
     #[test]

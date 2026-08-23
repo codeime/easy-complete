@@ -247,7 +247,7 @@ async fn shell_init(shell: &Shell, when: &When, rcfile: &Option<String>) -> Resu
         let last_sent_at = fig_settings::state::get_int_or("cli.init.login-prompt.sent-at", 0);
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         if now - last_sent_at > 60 * 60 * 36 {
             let _ = fig_settings::state::set_value("cli.init.login-prompt.sent-at", now);
@@ -324,6 +324,17 @@ mod tests {
 
         let output = child.wait_with_output().unwrap();
         String::from_utf8(output.stdout).unwrap()
+    }
+
+    #[test]
+    fn login_prompt_clock_does_not_unwrap() {
+        let src = include_str!("init.rs");
+        let start = src.find("cli.init.login-prompt.sent-at").expect("login prompt");
+        let body = &src[start.saturating_sub(200)..start + 400];
+        assert!(
+            body.contains("unwrap_or_default()") && !body.contains("UNIX_EPOCH)\n            .unwrap()"),
+            "ec init runs on every prompt; a pre-epoch clock must not panic the shell hook"
+        );
     }
 
     #[test]

@@ -17,15 +17,29 @@ use crate::Error;
 
 const DEFAULT_RELEASE_URL: &str = "https://desktop-release.q.us-east-1.amazonaws.com";
 
-static RELEASE_URL: LazyLock<Url> = LazyLock::new(|| {
-    match fig_os_shim::Env::new().q_desktop_release_url() {
-        Ok(s) => Url::parse(&s),
-        Err(_) => match fig_settings::settings::get_string("install.releaseUrl") {
-            Ok(Some(s)) => Url::parse(&s),
-            _ => Url::parse(option_env!("Q_BUILD_DESKTOP_RELEASE_URL").unwrap_or(DEFAULT_RELEASE_URL)),
-        },
+fn default_release_url() -> Url {
+    Url::parse(DEFAULT_RELEASE_URL).expect("DEFAULT_RELEASE_URL is a valid URL")
+}
+
+/// First well-formed URL among env / settings / build / the baked-in default.
+/// A user-typed `install.releaseUrl` must not poison this `LazyLock`.
+fn resolve_release_url(env: Option<&str>, setting: Option<&str>, build: Option<&str>) -> Url {
+    for candidate in [env, setting, build].into_iter().flatten() {
+        if let Ok(url) = Url::parse(candidate) {
+            return url;
+        }
     }
-    .unwrap()
+    default_release_url()
+}
+
+static RELEASE_URL: LazyLock<Url> = LazyLock::new(|| {
+    let env = fig_os_shim::Env::new().q_desktop_release_url().ok();
+    let setting = fig_settings::settings::get_string("install.releaseUrl").ok().flatten();
+    resolve_release_url(
+        env.as_deref(),
+        setting.as_deref(),
+        option_env!("Q_BUILD_DESKTOP_RELEASE_URL"),
+    )
 });
 
 fn deser_enum_other<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -182,22 +196,17 @@ impl Index {
             }
         });
 
-        if chosen.is_none() {
-            // no upgrade candidates
+        let Some(chosen) = chosen else {
             return Ok(None);
-        }
-
-        let chosen = chosen.unwrap();
-        let package = chosen
-            .packages
-            .iter()
-            .find(|package| {
-                package.target_triple.as_ref() == Some(target_triple)
-                    && package.variant == *variant
-                    && (file_type.is_none()
-                        || file_type.is_some_and(|file_type| package.file_type.as_ref() == Some(file_type)))
-            })
-            .unwrap();
+        };
+        let Some(package) = chosen.packages.iter().find(|package| {
+            package.target_triple.as_ref() == Some(target_triple)
+                && package.variant == *variant
+                && (file_type.is_none()
+                    || file_type.is_some_and(|file_type| package.file_type.as_ref() == Some(file_type)))
+        }) else {
+            return Ok(None);
+        };
 
         if match Version::parse(current_version) {
             Ok(current_version) => chosen.version <= current_version,
@@ -436,6 +445,28 @@ mod tests {
             assert_eq!($variant, $ty::from_str($text).unwrap(), "from_str failed");
             assert_eq!($text, $variant.to_string(), "to_string failed");
         };
+    }
+
+    #[test]
+    fn invalid_release_url_falls_back_to_the_default() {
+        let default = default_release_url();
+        assert_eq!(resolve_release_url(Some("not a url"), None, None), default);
+        assert_eq!(resolve_release_url(None, Some("also not a url"), None), default);
+        let parsed = resolve_release_url(Some("https://example.test/updates/"), None, None);
+        assert_eq!(parsed.as_str(), "https://example.test/updates/");
+        let production = include_str!("index.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains(".unwrap()\n});") && production.contains("resolve_release_url("),
+            "install.releaseUrl must not poison RELEASE_URL"
+        );
+        assert!(
+            production.contains("let Some(package) = chosen.packages.iter().find")
+                && !production.contains("chosen.unwrap()"),
+            "a version without a matching package must skip the update, not panic"
+        );
     }
 
     #[test]

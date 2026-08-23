@@ -132,7 +132,7 @@ fn grandparent_status(ctx: &Context, parent_pid: fig_os_shim::process_info::Pid)
     let terminals = match current_os {
         fig_os_shim::Os::Mac => fig_util::terminal::MACOS_TERMINALS,
         fig_os_shim::Os::Linux => fig_util::terminal::LINUX_TERMINALS,
-        _ => panic!("unsupported os"),
+        _ => return Status::DontLaunch("unsupported os".into()),
     }
     .iter()
     .chain(fig_util::terminal::SPECIAL_TERMINALS)
@@ -150,7 +150,7 @@ fn grandparent_status(ctx: &Context, parent_pid: fig_os_shim::process_info::Pid)
                     .cmdline()
                     .is_some_and(|cmdline| Terminal::try_from_cmdline(&cmdline, &terminals).is_some())
         }),
-        _ => panic!("unsupported os"),
+        _ => return Status::DontLaunch("unsupported os".into()),
     };
 
     Status::Process(ProcessInfo {
@@ -531,6 +531,11 @@ mod tests {
                 .parent_exe("/usr/bin/zsh")
                 .grandparent_exe("/usr/bin/invalid")
                 .expect(1),
+            test("windows fake platform does not panic the wrap decision")
+                .os(Os::Windows)
+                .parent_exe("/usr/bin/zsh")
+                .grandparent_exe("/usr/bin/wezterm")
+                .expect(1),
         ];
         for test in tests {
             test.run();
@@ -576,5 +581,21 @@ mod tests {
         for test in tests {
             test.run();
         }
+    }
+
+    #[test]
+    fn wrap_decision_does_not_panic_on_an_unknown_os() {
+        let production = include_str!("should_figterm_launch.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains("panic!(\"unsupported os\")"),
+            "a fake Windows platform on a unix build must not panic ec init"
+        );
+        assert!(
+            production.contains("Status::DontLaunch(\"unsupported os\".into())"),
+            "unknown Os must stand down instead of aborting the wrap helper"
+        );
     }
 }
