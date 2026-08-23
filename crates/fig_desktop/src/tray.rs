@@ -10,7 +10,7 @@ use fig_util::url::USER_MANUAL;
 use muda::accelerator::Accelerator;
 use muda::{IconMenuItem, Menu, MenuEvent, MenuId, PredefinedMenuItem, Submenu};
 use tao::event_loop::ControlFlow;
-use tracing::{error, trace};
+use tracing::{error, trace, warn};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::bootstrap::LOGIN_PATH;
@@ -181,59 +181,79 @@ pub async fn build_tray(
 
 pub(crate) fn build_tray_icon() -> tray_icon::Result<TrayIcon> {
     let is_logged_in = true; // fig_auth removed
-    TrayIconBuilder::new()
-        .with_icon(get_icon(is_logged_in))
+    let mut builder = TrayIconBuilder::new()
         .with_icon_as_template(true)
-        .with_menu(Box::new(get_context_menu(is_logged_in)))
-        .build()
+        .with_menu(Box::new(get_context_menu(is_logged_in)));
+    if let Some(icon) = get_icon(is_logged_in) {
+        builder = builder.with_icon(icon);
+    } else {
+        warn!("bundled tray icon missing or invalid; building tray without an icon");
+    }
+    builder.build()
 }
 
-pub fn get_icon(is_logged_in: bool) -> Icon {
-    fn decode(bytes: &[u8]) -> Icon {
-        let image = image::load_from_memory(bytes)
-            .expect("Failed to open icon path")
-            .into_rgba8();
-        let (width, height) = image.dimensions();
-        Icon::from_rgba(image.into_raw(), width, height).expect("Failed to open icon")
+/// Decode a bundled PNG into a tray icon. Invalid bytes warn and return `None`
+/// instead of panicking the desktop process.
+pub(crate) fn decode_tray_icon(bytes: &[u8]) -> Option<Icon> {
+    let image = match image::load_from_memory(bytes) {
+        Ok(image) => image.into_rgba8(),
+        Err(err) => {
+            warn!(?err, "failed to decode tray icon");
+            return None;
+        },
+    };
+    let (width, height) = image.dimensions();
+    match Icon::from_rgba(image.into_raw(), width, height) {
+        Ok(icon) => Some(icon),
+        Err(err) => {
+            warn!(?err, "failed to build tray icon");
+            None
+        },
     }
+}
 
+pub fn get_icon(is_logged_in: bool) -> Option<Icon> {
     if is_logged_in {
-        static SIGNED_IN: OnceLock<Icon> = OnceLock::new();
+        static SIGNED_IN: OnceLock<Option<Icon>> = OnceLock::new();
         return SIGNED_IN
             .get_or_init(|| {
                 cfg_if! {
                     if #[cfg(target_os = "linux")] {
-                        decode(include_bytes!("../icons/icon-monochrome-light.png"))
+                        decode_tray_icon(include_bytes!("../icons/icon-monochrome-light.png"))
                     } else {
-                        decode(include_bytes!("../icons/icon-monochrome.png"))
+                        decode_tray_icon(include_bytes!("../icons/icon-monochrome.png"))
                     }
                 }
             })
             .clone();
     }
 
-    static SIGNED_OUT: OnceLock<Icon> = OnceLock::new();
+    static SIGNED_OUT: OnceLock<Option<Icon>> = OnceLock::new();
     SIGNED_OUT
         .get_or_init(|| {
             cfg_if! {
                 if #[cfg(target_os = "linux")] {
-                    decode(include_bytes!("../icons/icon-monochrome-light.png"))
+                    decode_tray_icon(include_bytes!("../icons/icon-monochrome-light.png"))
                 } else {
-                    decode(include_bytes!("../icons/not-logged-in.png"))
+                    decode_tray_icon(include_bytes!("../icons/not-logged-in.png"))
                 }
             }
         })
         .clone()
 }
 
-fn warning_icon_rgba() -> (Vec<u8>, u32, u32) {
-    static RGBA: OnceLock<(Vec<u8>, u32, u32)> = OnceLock::new();
+fn warning_icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
+    static RGBA: OnceLock<Option<(Vec<u8>, u32, u32)>> = OnceLock::new();
     RGBA.get_or_init(|| {
-        let image = image::load_from_memory(include_bytes!("../icons/yellow-circle.png"))
-            .expect("Failed to open icon path")
-            .into_rgba8();
+        let image = match image::load_from_memory(include_bytes!("../icons/yellow-circle.png")) {
+            Ok(image) => image.into_rgba8(),
+            Err(err) => {
+                warn!(?err, "failed to decode tray warning icon");
+                return None;
+            },
+        };
         let (width, height) = image.dimensions();
-        (image.into_raw(), width, height)
+        Some((image.into_raw(), width, height))
     })
     .clone()
 }
@@ -401,15 +421,12 @@ fn menu(is_logged_in: bool) -> Vec<MenuElement> {
         let onboarded_completed = fig_settings::state::get_bool_or("desktop.completedOnboarding", false);
         if !onboarded_completed {
             vec![
-                MenuElement::info(
-                    Some(yellow_circle_img),
-                    format!("{PRODUCT_NAME} hasn't been set up yet..."),
-                ),
+                MenuElement::info(yellow_circle_img, format!("{PRODUCT_NAME} hasn't been set up yet...")),
                 MenuElement::entry(None, None, "Get Started", LOGIN_MENU_ID),
             ]
         } else {
             vec![
-                MenuElement::info(Some(yellow_circle_img), "Your session has expired"),
+                MenuElement::info(yellow_circle_img, "Your session has expired"),
                 MenuElement::entry(None, None, "Log back in", LOGIN_MENU_ID),
             ]
         }
@@ -420,7 +437,7 @@ fn menu(is_logged_in: bool) -> Vec<MenuElement> {
     if accessibility_is_missing() {
         let warning_img = warning_icon_rgba();
         let mut warning = vec![
-            MenuElement::info(Some(warning_img), "Accessibility permission is missing"),
+            MenuElement::info(warning_img, "Accessibility permission is missing"),
             MenuElement::entry(None, None, "Enable Accessibility…", ACCESSIBILITY_MENU_ID),
             MenuElement::Separator,
         ];
@@ -439,9 +456,37 @@ mod tests {
     fn tray_icon_decode_is_cached() {
         let first = super::get_icon(true);
         let second = super::get_icon(true);
-        let _ = (first, second);
-        let warning = super::warning_icon_rgba();
+        assert!(first.is_some(), "bundled signed-in tray icon must decode");
+        assert!(second.is_some(), "bundled signed-in tray icon must decode");
+        assert!(
+            super::get_icon(false).is_some(),
+            "bundled signed-out tray icon must decode"
+        );
+        let warning = super::warning_icon_rgba().expect("yellow-circle.png must decode on the happy path");
         assert!(!warning.0.is_empty());
         assert_eq!(warning.0.len(), (warning.1 * warning.2 * 4) as usize);
+    }
+
+    #[test]
+    fn invalid_tray_icon_bytes_do_not_panic() {
+        assert!(super::decode_tray_icon(b"not-a-png").is_none());
+        assert!(super::decode_tray_icon(&[]).is_none());
+        // Truncated PNG header: enough to look like an image, not enough to decode.
+        assert!(super::decode_tray_icon(b"\x89PNG\r\n\x1a\n").is_none());
+    }
+
+    #[test]
+    fn get_icon_does_not_expect_on_decode() {
+        let src = include_str!("tray.rs");
+        // Concat so this pin's own source does not contain the old expect literals.
+        assert!(
+            !src.contains(&["expect(\"", "Failed to open icon path\")"].concat())
+                && !src.contains(&["expect(\"", "Failed to open icon\")"].concat()),
+            "get_icon / decode_tray_icon must not panic on a bad asset"
+        );
+        assert!(
+            src.contains("decode_tray_icon") && src.contains("failed to decode tray icon"),
+            "tray icon decode should warn and return None"
+        );
     }
 }

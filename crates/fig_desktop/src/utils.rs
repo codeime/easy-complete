@@ -136,6 +136,10 @@ mod tests {
                 !src.contains("ACTIVATION_POLICY.lock().unwrap()"),
                 "{name} still panics on ACTIVATION_POLICY poison"
             );
+            assert!(
+                !src.contains("focused_window.lock().unwrap()"),
+                "{name} still panics on focused_window poison"
+            );
         }
         assert!(
             include_str!("local_ipc/commands.rs").contains("recover_mutex"),
@@ -146,6 +150,10 @@ mod tests {
                 && include_str!("bootstrap/mod.rs").contains("recover_mutex")
                 && include_str!("platform/macos.rs").contains("recover_mutex"),
             "ACTIVATION_POLICY should recover via recover_mutex"
+        );
+        assert!(
+            include_str!("platform/macos.rs").contains("recover_mutex(&self.focused_window)"),
+            "focused_window should recover via recover_mutex"
         );
     }
 

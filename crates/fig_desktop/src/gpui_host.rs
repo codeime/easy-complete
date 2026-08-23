@@ -58,9 +58,7 @@ impl DesktopHost {
                 crate::linux_tray::reload(is_logged_in);
                 #[cfg(not(target_os = "linux"))]
                 if let Some(tray) = &mut self.tray {
-                    tray.set_icon(Some(get_icon(is_logged_in)))
-                        .map_err(|err| error!(?err))
-                        .ok();
+                    tray.set_icon(get_icon(is_logged_in)).map_err(|err| error!(?err)).ok();
                     tray.set_icon_as_template(true);
                     tray.set_menu(Some(Box::new(get_context_menu(is_logged_in))));
                 }

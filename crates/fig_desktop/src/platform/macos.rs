@@ -450,7 +450,7 @@ impl PlatformStateImpl {
                             .unwrap();
                     });
 
-                    let mut focused = self.focused_window.lock().unwrap();
+                    let mut focused = crate::utils::recover_mutex(&self.focused_window);
                     focused.replace(window);
                 }
 
@@ -459,10 +459,7 @@ impl PlatformStateImpl {
                 Ok(())
             },
             PlatformBoundEvent::AutocompleteWindowLevelUpdateRequested => {
-                let level = self
-                    .focused_window
-                    .lock()
-                    .unwrap()
+                let level = crate::utils::recover_mutex(&self.focused_window)
                     .as_ref()
                     .and_then(|window| window.get_level());
                 apply_autocomplete_window_level(window_map, level);
@@ -584,7 +581,7 @@ impl PlatformStateImpl {
                 Ok(())
             },
             PlatformBoundEvent::FocusedElementChanged { element, app } => {
-                let mut focused = self.focused_window.lock().unwrap();
+                let mut focused = crate::utils::recover_mutex(&self.focused_window);
                 let Some(focused_window) = focused.as_mut() else {
                     return Ok(());
                 };
@@ -619,7 +616,7 @@ impl PlatformStateImpl {
                 Ok(())
             },
             PlatformBoundEvent::WindowDestroyed { app } => {
-                let mut focused = self.focused_window.lock().unwrap();
+                let mut focused = crate::utils::recover_mutex(&self.focused_window);
                 if let Some(focused_window) = focused.as_ref() {
                     if focused_window.bundle_id() == app.bundle_id {
                         focused.take();
@@ -637,7 +634,7 @@ impl PlatformStateImpl {
     }
 
     fn refresh_window_position(&self) -> anyhow::Result<()> {
-        let mut guard = self.focused_window.lock().unwrap();
+        let mut guard = crate::utils::recover_mutex(&self.focused_window);
         let active_window = guard.as_mut().context("No active window")?;
         let current_terminal = Terminal::from_bundle_id(active_window.bundle_id());
 
@@ -717,7 +714,7 @@ impl PlatformStateImpl {
 
     /// Gets the currently active window on the platform
     pub(super) fn get_active_window(&self) -> Option<PlatformWindow> {
-        let active_window = self.focused_window.lock().unwrap().as_ref()?.clone();
+        let active_window = crate::utils::recover_mutex(&self.focused_window).as_ref()?.clone();
         Some(PlatformWindow {
             rect: active_window.get_bounds()?.into(),
             inner: active_window,

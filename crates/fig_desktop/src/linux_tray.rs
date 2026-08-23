@@ -40,9 +40,7 @@ pub fn spawn() {
                 while let Ok(op) = rx.try_recv() {
                     match op {
                         TrayOp::Reload { is_logged_in } => {
-                            tray.set_icon(Some(get_icon(is_logged_in)))
-                                .map_err(|err| warn!(?err))
-                                .ok();
+                            tray.set_icon(get_icon(is_logged_in)).map_err(|err| warn!(?err)).ok();
                             tray.set_icon_as_template(true);
                             tray.set_menu(Some(Box::new(get_context_menu(is_logged_in))));
                         },

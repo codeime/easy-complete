@@ -47,9 +47,16 @@ where
                         }
                     }
                 },
-                // On any other error, return the error
+                // On any other error, return the error.
+                //
+                // Resync-to-`\x1b@` is intentionally not implemented. Parse
+                // already consumed up to 10 bytes (header + type) before this
+                // error; callers (desktop local_ipc, figterm ipc, remote
+                // handshake) drop the stream on RecvError, so leftover bytes
+                // die with the socket. Scanning for the next magic would keep a
+                // desynced connection alive and can false-match payload bytes
+                // (`\x1b@` is legal in protobuf). See CROSS_PLATFORM_PLAN §8.
                 Err(err) => {
-                    // TODO(grant): add resyncing to message boundary
                     let position = cursor.position() as usize;
                     self.buffer.advance(position);
                     return Err(err.into());
@@ -136,5 +143,44 @@ mod tests {
         let mut mock = mock(vec![b'f', b'o', b'o']);
         mock.inner.set_position(0);
         assert!(mock.recv_message::<fig_proto::local::LocalMessage>().await.is_err());
+    }
+
+    /// Ten garbage bytes that are not `\x1b@` hit `InvalidHeader` (parser needs
+    /// 10 bytes before it can reject the header). The recv loop advances those
+    /// 10 bytes and returns Err. Callers drop the socket; they do not retry.
+    #[tokio::test]
+    async fn invalid_header_advances_ten_bytes_and_errors() {
+        let mut writer = mock(vec![]);
+        writer.send_message(test_message_small()).await.unwrap();
+        let framed = writer.inner.into_inner();
+        let mut bytes = vec![b'x'; 10];
+        bytes.extend_from_slice(&framed);
+        let mut reader = mock(bytes);
+        reader.inner.set_position(0);
+        assert!(reader.recv_message::<fig_proto::local::LocalMessage>().await.is_err());
+        // A *retry* on this same buffer would see an aligned frame (garbage was
+        // exactly one header's worth). Production callers do not retry.
+        assert_eq!(
+            reader.recv_message::<fig_proto::local::LocalMessage>().await.unwrap(),
+            Some(test_message_small())
+        );
+    }
+
+    /// A one-byte prefix shifts the real `\x1b@` so the parser consumes 10
+    /// bytes of mixed garbage+payload and returns Err. A second recv still
+    /// fails: there is no scan-for-magic. This is the desync the TODO named;
+    /// fixing it would change "drop the socket" into "keep reading", which is
+    /// not clearly compatible (magic can appear in protobuf bodies).
+    #[tokio::test]
+    async fn one_byte_desync_does_not_resync_to_next_frame() {
+        let mut writer = mock(vec![]);
+        writer.send_message(test_message_small()).await.unwrap();
+        let framed = writer.inner.into_inner();
+        let mut bytes = vec![0x00];
+        bytes.extend_from_slice(&framed);
+        let mut reader = mock(bytes);
+        reader.inner.set_position(0);
+        assert!(reader.recv_message::<fig_proto::local::LocalMessage>().await.is_err());
+        assert!(reader.recv_message::<fig_proto::local::LocalMessage>().await.is_err());
     }
 }
