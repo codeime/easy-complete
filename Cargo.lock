@@ -3046,7 +3046,6 @@ dependencies = [
  "filedescriptor",
  "flume 0.12.0",
  "fnv",
- "lazy_static",
  "memmem",
  "mimalloc",
  "nix 0.31.3",

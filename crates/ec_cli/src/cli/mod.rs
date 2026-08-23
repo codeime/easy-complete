@@ -159,7 +159,7 @@ pub struct Cli {
 impl Cli {
     pub async fn execute(self) -> Result<ExitCode> {
         // Initialize our logger and keep around the guard so logging can perform as expected.
-        let _log_guard = initialize_logging(LogArgs {
+        let _log_guard = match initialize_logging(LogArgs {
             log_level: match self.verbose > 0 {
                 true => Some(
                     match self.verbose {
@@ -181,9 +181,15 @@ impl Cli {
                     false => None,
                 },
             }
-            .map(|name| directories::logs_dir().expect("home dir must be set").join(name)),
+            .and_then(|name| directories::logs_dir().ok().map(|dir| dir.join(name))),
             delete_old_log_file: false,
-        });
+        }) {
+            Ok(guard) => Some(guard),
+            Err(err) => {
+                eprintln!("failed to init logging: {err}");
+                None
+            },
+        };
 
         debug!(command =? std::env::args().collect::<Vec<_>>(), "Command ran");
 
@@ -282,6 +288,19 @@ mod test {
     #[test]
     fn debug_assert() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn cli_logging_init_does_not_panic() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("home dir must be set"),
+            "a missing HOME must skip the CLI log file, not panic `ec`"
+        );
+        assert!(
+            production.contains("failed to init logging") && production.contains("logs_dir()"),
+            "the CLI still tries to log under logs_dir when a file is requested"
+        );
     }
 
     macro_rules! assert_parse {

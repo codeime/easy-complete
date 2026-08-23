@@ -437,19 +437,21 @@ pub struct WindowsTerminal {
 
 impl Drop for WindowsTerminal {
     fn drop(&mut self) {
-        self.output_handle.flush().unwrap();
-        self.input_handle
-            .set_input_mode(self.saved_input_mode)
-            .expect("failed to restore console input mode");
-        self.input_handle
-            .set_input_cp(self.saved_input_cp)
-            .expect("failed to restore console input codepage");
-        self.output_handle
-            .set_output_mode(self.saved_output_mode)
-            .expect("failed to restore console output mode");
-        self.output_handle
-            .set_output_cp(self.saved_output_cp)
-            .expect("failed to restore console output codepage");
+        if let Err(err) = self.output_handle.flush() {
+            warn!(%err, "failed to flush console output on drop");
+        }
+        if let Err(err) = self.input_handle.set_input_mode(self.saved_input_mode) {
+            warn!(%err, "failed to restore console input mode");
+        }
+        if let Err(err) = self.input_handle.set_input_cp(self.saved_input_cp) {
+            warn!(%err, "failed to restore console input codepage");
+        }
+        if let Err(err) = self.output_handle.set_output_mode(self.saved_output_mode) {
+            warn!(%err, "failed to restore console output mode");
+        }
+        if let Err(err) = self.output_handle.set_output_cp(self.saved_output_cp) {
+            warn!(%err, "failed to restore console output codepage");
+        }
     }
 }
 

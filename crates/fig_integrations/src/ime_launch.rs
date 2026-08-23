@@ -101,4 +101,21 @@ mod tests {
             "do not fork the missing-tracker rule back into the AppKit module"
         );
     }
+
+    #[test]
+    fn ime_directory_does_not_unwrap_home_dir() {
+        let production = include_str!("input_method/mod.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        let compact: String = production.split_whitespace().collect();
+        assert!(
+            !compact.contains("home_dir().unwrap()"),
+            "a missing HOME must not panic IME install"
+        );
+        assert!(
+            production.contains("input_method_directory()") && production.contains("InvalidDestination"),
+            "the Input Methods path still lives under ~/Library"
+        );
+    }
 }

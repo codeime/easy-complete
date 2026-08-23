@@ -117,6 +117,15 @@ mod win32_bool_tests {
             !src.contains("win32_hresult_succeeded(res)"),
             "do not feed CreateProcessW BOOL to the ConPTY HRESULT mapper"
         );
+        let compact: String = src.split_whitespace().collect();
+        assert!(
+            !compact.contains(".expect(\"this system does not support conpty"),
+            "missing ConPTY exports must return Err from open_pty, not panic ecterm"
+        );
+        assert!(
+            src.contains("fn conpty()") && src.contains("conpty()?"),
+            "CreatePseudoConsole / Resize still go through the loaded ConPTY table"
+        );
     }
 }
 

@@ -80,17 +80,19 @@ async fn async_main() -> ExitCode {
         };
     }
 
-    let _log_guard = initialize_logging(LogArgs {
+    let log_file_path = directories::logs_dir().ok().map(|dir| dir.join("fig_desktop.log"));
+    let _log_guard = match initialize_logging(LogArgs {
         log_level: None,
         log_to_stdout: true,
-        log_file_path: Some(
-            directories::logs_dir()
-                .expect("home dir must be set")
-                .join("fig_desktop.log"),
-        ),
+        log_file_path,
         delete_old_log_file: false,
-    })
-    .expect("Failed to init logging");
+    }) {
+        Ok(guard) => Some(guard),
+        Err(err) => {
+            eprintln!("{PRODUCT_NAME} failed to init logging: {err}");
+            None
+        },
+    };
 
     // macOS Tahoe's autofill heuristic controller attaches an "AutoFill (…)" helper to
     // any app with text input. SMS / contact autofill is not useful here, and the helper
@@ -491,6 +493,22 @@ mod panic_safety {
         assert!(
             src.contains("runtime.run().await"),
             "the desktop still runs the event loop"
+        );
+    }
+
+    #[test]
+    fn desktop_logging_init_does_not_panic() {
+        let production = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains("home dir must be set") && !production.contains("Failed to init logging"),
+            "a missing HOME or a failed file appender must not panic the desktop"
+        );
+        assert!(
+            production.contains("failed to init logging") && production.contains("logs_dir()"),
+            "the desktop still tries to log under logs_dir"
         );
     }
 }

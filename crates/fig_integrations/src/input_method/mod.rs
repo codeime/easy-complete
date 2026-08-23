@@ -272,8 +272,11 @@ impl std::default::Default for InputMethod {
 }
 
 impl InputMethod {
-    pub fn input_method_directory() -> PathBuf {
-        home_dir().unwrap().join("Library").join("Input Methods")
+    pub fn input_method_directory() -> Result<PathBuf, InputMethodError> {
+        Ok(home_dir()
+            .map_err(|_| InputMethodError::InvalidDestination)?
+            .join("Library")
+            .join("Input Methods"))
     }
 
     pub fn list_all_input_sources(
@@ -365,7 +368,7 @@ impl InputMethod {
             },
         };
 
-        Ok(InputMethod::input_method_directory().join(input_method_name))
+        Ok(InputMethod::input_method_directory()?.join(input_method_name))
     }
 
     pub fn bundle_id(&self) -> Result<String, InputMethodError> {

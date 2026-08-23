@@ -165,7 +165,7 @@ pub fn set_log_level(level: String) -> Result<String, Error> {
 
     recover_mutex(&ENV_FILTER_RELOADABLE_HANDLE)
         .as_ref()
-        .expect("set_log_level must not be called before logging is initialized")
+        .ok_or_else(|| Error::Io(std::io::Error::other("logging is not initialized")))?
         .reload(filter_layer)?;
 
     Ok(old_level)
@@ -191,9 +191,7 @@ pub fn get_log_level_max() -> LevelFilter {
 fn create_filter_layer() -> EnvFilter {
     let directive = Directive::from(DEFAULT_FILTER);
 
-    let log_level = Q_LOG_LEVEL_GLOBAL
-        .lock()
-        .unwrap()
+    let log_level = recover_mutex(&Q_LOG_LEVEL_GLOBAL)
         .clone()
         .or_else(|| fig_os_shim::Env::new().q_log_level().ok());
 
@@ -265,13 +263,22 @@ mod tests {
         assert_eq!(*recover_mutex(&mutex), 1);
 
         let production = include_str!("lib.rs").split("#[cfg(test)]").next().expect("production");
+        let compact: String = production.split_whitespace().collect();
         assert!(
-            !production.contains(".lock().unwrap()"),
+            !compact.contains(".lock().unwrap()"),
             "fig_log must recover mutex poison instead of panicking ecterm / desktop / CLI"
         );
         assert!(
             production.contains("recover_mutex("),
             "poison recovery should go through recover_mutex"
+        );
+        assert!(
+            !production.contains("set_log_level must not be called before logging is initialized"),
+            "a SetLogLevel IPC before logging init must return Err, not panic ecterm"
+        );
+        assert!(
+            production.contains("logging is not initialized"),
+            "set_log_level still fails when the reload handle is missing"
         );
     }
 }

@@ -112,6 +112,24 @@ mod tests {
         assert!(cast::<u16, u8>(256).is_err());
     }
 
+    #[test]
+    fn windows_terminal_drop_does_not_panic() {
+        let src = include_str!("windows.rs");
+        let start = src.find("impl Drop for WindowsTerminal").expect("Drop");
+        let rest = &src[start..];
+        let end = rest.find("\nimpl ").unwrap_or(rest.len());
+        let body = &rest[..end];
+        let compact: String = body.split_whitespace().collect();
+        assert!(
+            !compact.contains(".unwrap()") && !compact.contains(".expect(\""),
+            "restoring the console in Drop must warn, not panic ecterm"
+        );
+        assert!(
+            body.contains("failed to restore console input mode") && body.contains("warn!"),
+            "Drop still restores input/output mode and codepage"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "fails without tty"]
     async fn test_terminal() {
