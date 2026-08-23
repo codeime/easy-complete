@@ -203,6 +203,12 @@ fn should_launch(ctx: &Context, quiet: bool) -> u8 {
     u8::from(!(grandparent_info.is_valid && parent_info.is_valid))
 }
 
+/// `GITHUB_ACTIONS` is the CI we actually run. `Q_CI` is an explicit opt-out.
+/// `CI=true` alone must not block wrapping outside those jobs.
+fn wrap_blocked_by_ci_job(env: &fig_os_shim::Env) -> bool {
+    env.get_os("Q_CI").is_some() || env.get_os("GITHUB_ACTIONS").is_some()
+}
+
 pub fn should_figterm_launch_exit_status(ctx: &Context, quiet: bool) -> u8 {
     use fig_util::env_var::{PROCESS_LAUNCHED_BY_Q, Q_PARENT};
 
@@ -278,10 +284,15 @@ pub fn should_figterm_launch_exit_status(ctx: &Context, quiet: bool) -> u8 {
         return 1;
     }
 
-    // Make sure we're not in CI
-    if env.in_ci() {
+    // GitHub Actions and an explicit `Q_CI` opt-out refuse to wrap. Generic
+    // `CI=true` is not enough: developer boxes and agent hosts often inherit
+    // it without being a job that should refuse the PTY wrapper. Do not paper
+    // over that with `Q_FORCE_FIGTERM_LAUNCH` in a sourced rc — that env is
+    // inherited by the child shell and used to nest `ecterm` if checked before
+    // `PROCESS_LAUNCHED_BY_Q`.
+    if wrap_blocked_by_ci_job(env) {
         if !quiet {
-            writeln!(stdout(), "❌ In CI").ok();
+            writeln!(stdout(), "❌ CI job (GITHUB_ACTIONS or Q_CI)").ok();
         }
         return 1;
     }
@@ -461,7 +472,18 @@ mod tests {
             test(INSIDE_EMACS).env(&[(INSIDE_EMACS, "1")]).expect(1),
             test(WARP_TERMINAL).env(&[(TERM_PROGRAM, WARP_TERMINAL)]).expect(1),
             test(WARP_TERMINAL).env(&[(TERM_PROGRAM, WARP_TERMINAL)]).expect(1),
-            test("In CI").env(&[("CI", "1")]).expect(1),
+            test("GITHUB_ACTIONS blocks wrap")
+                .os(Os::Linux)
+                .parent_exe("/usr/bin/zsh")
+                .grandparent_exe("/usr/bin/wezterm")
+                .env(&[("GITHUB_ACTIONS", "true"), ("CI", "true")])
+                .expect(1),
+            test("Q_CI blocks wrap")
+                .os(Os::Linux)
+                .parent_exe("/usr/bin/zsh")
+                .grandparent_exe("/usr/bin/wezterm")
+                .env(&[("Q_CI", "1")])
+                .expect(1),
             test(format!("In ssh without {Q_PARENT}"))
                 .env(&[("SSH_CLIENT", "1")])
                 .expect(1),
@@ -524,6 +546,12 @@ mod tests {
                 .os(Os::Linux)
                 .parent_exe("/usr/bin/zsh")
                 .grandparent_exe("/usr/bin/wezterm")
+                .expect(0),
+            test("generic CI=true still wraps on linux with a valid terminal")
+                .os(Os::Linux)
+                .parent_exe("/usr/bin/zsh")
+                .grandparent_exe("/usr/bin/xfce4-terminal")
+                .env(&[("CI", "true")])
                 .expect(0),
             test("on linux with valid parent, invalid grandparent exe, and valid grandparent cmdline")
                 .os(Os::Linux)
