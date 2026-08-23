@@ -22,6 +22,9 @@ pub struct OverlayState {
     pub visible: bool,
     pub selected: usize,
     pub items: Vec<crate::list::SuggestionItem>,
+    /// Shared prefix of same-kind rows. Recomputed when `items` or `selected`
+    /// change so paint does not walk the list on every GPUI frame.
+    pub common_prefix: Arc<str>,
     pub search_term: String,
     /// Normalized token used only for matching/highlighting. `search_term`
     /// remains the raw shell text so acceptance can delete exact bytes.
@@ -89,6 +92,7 @@ impl OverlayState {
             visible: false,
             selected: 0,
             items: Vec::new(),
+            common_prefix: Arc::from(""),
             search_term: String::new(),
             match_term: String::new(),
             current_arg_name: String::new(),
@@ -214,6 +218,11 @@ impl OverlayState {
             }
         }
         self.visible = will_be_visible;
+        self.refresh_common_prefix();
+    }
+
+    fn refresh_common_prefix(&mut self) {
+        self.common_prefix = Arc::from(crate::list::common_prefix_for(self.selected, &self.items));
     }
 
     pub fn hide(&mut self) {
@@ -262,6 +271,7 @@ impl OverlayState {
         self.current_arg_name.clear();
         self.current_arg_description.clear();
         self.has_changed_index = false;
+        self.refresh_common_prefix();
     }
 
     pub fn dismiss(&mut self) {
@@ -295,6 +305,7 @@ impl OverlayState {
         }
         if self.selected != prev {
             self.has_changed_index = true;
+            self.refresh_common_prefix();
         }
         true
     }
@@ -424,6 +435,41 @@ mod tests {
             "c".into(),
         );
         overlay
+    }
+
+    fn subcommand(name: &str) -> SuggestionItem {
+        SuggestionItem {
+            name: name.into(),
+            kind: "subcommand".into(),
+            ..SuggestionItem::default()
+        }
+    }
+
+    #[test]
+    fn set_suggestions_and_selection_refresh_the_cached_common_prefix() {
+        let mut overlay = OverlayState::new();
+        overlay.set_suggestions(vec![subcommand("checkout"), subcommand("cherry-pick")], "ch".into());
+        assert_eq!(&*overlay.common_prefix, "che");
+        overlay.move_selection_with_wrap(1, false);
+        assert_eq!(&*overlay.common_prefix, "che");
+        overlay.set_suggestions(
+            vec![
+                SuggestionItem {
+                    name: "--help".into(),
+                    kind: "option".into(),
+                    ..SuggestionItem::default()
+                },
+                SuggestionItem {
+                    name: "--hard".into(),
+                    kind: "option".into(),
+                    ..SuggestionItem::default()
+                },
+            ],
+            "--h".into(),
+        );
+        assert_eq!(&*overlay.common_prefix, "--h");
+        overlay.dismiss();
+        assert_eq!(&*overlay.common_prefix, "");
     }
 
     #[test]

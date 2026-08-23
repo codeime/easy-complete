@@ -1,10 +1,12 @@
+use std::borrow::Cow;
+use std::sync::Arc;
+
 use gpui::prelude::*;
 use gpui::{
     AnyElement, BoxShadow, Context, Entity, FontWeight, Image, InteractiveElement, IntoElement, ParentElement, Render,
     Rgba, ScrollStrategy, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div, hsla, point, px,
     rgb, uniform_list,
 };
-use std::sync::Arc;
 
 use crate::icons::{history_icon_image_element, identifier_icon_element, named_icon_element, png_icon_element};
 use crate::overlay::OverlayState;
@@ -387,16 +389,34 @@ fn normalize_kind(kind: &str) -> &str {
 }
 
 fn items_match_for_prefix(candidate: &SuggestionItem, selected: &SuggestionItem) -> bool {
+    items_match_for_prefix_parts(candidate, &selected.kind, &selected.name)
+}
+
+fn items_match_for_prefix_parts(candidate: &SuggestionItem, selected_kind: &str, selected_name: &str) -> bool {
     // Keep the old `isMatchingType` asymmetry: a `../` candidate only joins
     // the prefix set when `../` itself is selected. Without this guard the
     // parent-directory row destroys the useful common prefix of ordinary
     // files/folders (for example `src/` and `scripts/`).
     if candidate.name == "../" {
-        return selected.name == "../";
+        return selected_name == "../";
     }
     let a = normalize_kind(&candidate.kind);
-    let b = normalize_kind(&selected.kind);
+    let b = normalize_kind(selected_kind);
     a == b || (is_fileish(a) && is_fileish(b))
+}
+
+fn prefix_type_filter(selected: &SuggestionItem) -> (Cow<'_, str>, Cow<'_, str>) {
+    if selected.kind == "auto-execute" {
+        let kind = selected.original_type.as_deref().unwrap_or("");
+        if kind == "folder" && !selected.name.ends_with('/') {
+            return (Cow::Borrowed(kind), Cow::Owned(format!("{}/", selected.name)));
+        }
+        return (Cow::Borrowed(kind), Cow::Borrowed(selected.name.as_str()));
+    }
+    (
+        Cow::Borrowed(selected.kind.as_str()),
+        Cow::Borrowed(selected.name.as_str()),
+    )
 }
 
 fn is_fileish(kind: &str) -> bool {
@@ -408,19 +428,13 @@ pub fn common_prefix_for(selected: usize, items: &[SuggestionItem]) -> String {
     let Some(selected_item) = items.get(selected) else {
         return String::new();
     };
-    let mut type_filter = selected_item.clone();
-    if selected_item.kind == "auto-execute" {
-        type_filter.kind = selected_item.original_type.clone().unwrap_or_default();
-        if type_filter.kind == "folder" && !type_filter.name.ends_with('/') {
-            type_filter.name.push('/');
-        }
-    }
-    if matches!(type_filter.kind.as_str(), "" | "special" | "auto-execute") {
+    let (filter_kind, filter_name) = prefix_type_filter(selected_item);
+    if matches!(filter_kind.as_ref(), "" | "special" | "auto-execute") {
         return String::new();
     }
     let names: Vec<String> = items
         .iter()
-        .filter(|item| items_match_for_prefix(item, &type_filter))
+        .filter(|item| items_match_for_prefix_parts(item, filter_kind.as_ref(), filter_name.as_ref()))
         .map(|item| item.name.to_ascii_lowercase())
         .collect();
     if names.len() < 2 {
@@ -659,7 +673,7 @@ impl Render for SuggestionList {
         let show_hint = !overlay.always_show_description && !loading;
         let show_dev = overlay.show_dev_banner;
         let debug_window = overlay.debug_window;
-        let common_prefix = common_prefix_for(selected, &overlay.items);
+        let common_prefix = overlay.common_prefix.clone();
         // The bottom Description falls back to currentArg, but the old
         // popout deliberately describes only the selected suggestion.
         let selected_description = selected_item_description(overlay.selected_item());
@@ -752,7 +766,7 @@ impl Render for SuggestionList {
                                     search_term,
                                     &overlay.search_term,
                                     fuzzy,
-                                    &common_prefix,
+                                    common_prefix.as_ref(),
                                     theme,
                                     row_height,
                                     icon_size,
@@ -1528,6 +1542,26 @@ mod tests {
             },
         ];
         assert_eq!(common_prefix_for(0, &items), "che");
+    }
+
+    #[test]
+    fn common_prefix_does_not_clone_the_selected_row() {
+        let src = include_str!("list.rs");
+        let start = src.find("pub fn common_prefix_for").expect("common_prefix_for");
+        let end = src[start..].find("pub enum TabPrefix").expect("TabPrefix") + start;
+        let body = &src[start..end];
+        assert!(
+            body.contains("prefix_type_filter") && !body.contains("selected_item.clone()"),
+            "common_prefix_for must not clone the selected SuggestionItem (icon png, strings)"
+        );
+
+        let render = src.find("impl Render for SuggestionList").expect("render");
+        let render_end = src[render..].find("fn row_corner_radii").expect("next fn") + render;
+        let render_body = &src[render..render_end];
+        assert!(
+            render_body.contains("overlay.common_prefix.clone()") && !render_body.contains("common_prefix_for("),
+            "paint must use the prefix stored on OverlayState, not recompute it each frame"
+        );
     }
 
     #[test]

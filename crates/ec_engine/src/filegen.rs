@@ -1,17 +1,31 @@
 //! Filesystem path generator (IRIS FileGenerator).
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::ffi::CStr;
 #[cfg(unix)]
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::SystemTime;
 
 use crate::query::matches_query;
 use crate::runtime::Suggestion;
 
 const MAX_RESULTS: usize = 50;
+/// Same ceiling as the git-refs / package.json mtime caches. A keystroke
+/// in `src/` must not `read_dir` again when `src/m` follows; wholesale
+/// clear at the cap is enough because listings are cheap to rebuild.
+const MAX_CACHED_DIRS: usize = 32;
+
+struct DirListing {
+    mtime: Option<SystemTime>,
+    entries: Arc<[(String, bool)]>,
+}
+
+static DIR_CACHE: LazyLock<Mutex<HashMap<PathBuf, DirListing>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -> Vec<Suggestion> {
     if prefix == "~" || prefix == "~\\" {
@@ -20,34 +34,21 @@ pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -
     let expanded = expand_home(prefix);
     let (dir, query) = split_prefix(&expanded, cwd);
     let display_prefix = dir_prefix(prefix);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+    let Some(entries) = cached_directory_listing(&dir) else {
+        return Vec::new();
     };
-    let mut names = Vec::new();
-    for entry in entries.flatten() {
-        let mut name = entry.file_name().to_string_lossy().into_owned();
-        if name == "." || name == ".." {
-            continue;
-        }
-        // The legacy filepaths generator passes `.DS_Store` through its
-        // default skip list (case-insensitive), even though other dotfiles
-        // remain visible.
-        if name.eq_ignore_ascii_case(".DS_Store") {
-            continue;
-        }
-        let is_dir = entry_is_dir(&entry);
-        if folders_only && !is_dir {
-            continue;
-        }
-        if is_dir && !name.ends_with('/') {
-            name.push('/');
-        }
-        if !query.is_empty() && !matches_query(&name, &query, fuzzy) {
-            continue;
-        }
-        names.push((name, is_dir));
-    }
+    // `folders_only` and the query filter run on the shared listing so
+    // `ls ` and `cd ` (and `src/m` / `src/ma`) reuse one directory snapshot.
+    let mut names: Vec<(&str, bool)> = entries
+        .iter()
+        .filter(|(name, is_dir)| {
+            if folders_only && !is_dir {
+                return false;
+            }
+            query.is_empty() || matches_query(name, &query, fuzzy)
+        })
+        .map(|(name, is_dir)| (name.as_str(), *is_dir))
+        .collect();
 
     // This mirrors @fig/autocomplete-generators' sortFilesAlphabetically:
     // ordinary entries come first, dotfiles follow them, and the synthetic
@@ -59,7 +60,7 @@ pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -
         let left_hidden = left.0.starts_with('.');
         let right_hidden = right.0.starts_with('.');
         match left_hidden.cmp(&right_hidden) {
-            Ordering::Equal => compare_file_names(&left.0, &right.0),
+            Ordering::Equal => compare_file_names(left.0, right.0),
             order => order,
         }
     });
@@ -81,6 +82,55 @@ pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -
         suggestions.push(path_suggestion("../".into(), true).with_query_term(Some(query)));
     }
     suggestions
+}
+
+/// Unfiltered directory rows, including trailing `/` on folders. Query and
+/// `folders_only` stay with the caller so `ls` and `cd` share one listing.
+fn cached_directory_listing(dir: &Path) -> Option<Arc<[(String, bool)]>> {
+    let mtime = fs::metadata(dir).and_then(|meta| meta.modified()).ok();
+    {
+        let cache = DIR_CACHE.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(listing) = cache.get(dir)
+            && listing.mtime == mtime
+            && mtime.is_some()
+        {
+            return Some(Arc::clone(&listing.entries));
+        }
+    }
+    let read = fs::read_dir(dir).ok()?;
+    let mut entries = Vec::new();
+    for entry in read.flatten() {
+        let mut name = entry.file_name().to_string_lossy().into_owned();
+        if name == "." || name == ".." {
+            continue;
+        }
+        // The legacy filepaths generator passes `.DS_Store` through its
+        // default skip list (case-insensitive), even though other dotfiles
+        // remain visible.
+        if name.eq_ignore_ascii_case(".DS_Store") {
+            continue;
+        }
+        let is_dir = entry_is_dir(&entry);
+        if is_dir && !name.ends_with('/') {
+            name.push('/');
+        }
+        entries.push((name, is_dir));
+    }
+    let entries: Arc<[(String, bool)]> = entries.into();
+    if mtime.is_some() {
+        let mut cache = DIR_CACHE.lock().unwrap_or_else(|err| err.into_inner());
+        if cache.len() >= MAX_CACHED_DIRS && !cache.contains_key(dir) {
+            cache.clear();
+        }
+        cache.insert(
+            dir.to_path_buf(),
+            DirListing {
+                mtime,
+                entries: Arc::clone(&entries),
+            },
+        );
+    }
+    Some(entries)
 }
 
 fn path_suggestion(name: String, is_dir: bool) -> Suggestion {
@@ -725,5 +775,47 @@ mod tests {
             expand_home("~ec-filegen-no-such-user-9/"),
             "~ec-filegen-no-such-user-9/"
         );
+    }
+
+    #[test]
+    fn complete_path_reuses_a_mtime_listing_and_filters_after_the_cache() {
+        let src = include_str!("filegen.rs");
+        let start = src.find("pub fn complete_path").expect("complete_path");
+        let listing = src.find("fn cached_directory_listing").expect("listing");
+        let complete = &src[start..listing];
+        assert!(
+            complete.contains("cached_directory_listing")
+                && !complete.contains("fs::read_dir")
+                && complete.contains("folders_only"),
+            "complete_path must filter folders_only/query on a cached listing, not readdir"
+        );
+        let end = src[listing..].find("fn path_suggestion").expect("path_suggestion") + listing;
+        let body = &src[listing..end];
+        assert!(
+            body.contains("fs::read_dir") && body.contains("modified()") && body.contains("MAX_CACHED_DIRS"),
+            "the listing cache must key on directory mtime and cap entries"
+        );
+        assert!(
+            body.contains("mtime.is_some()") && body.contains("listing.mtime == mtime"),
+            "a missing mtime is a miss, not a forever-empty cache"
+        );
+    }
+
+    #[test]
+    fn directory_listing_cache_invalidates_when_the_directory_mtime_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("alpha"), "a").unwrap();
+        let cwd = dir.path().display().to_string();
+        let first = complete_path("", &cwd, false, false);
+        assert!(first.iter().any(|s| s.name == "alpha"), "{first:?}");
+        assert!(!first.iter().any(|s| s.name == "beta"), "{first:?}");
+
+        fs::write(dir.path().join("beta"), "b").unwrap();
+        if let Ok(mtime) = fs::metadata(dir.path()).and_then(|meta| meta.modified()) {
+            let later = mtime + std::time::Duration::from_secs(1);
+            let _ = fs::File::open(dir.path()).and_then(|file| file.set_modified(later));
+        }
+        let second = complete_path("b", &cwd, false, false);
+        assert!(second.iter().any(|s| s.name == "beta"), "{second:?}");
     }
 }

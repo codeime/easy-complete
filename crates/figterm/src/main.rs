@@ -15,6 +15,7 @@ pub mod update;
 use std::env;
 #[cfg(unix)]
 use std::ffi::{CString, OsStr};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
@@ -381,7 +382,7 @@ static AUTOCOMPLETE_ENABLED: LazyLock<bool> = LazyLock::new(|| autocomplete_enab
 struct SentEditBuffer {
     text: String,
     cursor: i64,
-    cwd: Option<String>,
+    cwd: Option<PathBuf>,
     coords: Option<TerminalCursorCoordinates>,
 }
 
@@ -389,7 +390,7 @@ fn edit_buffer_frame_is_duplicate(
     last: Option<&SentEditBuffer>,
     text: &str,
     cursor: i64,
-    cwd: Option<&str>,
+    cwd: Option<&Path>,
     coords: Option<&TerminalCursorCoordinates>,
     env_pending: bool,
 ) -> bool {
@@ -422,12 +423,11 @@ where
                 trace!("buffer chars: {:?}", edit_buffer.buffer.chars().collect::<Vec<_>>());
 
                 let sent_epoch = pending_shell_context_epoch();
-                let cwd = cwd_string(term.shell_state());
                 if edit_buffer_frame_is_duplicate(
                     last_sent.as_ref(),
                     &edit_buffer.buffer,
                     cursor_idx,
-                    cwd.as_deref(),
+                    term.shell_state().local_context.current_working_directory.as_deref(),
                     cursor_coordinates.as_ref(),
                     sent_epoch.is_some(),
                 ) {
@@ -453,7 +453,7 @@ where
                 *last_sent = Some(SentEditBuffer {
                     text: edit_buffer.buffer,
                     cursor: cursor_idx,
-                    cwd,
+                    cwd: term.shell_state().local_context.current_working_directory.clone(),
                     coords: cursor_coordinates,
                 });
             }
@@ -1259,7 +1259,7 @@ mod tests {
             Some(&last),
             "git ch",
             6,
-            Some("/tmp"),
+            Some(Path::new("/tmp")),
             None,
             false,
         ));
@@ -1267,7 +1267,7 @@ mod tests {
             Some(&last),
             "git che",
             7,
-            Some("/tmp"),
+            Some(Path::new("/tmp")),
             None,
             false,
         ));
@@ -1275,7 +1275,7 @@ mod tests {
             Some(&last),
             "git ch",
             6,
-            Some("/var"),
+            Some(Path::new("/var")),
             None,
             false,
         ));
@@ -1283,7 +1283,7 @@ mod tests {
             Some(&last),
             "git ch",
             6,
-            Some("/tmp"),
+            Some(Path::new("/tmp")),
             None,
             true,
         ));
@@ -1291,7 +1291,7 @@ mod tests {
             None,
             "git ch",
             6,
-            Some("/tmp"),
+            Some(Path::new("/tmp")),
             None,
             false
         ));
@@ -1311,6 +1311,10 @@ mod tests {
         assert!(
             body.contains("pending_shell_context_epoch") && body.contains("sent_epoch.is_some()"),
             "a pending env/alias epoch must still send even when the buffer text is unchanged"
+        );
+        assert!(
+            body.contains("current_working_directory.as_deref()") && !body.contains("cwd_string"),
+            "duplicate frames must compare the PathBuf, not format cwd via Display"
         );
     }
 }

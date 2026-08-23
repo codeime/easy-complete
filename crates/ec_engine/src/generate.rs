@@ -319,13 +319,22 @@ fn generate_arg(
 }
 
 fn dedup_suggestions(suggestions: &mut Vec<Suggestion>) {
+    // First pass borrows the rows that still exist. `retain` would drop a
+    // duplicate while a `HashSet<&str>` still pointed at it.
     let mut seen = HashSet::new();
-    suggestions.retain(|suggestion| {
-        seen.insert((
-            suggestion.name.clone(),
-            suggestion.kind.clone(),
-            suggestion.insert_value.clone(),
-        ))
+    let mut keep = Vec::with_capacity(suggestions.len());
+    for suggestion in suggestions.iter() {
+        keep.push(seen.insert((
+            suggestion.name.as_str(),
+            suggestion.kind.as_str(),
+            suggestion.insert_value.as_deref(),
+        )));
+    }
+    let mut index = 0;
+    suggestions.retain(|_| {
+        let keep_row = keep[index];
+        index += 1;
+        keep_row
     });
 }
 
@@ -1193,6 +1202,21 @@ mod tests {
         };
         let suggestions = generate(&spec, &["demo".into(), "s".into()], "s", "/", false);
         assert_eq!(suggestions.iter().filter(|item| item.name == "same").count(), 1);
+    }
+
+    #[test]
+    fn dedup_suggestions_does_not_clone_row_keys() {
+        let src = include_str!("generate.rs");
+        let start = src.find("fn dedup_suggestions").expect("dedup");
+        let end = src[start..].find("\nfn run_js_generators").expect("run_js") + start;
+        let body = &src[start..end];
+        assert!(
+            body.contains("name.as_str()")
+                && body.contains("kind.as_str()")
+                && body.contains("insert_value.as_deref()")
+                && !body.contains("name.clone()"),
+            "dedup must hash borrowed row keys before retain drops duplicates"
+        );
     }
 
     #[test]
