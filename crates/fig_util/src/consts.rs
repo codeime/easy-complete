@@ -7,11 +7,7 @@ pub const APP_PROCESS_NAME: &str = "easy-complete";
 #[cfg(windows)]
 pub const APP_PROCESS_NAME: &str = "easy-complete.exe";
 
-/// Product name used in install-layout paths such as `lib/<name>`.
-pub const TAURI_PRODUCT_NAME: &str = "Easy Complete";
-
 pub const CLI_BINARY_NAME: &str = "ec";
-pub const CLI_BINARY_NAME_MINIMAL: &str = "ec-minimal";
 pub const PTY_BINARY_NAME: &str = "ecterm";
 
 pub const CLI_CRATE_NAME: &str = "ec_cli";
@@ -47,20 +43,34 @@ pub mod url {
 
 /// Build time env vars
 pub mod build {
+    /// Prefer `EC_BUILD_*`. `AMAZON_Q_BUILD_*` is leftover Amazon Q CI naming
+    /// and is still accepted so an old wrapper does not silently drop HASH.
+    const fn first_env(primary: Option<&'static str>, fallback: Option<&'static str>) -> Option<&'static str> {
+        match primary {
+            Some(v) => Some(v),
+            None => fallback,
+        }
+    }
+
     /// The target of the current build, e.g. "aarch64-unknown-linux-musl"
-    pub const TARGET_TRIPLE: Option<&str> = option_env!("AMAZON_Q_BUILD_TARGET_TRIPLE");
+    pub const TARGET_TRIPLE: Option<&str> = first_env(
+        option_env!("EC_BUILD_TARGET_TRIPLE"),
+        option_env!("AMAZON_Q_BUILD_TARGET_TRIPLE"),
+    );
 
     /// The variant of the current build
-    pub const VARIANT: Option<&str> = option_env!("AMAZON_Q_BUILD_VARIANT");
+    pub const VARIANT: Option<&str> = first_env(option_env!("EC_BUILD_VARIANT"), option_env!("AMAZON_Q_BUILD_VARIANT"));
 
     /// A git full sha hash of the current build
-    pub const HASH: Option<&str> = option_env!("AMAZON_Q_BUILD_HASH");
+    pub const HASH: Option<&str> = first_env(option_env!("EC_BUILD_HASH"), option_env!("AMAZON_Q_BUILD_HASH"));
 
     /// The datetime in rfc3339 format of the current build
-    pub const DATETIME: Option<&str> = option_env!("AMAZON_Q_BUILD_DATETIME");
+    pub const DATETIME: Option<&str> =
+        first_env(option_env!("EC_BUILD_DATETIME"), option_env!("AMAZON_Q_BUILD_DATETIME"));
 
     /// If `fish` tests should be skipped
-    pub const SKIP_FISH_TESTS: bool = option_env!("AMAZON_Q_BUILD_SKIP_FISH_TESTS").is_some();
+    pub const SKIP_FISH_TESTS: bool =
+        option_env!("EC_BUILD_SKIP_FISH_TESTS").is_some() || option_env!("AMAZON_Q_BUILD_SKIP_FISH_TESTS").is_some();
 
     /// If `shellcheck` tests should be skipped via the build env var.
     ///
@@ -68,7 +78,8 @@ pub mod build {
     /// via brew, but the Linux and Windows jobs do not. Tests must also skip
     /// when the binary is missing so those jobs stay aligned without installing
     /// a linter they never had.
-    pub const SKIP_SHELLCHECK_TESTS: bool = option_env!("AMAZON_Q_BUILD_SKIP_SHELLCHECK_TESTS").is_some();
+    pub const SKIP_SHELLCHECK_TESTS: bool = option_env!("EC_BUILD_SKIP_SHELLCHECK_TESTS").is_some()
+        || option_env!("AMAZON_Q_BUILD_SKIP_SHELLCHECK_TESTS").is_some();
 
     /// Whether shellcheck-backed tests should no-op.
     pub fn skip_shellcheck_tests() -> bool {
@@ -198,5 +209,20 @@ mod tests {
         assert_eq!(APP_PROCESS_NAME, "easy-complete");
         #[cfg(windows)]
         assert_eq!(APP_PROCESS_NAME, "easy-complete.exe");
+    }
+
+    #[test]
+    fn build_env_prefers_ec_names() {
+        let src = include_str!("consts.rs");
+        assert!(src.contains("EC_BUILD_HASH") && src.contains("EC_BUILD_VARIANT"));
+        assert!(
+            src.contains("option_env!(\"AMAZON_Q_BUILD_HASH\")"),
+            "leftover Amazon Q CI names stay as fallback only"
+        );
+        let tauri_name = ["TAURI", "_PRODUCT_NAME"].concat();
+        let minimal_name = ["CLI_BINARY_NAME", "_MINIMAL"].concat();
+        assert!(!src.contains(&tauri_name) && !src.contains(&minimal_name));
+        assert_eq!(CLI_BINARY_NAME, "ec");
+        assert_eq!(PRODUCT_NAME, "Easy Complete");
     }
 }

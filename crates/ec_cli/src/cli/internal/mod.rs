@@ -177,8 +177,6 @@ pub enum InternalSubcommand {
     },
     Uuidgen,
     #[cfg(target_os = "linux")]
-    IbusBootstrap,
-    #[cfg(target_os = "linux")]
     /// Checks for sandboxing
     DetectSandbox,
     OpenUninstallPage,
@@ -551,35 +549,6 @@ impl InternalSubcommand {
             },
             InternalSubcommand::Uuidgen => {
                 let _ = writeln!(stdout(), "{}", uuid::Uuid::new_v4());
-                Ok(ExitCode::SUCCESS)
-            },
-            #[cfg(target_os = "linux")]
-            InternalSubcommand::IbusBootstrap => {
-                use std::ffi::OsString;
-
-                use sysinfo::{ProcessRefreshKind, RefreshKind};
-                use tokio::process::Command;
-
-                let system = tokio::task::block_in_place(|| {
-                    System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()))
-                });
-                let ibus_daemon = OsString::from("ibus-daemon");
-                if system.processes_by_name(&ibus_daemon).next().is_none() {
-                    info!("Launching 'ibus-daemon'");
-                    match Command::new("ibus-daemon").arg("-drxR").output().await {
-                        Ok(std::process::Output { status, stdout, stderr }) if !status.success() => {
-                            let stdout = String::from_utf8_lossy(&stdout);
-                            let stderr = String::from_utf8_lossy(&stderr);
-                            eyre::bail!(
-                                "Failed to run 'ibus-daemon -drxR': status={status:?} stdout={stdout:?} stderr={stderr:?}"
-                            );
-                        },
-                        Err(err) => eyre::bail!("Failed to run 'ibus-daemon -drxR': {err}"),
-                        Ok(_) => writeln!(stdout(), "ibus-daemon is now running").ok(),
-                    };
-                } else {
-                    writeln!(stdout(), "ibus-daemon is already running").ok();
-                }
                 Ok(ExitCode::SUCCESS)
             },
             #[cfg(target_os = "linux")]

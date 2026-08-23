@@ -12,7 +12,7 @@ use crate::RUNTIME_DIR_NAME;
 use crate::consts::linux::DESKTOP_ENTRY_NAME;
 use crate::env_var::{Q_BUNDLE_METADATA_PATH, Q_PARENT};
 use crate::system_info::{in_cloudshell, is_remote};
-use crate::{APP_PROCESS_NAME, BACKUP_DIR_NAME, DATA_DIR_NAME, TAURI_PRODUCT_NAME};
+use crate::{APP_PROCESS_NAME, BACKUP_DIR_NAME, DATA_DIR_NAME, PRODUCT_NAME};
 
 macro_rules! utf8_dir {
     ($name:ident, $($arg:ident: $type:ty),*) => {
@@ -220,7 +220,7 @@ fn windows_temp_child(temp: &Path, leaf: &str) -> PathBuf {
     temp.join(DATA_DIR_NAME).join(leaf)
 }
 
-/// The q sockets directory of the local q installation
+/// The socket directory of the local Easy Complete installation
 ///
 /// - Linux: $XDG_RUNTIME_DIR/ecrun
 /// - MacOS: $TMPDIR/ecrun
@@ -372,10 +372,7 @@ pub fn resources_path_ctx<Ctx: EnvProvider + PlatformProvider>(ctx: &Ctx) -> Res
         fig_os_shim::Os::Mac => Ok(crate::app_bundle_path().join(crate::macos::BUNDLE_CONTENTS_RESOURCE_PATH)),
         fig_os_shim::Os::Linux => {
             if ctx.env().in_appimage() {
-                Ok(ctx
-                    .env()
-                    .current_dir()?
-                    .join(format!("lib/{}", TAURI_PRODUCT_NAME.replace("_", "-"))))
+                Ok(ctx.env().current_dir()?.join(format!("lib/{PRODUCT_NAME}")))
             } else {
                 Ok(linux_share_dir_from_env(
                     |key| ctx.env().get(key),
@@ -609,6 +606,11 @@ mod linux_tests {
             "AppImage path helpers must not hardcode q-desktop filenames"
         );
         assert!(src.contains("DESKTOP_ENTRY_NAME") && src.contains("APP_PROCESS_NAME"));
+        let tauri_name = ["TAURI", "_PRODUCT_NAME"].concat();
+        assert!(
+            src.contains("lib/{PRODUCT_NAME}") && !src.contains(&tauri_name),
+            "AppImage resource dir is PRODUCT_NAME, not leftover Tauri naming"
+        );
     }
 }
 

@@ -971,6 +971,62 @@ mod tests {
             cli_mod.contains("\nmod app;") && !cli_mod.contains("pub mod app"),
             "app must stay crate-private so dead Amazon Q subcommands cannot hide behind pub mod"
         );
+        assert!(
+            !std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../macos-utils/accessibility-master/aq"
+            ))
+            .exists(),
+            "Amazon Q accessibility query demo is not a workspace crate"
+        );
+        assert!(
+            !std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/not-logged-in.png")).exists()
+                && !std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/not-logged-in-light.png"))
+                    .exists(),
+            "signed-out tray icons went with the auth tray"
+        );
+        let consts = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_util/src/consts.rs"));
+        let tauri_name = ["TAURI", "_PRODUCT_NAME"].concat();
+        let minimal_name = ["CLI_BINARY_NAME", "_MINIMAL"].concat();
+        assert!(
+            !consts.contains(&tauri_name) && !consts.contains(&minimal_name),
+            "Tauri product-name and unused ec-minimal binary name are gone"
+        );
+        assert!(
+            consts.contains("EC_BUILD_HASH") && consts.contains("AMAZON_Q_BUILD_HASH"),
+            "build metadata prefers EC_BUILD_* and still accepts leftover AMAZON_Q_BUILD_*"
+        );
+        assert!(
+            !directories.contains(&tauri_name) && directories.contains("lib/{PRODUCT_NAME}"),
+            "AppImage resources use PRODUCT_NAME, not a Tauri layout constant"
+        );
+        let cli_manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_cli/Cargo.toml"));
+        let clipboard = ["ar", "board"].concat();
+        let case_crate = ["convert", "_case"].concat();
+        let bench_crate = ["criter", "ion"].concat();
+        assert!(
+            !cli_manifest.contains(&clipboard)
+                && !cli_manifest.contains(&case_crate)
+                && !cli_manifest.contains(&bench_crate),
+            "CLI must not keep unused clipboard / case / bench crates"
+        );
+        assert!(
+            !workspace.contains(&case_crate),
+            "workspace convert_case is unused after dropping the CLI leftover"
+        );
+        assert!(
+            !desktop_manifest.contains("[package.metadata.bundle]"),
+            "desktop dist is build-app.sh, not leftover tauri-bundler metadata"
+        );
+        let internal = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ec_cli/src/cli/internal/mod.rs"
+        ));
+        let internal_production = internal.split("#[cfg(test)]").next().expect("internal production");
+        assert!(
+            !internal_production.contains("IbusBootstrap") && !internal_production.contains("ibus-daemon"),
+            "CLI must not launch ibus-daemon; linux_caret owns IBus"
+        );
     }
 
     #[test]

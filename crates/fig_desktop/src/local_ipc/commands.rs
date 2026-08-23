@@ -257,4 +257,20 @@ mod tests {
             "login/logout still open settings and rebuild the (signed-in) tray"
         );
     }
+
+    #[test]
+    fn connect_to_ibus_does_not_spawn_a_daemon() {
+        let production = include_str!("commands.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains("IBus is connected by the desktop host, not this IPC command"),
+            "ConnectToIbus must stay a protocol error, not a spawn"
+        );
+        assert!(
+            !production.contains("ibus-daemon"),
+            "desktop IPC must not launch ibus-daemon; linux_caret owns IBus"
+        );
+    }
 }

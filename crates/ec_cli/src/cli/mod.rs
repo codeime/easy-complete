@@ -420,6 +420,8 @@ mod test {
         assert!(Cli::try_parse_from([CLI_BINARY_NAME, "chat"]).is_err());
         assert!(Cli::try_parse_from([CLI_BINARY_NAME, "translate"]).is_err());
         assert!(Cli::try_parse_from([CLI_BINARY_NAME, "onboarding"]).is_err());
+        assert!(Cli::try_parse_from([CLI_BINARY_NAME, "internal", "ibus-bootstrap"]).is_err());
+        assert!(Cli::try_parse_from([CLI_BINARY_NAME, "_", "ibus-bootstrap"]).is_err());
 
         let command = Cli::command();
         for command_name in ["debug", "init"] {
