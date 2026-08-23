@@ -8,7 +8,9 @@
 //! GNOME Wayland still has XWayland (`DISPLAY`); the overlay uses that.
 //! `overlay_screens` is empty without an X11 connection and the overlay parks.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 use tracing::debug;
 use x11rb::connection::Connection;
@@ -21,22 +23,80 @@ use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 pub const OVERLAY_WINDOW_TITLE: &str = "Fig Autocomplete";
 
+/// Coalesce place/probe bursts onto one display connection and one RandR list.
+const X11_CACHE_TTL: Duration = Duration::from_millis(500);
+
 static CACHED_X_WINDOW: AtomicU32 = AtomicU32::new(0);
+static X11_CONNECTS: AtomicU32 = AtomicU32::new(0);
+static X11: Mutex<X11Cache> = Mutex::new(X11Cache {
+    display: None,
+    retry_at: None,
+    screens: None,
+});
+
+struct X11Display {
+    conn: RustConnection,
+    screen_num: usize,
+}
+
+type OverlayScreen = (f64, f64, f64, f64);
+type CachedScreens = (Instant, Vec<OverlayScreen>);
+
+struct X11Cache {
+    display: Option<X11Display>,
+    retry_at: Option<Instant>,
+    screens: Option<CachedScreens>,
+}
+
+fn lock_x11() -> std::sync::MutexGuard<'static, X11Cache> {
+    X11.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+fn ensure_connected(cache: &mut X11Cache) -> bool {
+    if cache.display.is_some() {
+        return true;
+    }
+    if let Some(retry_at) = cache.retry_at {
+        if Instant::now() < retry_at {
+            return false;
+        }
+    }
+    X11_CONNECTS.fetch_add(1, Ordering::Relaxed);
+    match RustConnection::connect(None) {
+        Ok((conn, screen_num)) => {
+            cache.retry_at = None;
+            cache.display = Some(X11Display { conn, screen_num });
+            true
+        },
+        Err(_) => {
+            cache.retry_at = Some(Instant::now() + X11_CACHE_TTL);
+            false
+        },
+    }
+}
+
+fn with_x11<R>(f: impl FnOnce(&RustConnection, usize) -> R) -> Option<R> {
+    let mut cache = lock_x11();
+    if !ensure_connected(&mut cache) {
+        return None;
+    }
+    let display = cache.display.as_ref()?;
+    Some(f(&display.conn, display.screen_num))
+}
 
 pub fn harden_overlay_window() {
     harden_overlay_window_titled(OVERLAY_WINDOW_TITLE);
 }
 
 pub fn harden_overlay_window_titled(title: &str) {
-    let Ok((conn, screen_num)) = RustConnection::connect(None) else {
-        return;
-    };
-    let Some(window) = find_window_by_title(&conn, screen_num, title) else {
-        return;
-    };
-    CACHED_X_WINDOW.store(window, Ordering::Relaxed);
-    apply_overlay_hints(&conn, screen_num, window);
-    let _ = conn.flush();
+    let _ = with_x11(|conn, screen_num| {
+        let Some(window) = find_window_by_title(conn, screen_num, title) else {
+            return;
+        };
+        CACHED_X_WINDOW.store(window, Ordering::Relaxed);
+        apply_overlay_hints(conn, screen_num, window);
+        let _ = conn.flush();
+    });
 }
 
 pub fn polish_overlay_window_titled(title: &str) {
@@ -77,15 +137,14 @@ pub fn set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f6
 }
 
 pub fn park_overlay_window_titled(title: &str) {
-    let Ok((conn, screen_num)) = RustConnection::connect(None) else {
-        return;
-    };
-    let Some(window) = overlay_x_window(&conn, screen_num, title) else {
-        return;
-    };
-    if !checked_void(conn.unmap_window(window)) {
-        CACHED_X_WINDOW.store(0, Ordering::Relaxed);
-    }
+    let _ = with_x11(|conn, screen_num| {
+        let Some(window) = overlay_x_window(conn, screen_num, title) else {
+            return;
+        };
+        if !checked_void(conn.unmap_window(window)) {
+            CACHED_X_WINDOW.store(0, Ordering::Relaxed);
+        }
+    });
 }
 
 pub fn invalidate_cached_overlay_x_window() {
@@ -96,26 +155,26 @@ pub fn set_overlay_frame_titled(title: &str, x: f64, y: f64, width: f64, height:
     // Size is GPUI's `window.resize`, which already multiplies by Xft DPI.
     // A second ConfigureWindow width/height on this connection would fight it.
     let _ = (width, height);
-    let Ok((conn, screen_num)) = RustConnection::connect(None) else {
-        return false;
-    };
-    let Some(window) = overlay_x_window(&conn, screen_num, title) else {
-        return false;
-    };
-    apply_overlay_properties(&conn, window);
-    let aux = ConfigureWindowAux::new().x(x.round() as i32).y(y.round() as i32);
-    if !checked_void(conn.configure_window(window, &aux)) {
-        CACHED_X_WINDOW.store(0, Ordering::Relaxed);
-        return false;
-    }
-    if !checked_void(conn.map_window(window)) {
-        CACHED_X_WINDOW.store(0, Ordering::Relaxed);
-        return false;
-    }
-    // `_NET_WM_STATE` ClientMessage is for mapped windows. xfwm4 ignores it
-    // on an unmapped client and would otherwise drop ABOVE.
-    announce_overlay_above(&conn, screen_num, window);
-    true
+    with_x11(|conn, screen_num| {
+        let Some(window) = overlay_x_window(conn, screen_num, title) else {
+            return false;
+        };
+        apply_overlay_properties(conn, window);
+        let aux = ConfigureWindowAux::new().x(x.round() as i32).y(y.round() as i32);
+        if !checked_void(conn.configure_window(window, &aux)) {
+            CACHED_X_WINDOW.store(0, Ordering::Relaxed);
+            return false;
+        }
+        if !checked_void(conn.map_window(window)) {
+            CACHED_X_WINDOW.store(0, Ordering::Relaxed);
+            return false;
+        }
+        // `_NET_WM_STATE` ClientMessage is for mapped windows. xfwm4 ignores it
+        // on an unmapped client and would otherwise drop ABOVE.
+        announce_overlay_above(conn, screen_num, window);
+        true
+    })
+    .unwrap_or(false)
 }
 
 fn checked_void(cookie: Result<VoidCookie<'_, RustConnection>, ConnectionError>) -> bool {
@@ -128,15 +187,37 @@ pub fn quartz_y_to_cocoa_frame_y(quartz_y: f64, height: f64, primary_origin_y: f
 
 /// X11 / XWayland outputs in top-left screen space. Empty when there is no
 /// display connection, so a caret without screens still parks (see overlay).
+///
+/// Place/probe used to open a new `RustConnection` per call. One cached
+/// connection plus a short TTL on this list means `layout_overlay` and
+/// `apply_position` see the same outputs.
 pub fn overlay_screens() -> Vec<(f64, f64, f64, f64)> {
-    let Ok((conn, screen_num)) = RustConnection::connect(None) else {
+    let mut cache = lock_x11();
+    if let Some((fetched_at, screens)) = &cache.screens {
+        if fetched_at.elapsed() < X11_CACHE_TTL {
+            return screens.clone();
+        }
+    }
+    if !ensure_connected(&mut cache) {
+        cache.screens = Some((Instant::now(), Vec::new()));
+        return Vec::new();
+    }
+    let screens = {
+        let Some(display) = cache.display.as_ref() else {
+            cache.screens = Some((Instant::now(), Vec::new()));
+            return Vec::new();
+        };
+        query_overlay_screens(&display.conn, display.screen_num)
+    };
+    cache.screens = Some((Instant::now(), screens.clone()));
+    screens
+}
+
+fn query_overlay_screens(conn: &RustConnection, screen_num: usize) -> Vec<(f64, f64, f64, f64)> {
+    let Some(root) = conn.setup().roots.get(screen_num).map(|s| s.root) else {
         return Vec::new();
     };
-    let root = conn.setup().roots.get(screen_num).map(|s| s.root);
-    let Some(root) = root else {
-        return Vec::new();
-    };
-    if let Ok(screens) = randr_screens(&conn, root) {
+    if let Ok(screens) = randr_screens(conn, root) {
         if !screens.is_empty() {
             return screens;
         }
@@ -182,14 +263,16 @@ fn scale_from_xft_dpi_text(text: &str) -> Option<f64> {
 }
 
 fn xft_dpi_scale() -> Option<f64> {
-    let (conn, screen_num) = RustConnection::connect(None).ok()?;
-    let root = conn.setup().roots.get(screen_num)?.root;
-    let reply = conn
-        .get_property(false, root, AtomEnum::RESOURCE_MANAGER, AtomEnum::STRING, 0, 64 * 1024)
-        .ok()?
-        .reply()
-        .ok()?;
-    scale_from_xft_dpi_text(&String::from_utf8(reply.value).ok()?)
+    with_x11(|conn, screen_num| -> Option<f64> {
+        let root = conn.setup().roots.get(screen_num)?.root;
+        let reply = conn
+            .get_property(false, root, AtomEnum::RESOURCE_MANAGER, AtomEnum::STRING, 0, 64 * 1024)
+            .ok()?
+            .reply()
+            .ok()?;
+        scale_from_xft_dpi_text(&String::from_utf8(reply.value).ok()?)
+    })
+    .flatten()
 }
 
 fn overlay_x_window(conn: &RustConnection, screen_num: usize, title: &str) -> Option<xproto::Window> {
@@ -204,18 +287,17 @@ fn overlay_x_window(conn: &RustConnection, screen_num: usize, title: &str) -> Op
 }
 
 fn map_overlay_titled(title: &str) {
-    let Ok((conn, screen_num)) = RustConnection::connect(None) else {
-        return;
-    };
-    let Some(window) = overlay_x_window(&conn, screen_num, title) else {
-        return;
-    };
-    apply_overlay_properties(&conn, window);
-    if !checked_void(conn.map_window(window)) {
-        CACHED_X_WINDOW.store(0, Ordering::Relaxed);
-        return;
-    }
-    announce_overlay_above(&conn, screen_num, window);
+    let _ = with_x11(|conn, screen_num| {
+        let Some(window) = overlay_x_window(conn, screen_num, title) else {
+            return;
+        };
+        apply_overlay_properties(conn, window);
+        if !checked_void(conn.map_window(window)) {
+            CACHED_X_WINDOW.store(0, Ordering::Relaxed);
+            return;
+        }
+        announce_overlay_above(conn, screen_num, window);
+    });
 }
 
 fn apply_overlay_hints(conn: &RustConnection, screen_num: usize, window: xproto::Window) {
@@ -327,7 +409,11 @@ fn window_title(conn: &RustConnection, window: xproto::Window) -> Option<String>
 
 #[cfg(test)]
 mod tests {
-    use super::{RustConnection, announce_overlay_above, apply_overlay_properties, intern, scale_from_xft_dpi_text};
+    use super::{
+        CACHED_X_WINDOW, OVERLAY_WINDOW_TITLE, Ordering, RustConnection, X11_CONNECTS, announce_overlay_above,
+        apply_overlay_properties, harden_overlay_window_titled, intern, lock_x11, overlay_placement_scale,
+        overlay_screens, park_overlay_window_titled, scale_from_xft_dpi_text, set_overlay_frame_titled,
+    };
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt, CreateWindowAux, EventMask, WindowClass};
 
@@ -437,5 +523,61 @@ mod tests {
         let _ = conn.destroy_window(overlay);
         let _ = conn.destroy_window(focused);
         let _ = conn.flush();
+    }
+
+    fn x11_connect_count() -> u32 {
+        X11_CONNECTS.load(Ordering::Relaxed)
+    }
+
+    fn reset_x11_cache() {
+        let mut cache = lock_x11();
+        cache.display = None;
+        cache.retry_at = None;
+        cache.screens = None;
+        CACHED_X_WINDOW.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn rust_connection_connect_is_centralized() {
+        let src = include_str!("linux.rs");
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        assert_eq!(
+            production.matches("RustConnection::connect").count(),
+            1,
+            "place/probe must share one connect site, not one connection per X11 helper"
+        );
+        assert!(
+            production.contains("X11_CACHE_TTL"),
+            "overlay_screens must TTL-cache the RandR list so layout and place share it"
+        );
+    }
+
+    #[test]
+    fn overlay_screens_and_place_reuse_one_x11_connection() {
+        reset_x11_cache();
+        let before = x11_connect_count();
+        let first = overlay_screens();
+        let after_first = x11_connect_count();
+        let second = overlay_screens();
+        let after_second = x11_connect_count();
+        assert_eq!(first, second, "TTL overlay_screens must return the same list");
+        assert_eq!(
+            after_first, after_second,
+            "second overlay_screens must not open another X11 connection"
+        );
+        assert!(
+            after_first == before || after_first == before + 1,
+            "warming the cache is at most one connect, got {before} -> {after_first}"
+        );
+
+        park_overlay_window_titled(OVERLAY_WINDOW_TITLE);
+        let _ = set_overlay_frame_titled(OVERLAY_WINDOW_TITLE, 0.0, 0.0, 10.0, 10.0);
+        harden_overlay_window_titled(OVERLAY_WINDOW_TITLE);
+        let _ = overlay_placement_scale();
+        assert_eq!(
+            x11_connect_count(),
+            after_first,
+            "place/park/harden/scale must reuse the cached (conn, screen_num)"
+        );
     }
 }

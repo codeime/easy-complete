@@ -279,26 +279,12 @@ pub async fn spawn_remote_ipc(
                                 Ok(()) => {
                                     if let Err(err) = writer.flush().await {
                                         error!(%err, "Failed to flush socket");
-                                        main_loop_sender
-                                            .send(MainLoopEvent::Insert {
-                                                insert: Vec::new(),
-                                                unlock: true,
-                                                bracketed: false,
-                                                execute: false,
-                                            })
-                                            .unwrap();
+                                        send_remote_unlock(&main_loop_sender);
                                     }
                                 }
                                 Err(err) => {
                                     error!(%err, "Failed to send message");
-                                    main_loop_sender
-                                        .send(MainLoopEvent::Insert {
-                                            insert: Vec::new(),
-                                            unlock: true,
-                                            bracketed: false,
-                                            execute: false,
-                                        })
-                                        .unwrap();
+                                    send_remote_unlock(&main_loop_sender);
                                     let _ = writer.shutdown().await;
                                     break;
                                 }
@@ -334,4 +320,45 @@ pub async fn spawn_remote_ipc(
     });
 
     Ok((outgoing_tx, incoming_rx, stop_ipc_tx))
+}
+
+fn send_remote_unlock(main_loop_sender: &Sender<MainLoopEvent>) {
+    if let Err(err) = main_loop_sender.send(MainLoopEvent::Insert {
+        insert: Vec::new(),
+        unlock: true,
+        bracketed: false,
+        execute: false,
+    }) {
+        error!(%err, "Sender error");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::send_remote_unlock;
+    use crate::MainLoopEvent;
+
+    #[test]
+    fn ssh_flush_main_loop_sender_does_not_unwrap() {
+        let src = include_str!("ipc.rs");
+        let start = src.find("pub async fn spawn_remote_ipc").expect("spawn_remote_ipc");
+        let rest = &src[start..];
+        let end = rest.find("fn send_remote_unlock").unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(
+            !body.contains(".unwrap()"),
+            "SSH flush must log a closed main_loop_sender like EventHandler, not unwrap"
+        );
+        assert!(
+            body.contains("send_remote_unlock"),
+            "flush/send failures must go through send_remote_unlock"
+        );
+    }
+
+    #[test]
+    fn closed_ssh_flush_sender_does_not_panic() {
+        let (tx, rx) = flume::unbounded::<MainLoopEvent>();
+        drop(rx);
+        send_remote_unlock(&tx);
+    }
 }

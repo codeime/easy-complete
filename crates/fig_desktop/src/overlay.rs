@@ -278,8 +278,9 @@ impl OverlayController {
     }
 
     pub fn apply_position(&mut self, position: WindowPosition, platform_state: &PlatformState, cx: &mut App) {
+        let screens = overlay_screens();
         #[cfg(not(target_os = "macos"))]
-        if matches!(position, WindowPosition::RelativeToCaret { .. }) && overlay_screens().is_empty() {
+        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens.is_empty() {
             debug!("no screen list; refusing caret placement");
             *self.last_position.lock().unwrap_or_else(|err| err.into_inner()) = None;
             self.park_window(cx);
@@ -303,6 +304,7 @@ impl OverlayController {
             handle,
             &self.last_position,
             platform_state,
+            &screens,
             cx,
         );
         self.sync_own_intercept_for_layout(positioned, cx);
@@ -319,12 +321,14 @@ impl OverlayController {
         let Some(handle) = self.ensure_window(cx) else {
             return false;
         };
+        let screens = overlay_screens();
         layout_overlay(
             &self.state,
             &self.handle,
             handle,
             &self.last_position,
             &self.platform_state,
+            &screens,
             cx,
         )
     }
@@ -629,12 +633,14 @@ impl OverlayController {
             return;
         }
         let positioned = self.ensure_window(cx).is_some_and(|handle| {
+            let screens = overlay_screens();
             layout_overlay(
                 &self.state,
                 &self.handle,
                 handle,
                 &self.last_position,
                 &self.platform_state,
+                &screens,
                 cx,
             )
         });
@@ -1294,7 +1300,8 @@ fn apply_complete_result(
             };
             let positioned = if visible {
                 if let Some(handle) = ensure_overlay_window(window_slot, &state, cx) {
-                    layout_overlay(&state, window_slot, handle, last_position, platform_state, cx)
+                    let screens = overlay_screens();
+                    layout_overlay(&state, window_slot, handle, last_position, platform_state, &screens, cx)
                 } else {
                     false
                 }
@@ -1369,12 +1376,14 @@ fn park_overlay_slot(slot: &Mutex<Option<OverlayHandle>>, cx: &mut App) -> bool 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_overlay(
     state: &Entity<OverlayState>,
     window_slot: &Mutex<Option<OverlayHandle>>,
     handle: OverlayHandle,
     last_position: &Mutex<Option<WindowPosition>>,
     platform_state: &PlatformState,
+    screens: &[(f64, f64, f64, f64)],
     cx: &mut App,
 ) -> bool {
     let (overlay_size, popout, visible, empty, flip_height) = {
@@ -1392,12 +1401,12 @@ fn layout_overlay(
     }
     if let Some(position) = *last_position.lock().unwrap_or_else(|err| err.into_inner()) {
         #[cfg(not(target_os = "macos"))]
-        if matches!(position, WindowPosition::RelativeToCaret { .. }) && overlay_screens().is_empty() {
+        if matches!(position, WindowPosition::RelativeToCaret { .. }) && screens.is_empty() {
             let _ = park_overlay_slot(window_slot, cx);
             return false;
         }
         let (origin, size, on_left, is_above) =
-            overlay_bounds(position, overlay_size, platform_state, popout, flip_height);
+            overlay_bounds(position, overlay_size, platform_state, popout, flip_height, screens);
         state.update(cx, |overlay, cx| {
             // The legacy view also retained `isAboveCursor` for the developer
             // banner when no description popout was open. Keeping the real
@@ -1934,6 +1943,7 @@ fn overlay_bounds(
     platform_state: &PlatformState,
     popout: bool,
     flip_height: f64,
+    screens: &[(f64, f64, f64, f64)],
 ) -> (Point<Pixels>, Size<Pixels>, bool, bool) {
     match position {
         WindowPosition::Absolute(pos) => {
@@ -1967,9 +1977,8 @@ fn overlay_bounds(
                 tao::dpi::Size::Logical(s) => LogicalSize::new(s.width, s.height),
                 tao::dpi::Size::Physical(s) => s.to_logical(1.0),
             };
-            let screens = overlay_screens();
             caret.y = caret_y_in_quartz_space(caret.y, caret_size.height, origin, screens.first().copied());
-            let mut edges = screen_edges_containing(&screens, caret.x, caret.y);
+            let mut edges = screen_edges_containing(screens, caret.x, caret.y);
             let mut flip_bottom = edges.map(|(_, _, _, bottom)| bottom);
             let window_bottom = platform_state
                 .get_active_window()
@@ -2422,6 +2431,55 @@ mod tests {
         use crate::platform::caret::caret_origin_needs_screens;
         assert!(caret_origin_needs_screens(Origin::BottomLeft));
         assert!(!caret_origin_needs_screens(Origin::TopLeft));
+    }
+
+    fn rust_fn_body<'a>(src: &'a str, signature: &str) -> &'a str {
+        let start = src.find(signature).unwrap_or_else(|| panic!("missing {signature}"));
+        let rest = &src[start..];
+        let brace = rest.find('{').expect("fn body");
+        let bytes = rest.as_bytes();
+        let mut depth = 0i32;
+        for (i, &b) in bytes.iter().enumerate().skip(brace) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &rest[..=i];
+                    }
+                },
+                _ => {},
+            }
+        }
+        rest
+    }
+
+    #[test]
+    fn apply_position_and_layout_overlay_share_one_screen_list() {
+        let src = include_str!("overlay.rs");
+        let apply = rust_fn_body(src, "pub fn apply_position");
+        assert!(
+            apply.contains("let screens = overlay_screens();"),
+            "apply_position must fetch the screen list once"
+        );
+        assert!(
+            apply.contains("layout_overlay(") && apply.contains("&screens"),
+            "apply_position must pass that list into layout_overlay"
+        );
+        let layout = rust_fn_body(src, "fn layout_overlay");
+        assert!(
+            !layout.contains("overlay_screens()"),
+            "layout_overlay must not open a second screen list"
+        );
+        let bounds = rust_fn_body(src, "fn overlay_bounds");
+        assert!(
+            !bounds.contains("overlay_screens()"),
+            "overlay_bounds must use the shared screen list, not fetch its own"
+        );
+        assert!(
+            !layout.contains("window-rect") && !layout.contains("PositionRelativeToRect"),
+            "caret placement must not fall back to the terminal window rect"
+        );
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
