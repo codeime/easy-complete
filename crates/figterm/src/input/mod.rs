@@ -405,7 +405,7 @@ impl KeyCode {
                     LeftArrow => 'D',
                     Home => 'H',
                     End => 'F',
-                    _ => unreachable!(),
+                    _ => return Ok(String::new()),
                 };
                 Ok(format!("\x1b[1;{modifiers}{event_type}{c}"))
             },
@@ -415,20 +415,21 @@ impl KeyCode {
                     Delete => 3,
                     PageUp => 5,
                     PageDown => 6,
-                    _ => unreachable!(),
+                    _ => return Ok(String::new()),
                 };
 
                 Ok(format!("\x1b[{c};{modifiers}{event_type}~"))
             },
             Function(n) if n < 13 => {
                 if mods.is_empty() && n < 5 {
-                    // F1-F4 are encoded using SS3 if there are no modifiers
+                    // F1-F4 are encoded using SS3 if there are no modifiers.
+                    // Function(0) is not a real F-key; emit nothing instead of aborting.
                     Ok((match n {
                         1 => "\x1bOP",
                         2 => "\x1bOQ",
                         3 => "\x1bOR",
                         4 => "\x1bOS",
-                        _ => unreachable!("wat?"),
+                        _ => return Ok(String::new()),
                     })
                     .to_string())
                 } else {
@@ -447,7 +448,7 @@ impl KeyCode {
                         10 => "\x1b[21",
                         11 => "\x1b[23",
                         12 => "\x1b[24",
-                        _ => unreachable!(),
+                        _ => return Ok(String::new()),
                     };
                     Ok(format!("{intro};{modifiers}{event_type}~"))
                 }
@@ -553,7 +554,7 @@ impl KeyCode {
                     // Backspace sends the default VERASE which is confusingly
                     // the DEL ascii codepoint
                     Backspace => '\x7f',
-                    _ => unreachable!(),
+                    _ => return Ok(String::new()),
                 };
                 if mods.contains(Modifiers::SHIFT) || mods.contains(Modifiers::CTRL) {
                     csi_u_encode(&mut buf, c, mods, modes.encoding)?;
@@ -613,7 +614,7 @@ impl KeyCode {
                     ApplicationDownArrow => (true, 'B'),
                     ApplicationRightArrow => (true, 'C'),
                     ApplicationLeftArrow => (true, 'D'),
-                    _ => unreachable!(),
+                    _ => return Ok(String::new()),
                 };
 
                 let csi_or_ss3 = if force_app
@@ -644,7 +645,7 @@ impl KeyCode {
                     Delete => 3,
                     PageUp => 5,
                     PageDown => 6,
-                    _ => unreachable!(),
+                    _ => return Ok(String::new()),
                 };
 
                 if mods.contains(Modifiers::ALT) || mods.contains(Modifiers::SHIFT) || mods.contains(Modifiers::CTRL) {
@@ -665,7 +666,7 @@ impl KeyCode {
                             2 => "\x1bOQ",
                             3 => "\x1bOR",
                             4 => "\x1bOS",
-                            _ => unreachable!("wat?"),
+                            _ => return Ok(String::new()),
                         }
                     )?;
                 } else {
@@ -1839,6 +1840,26 @@ mod test {
         assert_eq!(
             KeyCode::Function(1).encode(Modifiers::NONE, mode, true).unwrap(),
             "\x1bOP".to_string()
+        );
+        assert_eq!(
+            KeyCode::Function(0).encode(Modifiers::NONE, mode, true).unwrap(),
+            String::new()
+        );
+
+        let kitty = KeyCodeEncodeModes {
+            encoding: KeyboardEncoding::Kitty(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES),
+            newline_mode: false,
+            application_cursor_keys: false,
+        };
+        assert_eq!(
+            KeyCode::Function(0).encode(Modifiers::NONE, kitty, true).unwrap(),
+            String::new()
+        );
+
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("unreachable!") && !production.contains("unreachable!(\"wat?\")"),
+            "unknown function keys and nested key matches must not abort ecterm"
         );
     }
 

@@ -267,7 +267,7 @@ impl DebugSubcommand {
                 }
 
                 tokio::spawn(async move {
-                    tokio::signal::ctrl_c().await.unwrap();
+                    let _ = tokio::signal::ctrl_c().await;
                     let code = match fig_settings::state::set_value("developer.logging", false) {
                         Ok(_) => 0,
                         Err(_) => 1,
@@ -284,7 +284,10 @@ impl DebugSubcommand {
 
                 let log_paths = if files.is_empty() {
                     let pattern = logs_dir.join("*.log");
-                    let globset = glob([pattern.to_str().unwrap()])?;
+                    let pattern = pattern
+                        .to_str()
+                        .ok_or_else(|| eyre::eyre!("logs directory is not valid UTF-8"))?;
+                    let globset = glob([pattern])?;
                     glob_dir(&globset, &logs_dir)?
                 } else {
                     let mut files = files.as_ref().clone();
@@ -296,7 +299,10 @@ impl DebugSubcommand {
 
                         // Add figterm*.log to the list of files to open
                         let pattern = logs_dir.join(format!("{PTY_BINARY_NAME}*.log"));
-                        let globset = glob([pattern.to_str().unwrap()])?;
+                        let pattern = pattern
+                            .to_str()
+                            .ok_or_else(|| eyre::eyre!("logs directory is not valid UTF-8"))?;
+                        let globset = glob([pattern])?;
                         let qterm_logs = glob_dir(&globset, &logs_dir)?;
                         paths.extend(qterm_logs);
                     }
@@ -340,10 +346,7 @@ impl DebugSubcommand {
 
                         input_method.install().await?;
 
-                        println!(
-                            "Successfully installed input method '{}'",
-                            input_method.bundle_id().unwrap()
-                        );
+                        println!("Successfully installed input method '{}'", input_method.bundle_id()?);
                     },
                     InputMethodDebugAction::Uninstall { bundle_path } => {
                         let input_method = match bundle_path {
@@ -363,10 +366,7 @@ impl DebugSubcommand {
 
                         input_method.uninstall().await?;
 
-                        println!(
-                            "Successfully uninstalled input method '{}'",
-                            input_method.bundle_id().unwrap()
-                        );
+                        println!("Successfully uninstalled input method '{}'", input_method.bundle_id()?);
                     },
                     InputMethodDebugAction::List => match InputMethod::list_all_input_sources(None, true) {
                         Some(sources) => sources.iter().for_each(|source| println!("{source:#?}")),
@@ -571,28 +571,24 @@ impl DebugSubcommand {
                     )?;
 
                     tokio::spawn(async {
-                        tokio::signal::ctrl_c().await.unwrap();
-                        crossterm::execute!(
+                        let _ = tokio::signal::ctrl_c().await;
+                        let _ = crossterm::execute!(
                             std::io::stdout(),
                             crossterm::terminal::LeaveAlternateScreen,
                             crossterm::cursor::Show,
-                        )
-                        .unwrap();
+                        );
                         std::process::exit(0);
                     });
                 }
 
                 loop {
                     let diagnostic = get_diagnostics().await?;
-                    let term_width = crossterm::terminal::size().unwrap().0 as usize;
+                    let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0 as usize;
 
                     let mut out = String::new();
 
                     let edit_buffer = diagnostic.edit_buffer_string.as_deref().map(|s| {
-                        let mut s = s.to_owned();
-                        if let Some(index) = diagnostic.edit_buffer_cursor {
-                            s.insert_str(index as usize, &"│".magenta().to_string());
-                        }
+                        let mut s = insert_cursor_mark(s, diagnostic.edit_buffer_cursor, &"│".magenta().to_string());
                         s = s.replace('\n', "\\n");
                         s = s.replace('\t', "\\t");
                         s = s.replace('\r', "\\r");
@@ -713,8 +709,7 @@ impl DebugSubcommand {
                                 std::fs::write(
                                     tmp_dir.path().join(".zshrc"),
                                     format!("eval \"$({CLI_BINARY_NAME} init zsh post)\""),
-                                )
-                                .unwrap();
+                                )?;
 
                                 command.args(["zsh"]).env("ZDOTDIR", tmp_dir.path());
                                 command
@@ -737,7 +732,7 @@ impl DebugSubcommand {
                         profile.as_file().sync_all()?;
                         let mut output = command.spawn()?;
                         if !output.wait()?.success() {
-                            panic!();
+                            bail!("debug shell exited unsuccessfully");
                         }
 
                         println!();
@@ -753,5 +748,51 @@ impl DebugSubcommand {
             },
         }
         Ok(ExitCode::SUCCESS)
+    }
+}
+
+fn insert_cursor_mark(buffer: &str, cursor: Option<i64>, mark: &str) -> String {
+    let mut s = buffer.to_owned();
+    if let Some(index) = cursor {
+        let mut idx = usize::try_from(index).unwrap_or(0).min(s.len());
+        while idx > 0 && !s.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        s.insert_str(idx, mark);
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_cursor_mark_does_not_panic_off_a_char_boundary() {
+        assert_eq!(insert_cursor_mark("ab", Some(1), "|"), "a|b");
+        assert_eq!(insert_cursor_mark("ab", Some(99), "|"), "ab|");
+        assert_eq!(insert_cursor_mark("é", Some(1), "|"), "|é");
+        assert_eq!(insert_cursor_mark("", Some(0), "|"), "|");
+        assert_eq!(insert_cursor_mark("ab", Some(-1), "|"), "|ab");
+    }
+
+    #[test]
+    fn debug_commands_do_not_unwrap_on_the_production_path() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("ctrl_c().await.unwrap()")
+                && !production.contains("to_str().unwrap()")
+                && !production.contains("bundle_id().unwrap()")
+                && production.contains("terminal::size().unwrap_or((80, 24))")
+                && production.contains("insert_cursor_mark")
+                && production.contains("bail!(\"debug shell exited unsuccessfully\")"),
+            "ec debug logs/diagnostics/shell/ime must return errors instead of aborting"
+        );
+        let zsh = production.find("Shell::Zsh").expect("zsh");
+        let zsh_body = &production[zsh..zsh + 400];
+        assert!(
+            !zsh_body.contains(".unwrap()"),
+            "writing the debug zshrc must not unwrap"
+        );
     }
 }

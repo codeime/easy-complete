@@ -214,7 +214,7 @@ pub fn manifest() -> &'static Manifest {
     CACHED.get_or_init(|| Manifest {
         managed_by: ManagedBy::None,
         target_triple: match TARGET_TRIPLE {
-            Some(target) => TargetTriple::from_str(target).expect("parsing target triple should not fail"),
+            Some(target) => TargetTriple::from_str(target).unwrap_or_else(|_| TargetTriple::Other(target.to_string())),
             _ => TargetTriple::from_system(),
         },
         variant: match VARIANT.map(|s| s.to_ascii_lowercase()).as_deref() {
@@ -314,6 +314,27 @@ mod tests {
             assert_eq!($variant, $ty::from_str($text).unwrap());
             assert_eq!($text, $variant.to_string());
         };
+    }
+
+    #[test]
+    fn target_triple_does_not_panic_on_an_unknown_triple() {
+        let production = include_str!("manifest.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        let start = production.find("pub fn manifest()").expect("manifest");
+        let body = &production[start..];
+        let end = body.find("\npub async fn bundle_metadata").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains(".expect(\"parsing target triple should not fail\")")
+                && body.contains("TargetTriple::Other(target.to_string())"),
+            "an unknown compile-time TARGET_TRIPLE must map to Other, not abort the process"
+        );
+        assert!(
+            matches!(TargetTriple::from_str("not-a-real-triple"), Ok(TargetTriple::Other(_))),
+            "strum default already maps unknown triples to Other"
+        );
     }
 
     #[test]

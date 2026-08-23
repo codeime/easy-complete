@@ -9,6 +9,7 @@ pub mod state;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 pub use error::{Error, Result};
 use fd_lock::RwLock as FileRwLock;
@@ -26,6 +27,12 @@ static SETTINGS_FILE_LOCK: RwLock<()> = RwLock::new(());
 
 static SETTINGS_DATA: RwLock<Option<Map>> = RwLock::new(None);
 
+static EMPTY_SETTINGS_MAP: LazyLock<Map> = LazyLock::new(Map::new);
+
+fn global_map(data: &Option<Map>) -> &Map {
+    data.as_ref().unwrap_or(&EMPTY_SETTINGS_MAP)
+}
+
 #[derive(Debug, Clone)]
 pub enum Backend {
     Global,
@@ -37,36 +44,36 @@ pub enum ReadGuard<'a, T> {
     Memory(&'a T),
 }
 
-impl<'a, T> ReadGuard<'a, T> {
-    pub fn map<U, F: FnOnce(&T) -> &U>(self, f: F) -> MappedReadGuard<'a, U> {
+impl<'a> ReadGuard<'a, Map> {
+    pub fn map<U, F: FnOnce(&Map) -> &U>(self, f: F) -> MappedReadGuard<'a, U> {
         match self {
             ReadGuard::Global(guard) => {
-                MappedReadGuard::Global(RwLockReadGuard::<'a, Option<T>>::map(guard, |data: &Option<T>| {
-                    f(data.as_ref().expect("global backend is not used"))
+                MappedReadGuard::Global(RwLockReadGuard::<'a, Option<Map>>::map(guard, |data: &Option<Map>| {
+                    f(global_map(data))
                 }))
             },
             ReadGuard::Memory(data) => MappedReadGuard::Memory(f(data)),
         }
     }
 
-    pub fn try_map<U, F: FnOnce(&T) -> Option<&U>>(self, f: F) -> Option<MappedReadGuard<'a, U>> {
+    pub fn try_map<U, F: FnOnce(&Map) -> Option<&U>>(self, f: F) -> Option<MappedReadGuard<'a, U>> {
         match self {
-            ReadGuard::Global(guard) => RwLockReadGuard::<'a, Option<T>>::try_map(guard, |data: &Option<T>| {
-                f(data.as_ref().expect("global backend is not used"))
-            })
-            .ok()
-            .map(MappedReadGuard::Global),
+            ReadGuard::Global(guard) => {
+                RwLockReadGuard::<'a, Option<Map>>::try_map(guard, |data: &Option<Map>| f(global_map(data)))
+                    .ok()
+                    .map(MappedReadGuard::Global)
+            },
             ReadGuard::Memory(data) => f(data).map(MappedReadGuard::Memory),
         }
     }
 }
 
-impl<T> std::ops::Deref for ReadGuard<'_, T> {
-    type Target = T;
+impl std::ops::Deref for ReadGuard<'_, Map> {
+    type Target = Map;
 
     fn deref(&self) -> &Self::Target {
         match self {
-            ReadGuard::Global(guard) => guard.as_ref().expect("global backend is not used"),
+            ReadGuard::Global(guard) => global_map(guard),
             ReadGuard::Memory(data) => data,
         }
     }
@@ -93,45 +100,46 @@ pub enum WriteGuard<'a, T> {
     Memory(&'a mut T),
 }
 
-impl<'a, T> WriteGuard<'a, T> {
-    pub fn map<U, F: FnOnce(&mut T) -> &mut U>(self, f: F) -> MappedWriteGuard<'a, U> {
+impl<'a> WriteGuard<'a, Map> {
+    pub fn map<U, F: FnOnce(&mut Map) -> &mut U>(self, f: F) -> MappedWriteGuard<'a, U> {
         match self {
-            WriteGuard::Global(guard) => {
-                MappedWriteGuard::Global(RwLockWriteGuard::<'a, Option<T>>::map(guard, |data: &mut Option<T>| {
-                    f(data.as_mut().expect("global backend is not used"))
-                }))
-            },
+            WriteGuard::Global(guard) => MappedWriteGuard::Global(RwLockWriteGuard::<'a, Option<Map>>::map(
+                guard,
+                |data: &mut Option<Map>| f(data.get_or_insert_with(Map::new)),
+            )),
             WriteGuard::Memory(data) => MappedWriteGuard::Memory(f(data)),
         }
     }
 
-    pub fn try_map<U, F: FnOnce(&mut T) -> Option<&mut U>>(self, f: F) -> Option<MappedWriteGuard<'a, U>> {
+    pub fn try_map<U, F: FnOnce(&mut Map) -> Option<&mut U>>(self, f: F) -> Option<MappedWriteGuard<'a, U>> {
         match self {
-            WriteGuard::Global(guard) => RwLockWriteGuard::<'a, Option<T>>::try_map(guard, |data: &mut Option<T>| {
-                f(data.as_mut().expect("global backend is not used"))
-            })
-            .ok()
-            .map(MappedWriteGuard::Global),
+            WriteGuard::Global(guard) => {
+                RwLockWriteGuard::<'a, Option<Map>>::try_map(guard, |data: &mut Option<Map>| {
+                    f(data.get_or_insert_with(Map::new))
+                })
+                .ok()
+                .map(MappedWriteGuard::Global)
+            },
             WriteGuard::Memory(data) => f(data).map(MappedWriteGuard::Memory),
         }
     }
 }
 
-impl<T> std::ops::Deref for WriteGuard<'_, T> {
-    type Target = T;
+impl std::ops::Deref for WriteGuard<'_, Map> {
+    type Target = Map;
 
     fn deref(&self) -> &Self::Target {
         match self {
-            WriteGuard::Global(guard) => guard.as_ref().expect("global backend is not used"),
+            WriteGuard::Global(guard) => global_map(guard),
             WriteGuard::Memory(data) => data,
         }
     }
 }
 
-impl<T> std::ops::DerefMut for WriteGuard<'_, T> {
+impl std::ops::DerefMut for WriteGuard<'_, Map> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
-            WriteGuard::Global(guard) => guard.as_mut().expect("global backend is not used"),
+            WriteGuard::Global(guard) => guard.get_or_insert_with(Map::new),
             WriteGuard::Memory(data) => data,
         }
     }
@@ -362,5 +370,29 @@ impl JsonStore for OldSettings {
             Backend::Global => WriteGuard::Global(Self::data_lock().write()),
             Backend::Memory(map) => WriteGuard::Memory(map),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_map_falls_back_to_empty_when_uninitialized() {
+        assert!(global_map(&None).is_empty());
+        let mut map = Map::new();
+        map.insert("k".into(), 1.into());
+        assert_eq!(global_map(&Some(map)).get("k").and_then(|v| v.as_i64()), Some(1));
+    }
+
+    #[test]
+    fn global_backend_does_not_panic_when_uninitialized() {
+        let production = include_str!("lib.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("expect(\"global backend is not used\")")
+                && production.contains("fn global_map")
+                && production.contains("get_or_insert_with(Map::new)"),
+            "an uninitialized Global settings backend must read as empty and initialize on write"
+        );
     }
 }

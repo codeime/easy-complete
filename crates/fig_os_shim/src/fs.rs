@@ -32,6 +32,14 @@ mod inner {
     }
 }
 
+fn fake_lock(map: &Mutex<HashMap<PathBuf, Vec<u8>>>) -> std::sync::MutexGuard<'_, HashMap<PathBuf, Vec<u8>>> {
+    map.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+fn fake_unimplemented() -> io::Error {
+    io::Error::other("unimplemented")
+}
+
 impl Fs {
     pub fn new() -> Self {
         Self::default()
@@ -64,7 +72,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::File::create_new(path).await,
             Inner::Chroot(root) => fs::File::create_new(append(root.path(), path)).await,
-            Inner::Fake(_) => Err(io::Error::other("unimplemented")),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -73,7 +81,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::create_dir(path).await,
             Inner::Chroot(root) => fs::create_dir(append(root.path(), path)).await,
-            Inner::Fake(_) => Err(io::Error::other("unimplemented")),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -82,7 +90,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::create_dir_all(path).await,
             Inner::Chroot(root) => fs::create_dir_all(append(root.path(), path)).await,
-            Inner::Fake(_) => Err(io::Error::other("unimplemented")),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -94,7 +102,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::File::open(path).await,
             Inner::Chroot(root) => fs::File::open(append(root.path(), path)).await,
-            Inner::Fake(_) => Err(io::Error::other("unimplemented")),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -104,13 +112,10 @@ impl Fs {
             Inner::Real => fs::read(path).await,
             Inner::Chroot(root) => fs::read(append(root.path(), path)).await,
             Inner::Fake(map) => {
-                let Ok(lock) = map.lock() else {
-                    return Err(io::Error::other("poisoned lock"));
-                };
-                let Some(data) = lock.get(path.as_ref()) else {
+                let Some(data) = fake_lock(map).get(path.as_ref()).cloned() else {
                     return Err(io::Error::new(io::ErrorKind::NotFound, "not found"));
                 };
-                Ok(data.clone())
+                Ok(data)
             },
         }
     }
@@ -121,13 +126,10 @@ impl Fs {
             Inner::Real => fs::read_to_string(path).await,
             Inner::Chroot(root) => fs::read_to_string(append(root.path(), path)).await,
             Inner::Fake(map) => {
-                let Ok(lock) = map.lock() else {
-                    return Err(io::Error::other("poisoned lock"));
-                };
-                let Some(data) = lock.get(path.as_ref()) else {
+                let Some(data) = fake_lock(map).get(path.as_ref()).cloned() else {
                     return Err(io::Error::new(io::ErrorKind::NotFound, "not found"));
                 };
-                match String::from_utf8(data.clone()) {
+                match String::from_utf8(data) {
                     Ok(string) => Ok(string),
                     Err(err) => Err(io::Error::new(io::ErrorKind::InvalidData, err)),
                 }
@@ -141,13 +143,10 @@ impl Fs {
             Inner::Real => std::fs::read_to_string(path),
             Inner::Chroot(root) => std::fs::read_to_string(append(root.path(), path)),
             Inner::Fake(map) => {
-                let Ok(lock) = map.lock() else {
-                    return Err(io::Error::other("poisoned lock"));
-                };
-                let Some(data) = lock.get(path.as_ref()) else {
+                let Some(data) = fake_lock(map).get(path.as_ref()).cloned() else {
                     return Err(io::Error::new(io::ErrorKind::NotFound, "not found"));
                 };
-                match String::from_utf8(data.clone()) {
+                match String::from_utf8(data) {
                     Ok(string) => Ok(string),
                     Err(err) => Err(io::Error::new(io::ErrorKind::InvalidData, err)),
                 }
@@ -165,10 +164,7 @@ impl Fs {
             Inner::Real => fs::write(path, contents).await,
             Inner::Chroot(root) => fs::write(append(root.path(), path), contents).await,
             Inner::Fake(map) => {
-                let Ok(mut lock) = map.lock() else {
-                    return Err(io::Error::other("poisoned lock"));
-                };
-                lock.insert(path.as_ref().to_owned(), contents.as_ref().to_owned());
+                fake_lock(map).insert(path.as_ref().to_owned(), contents.as_ref().to_owned());
                 Ok(())
             },
         }
@@ -186,7 +182,10 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::remove_file(path).await,
             Inner::Chroot(root) => fs::remove_file(append(root.path(), path)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(map) => match fake_lock(map).remove(path.as_ref()) {
+                Some(_) => Ok(()),
+                None => Err(io::Error::new(io::ErrorKind::NotFound, "not found")),
+            },
         }
     }
 
@@ -198,7 +197,11 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::remove_dir_all(path).await,
             Inner::Chroot(root) => fs::remove_dir_all(append(root.path(), path)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(map) => {
+                let prefix = path.as_ref();
+                fake_lock(map).retain(|key, _| !(key == prefix || key.starts_with(prefix)));
+                Ok(())
+            },
         }
     }
 
@@ -213,7 +216,16 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::rename(from, to).await,
             Inner::Chroot(root) => fs::rename(append(root.path(), from), append(root.path(), to)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(map) => {
+                let mut lock = fake_lock(map);
+                match lock.remove(from.as_ref()) {
+                    Some(data) => {
+                        lock.insert(to.as_ref().to_owned(), data);
+                        Ok(())
+                    },
+                    None => Err(io::Error::new(io::ErrorKind::NotFound, "not found")),
+                }
+            },
         }
     }
 
@@ -227,7 +239,17 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::copy(from, to).await,
             Inner::Chroot(root) => fs::copy(append(root.path(), from), append(root.path(), to)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(map) => {
+                let mut lock = fake_lock(map);
+                match lock.get(from.as_ref()).cloned() {
+                    Some(data) => {
+                        let len = data.len() as u64;
+                        lock.insert(to.as_ref().to_owned(), data);
+                        Ok(len)
+                    },
+                    None => Err(io::Error::new(io::ErrorKind::NotFound, "not found")),
+                }
+            },
         }
     }
 
@@ -242,7 +264,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::try_exists(path).await,
             Inner::Chroot(root) => fs::try_exists(append(root.path(), path)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(map) => Ok(fake_lock(map).contains_key(path.as_ref())),
         }
     }
 
@@ -255,7 +277,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => path.as_ref().exists(),
             Inner::Chroot(root) => append(root.path(), path).exists(),
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(map) => fake_lock(map).contains_key(path.as_ref()),
         }
     }
 
@@ -277,7 +299,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => TempDir::new(),
             Inner::Chroot(root) => TempDir::new_in(root.path()),
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -292,7 +314,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::symlink(original, link).await,
             Inner::Chroot(root) => fs::symlink(append(root.path(), original), append(root.path(), link)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -338,7 +360,7 @@ impl Fs {
                     fs::symlink_file(original_path, link_path).await
                 }
             },
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -353,7 +375,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => std::os::unix::fs::symlink(original, link),
             Inner::Chroot(root) => std::os::unix::fs::symlink(append(root.path(), original), append(root.path(), link)),
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -400,7 +422,7 @@ impl Fs {
                     std::os::windows::fs::symlink_file(original_path, link_path)
                 }
             },
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -420,7 +442,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::symlink_metadata(path).await,
             Inner::Chroot(root) => fs::symlink_metadata(append(root.path(), path)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -432,7 +454,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::read_link(path).await,
             Inner::Chroot(root) => Ok(append(root.path(), fs::read_link(append(root.path(), path)).await?)),
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -444,7 +466,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::read_dir(path).await,
             Inner::Chroot(root) => fs::read_dir(append(root.path(), path)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -457,7 +479,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::canonicalize(path).await,
             Inner::Chroot(root) => fs::canonicalize(append(root.path(), path)).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -469,7 +491,7 @@ impl Fs {
         match &self.0 {
             Inner::Real => fs::set_permissions(path, perm).await,
             Inner::Chroot(root) => fs::set_permissions(append(root.path(), path), perm).await,
-            Inner::Fake(_) => panic!("unimplemented"),
+            Inner::Fake(_) => Err(fake_unimplemented()),
         }
     }
 
@@ -614,6 +636,62 @@ mod tests {
         fs.write(dir.join("write"), b"write").await.unwrap();
         assert_eq!(fs.read(dir.join("write")).await.unwrap(), b"write");
         assert_eq!(fs.read_to_string(dir.join("write")).await.unwrap(), "write");
+    }
+
+    #[tokio::test]
+    async fn fake_fs_does_not_panic_on_unimplemented_ops() {
+        let fs = Fs::from_slice(&[("/test", "test")]);
+        assert!(fs.exists("/test"));
+        assert!(!fs.exists("/missing"));
+        assert!(fs.try_exists("/test").await.unwrap());
+        assert!(!fs.try_exists("/missing").await.unwrap());
+        assert_eq!(fs.copy("/test", "/copied").await.unwrap(), 4);
+        assert_eq!(fs.read_to_string("/copied").await.unwrap(), "test");
+        fs.rename("/copied", "/renamed").await.unwrap();
+        assert_eq!(fs.read_to_string("/renamed").await.unwrap(), "test");
+        fs.remove_file("/renamed").await.unwrap();
+        assert!(!fs.exists("/renamed"));
+        fs.write("/dir/a", b"a").await.unwrap();
+        fs.remove_dir_all("/dir").await.unwrap();
+        assert!(!fs.exists("/dir/a"));
+        fs.symlink("/test", "/link").await.unwrap_err();
+        fs.symlink_sync("/test", "/link").unwrap_err();
+        fs.create_tempdir().await.unwrap_err();
+        fs.read_dir("/").await.unwrap_err();
+        fs.canonicalize("/test").await.unwrap_err();
+        fs.symlink_metadata("/test").await.unwrap_err();
+        fs.read_link("/test").await.unwrap_err();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs.set_permissions("/test", std::fs::Permissions::from_mode(0o600))
+                .await
+                .unwrap_err();
+        }
+        let production = include_str!("fs.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains("panic!(\"unimplemented\")") && production.contains("fake_unimplemented"),
+            "Fake fs methods must return errors instead of aborting the process"
+        );
+        assert!(
+            production.contains("fake_lock") && production.contains("into_inner"),
+            "a poisoned Fake fs mutex must recover like Fake env/sysinfo"
+        );
+    }
+
+    #[tokio::test]
+    async fn fake_fs_lock_recovers_from_poison() {
+        let fs = Fs::from_slice(&[("/test", "test")]);
+        let inner::Inner::Fake(map) = &fs.0 else {
+            panic!("expected fake fs");
+        };
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = map.lock().unwrap();
+            panic!("poison");
+        }));
+        assert_eq!(fs.read_to_string("/test").await.unwrap(), "test");
+        fs.write("/test", "recovered").await.unwrap();
+        assert_eq!(fs.read_to_string("/test").await.unwrap(), "recovered");
     }
 
     #[tokio::test]

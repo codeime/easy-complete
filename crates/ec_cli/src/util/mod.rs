@@ -136,8 +136,8 @@ pub async fn quit_desktop(verbose: bool) -> Result<ExitCode> {
                 } else if #[cfg(target_os = "macos")] {
                     if let Ok(info) = get_app_info() {
                         let pid = Regex::new(r"pid = (\S+)")
-                            .unwrap()
-                            .captures(&info)
+                            .ok()
+                            .and_then(|re| re.captures(&info))
                             .and_then(|c| c.get(1));
                         if let Some(pid) = pid {
                             let success = Command::new("kill")
@@ -272,7 +272,9 @@ pub fn dialoguer_theme() -> ColorfulTheme {
 
 #[cfg(target_os = "macos")]
 pub async fn is_brew_reinstall() -> bool {
-    let regex = regex::bytes::Regex::new(r"brew(\.\w+)?\s+(upgrade|reinstall|install)").unwrap();
+    let Ok(regex) = regex::bytes::Regex::new(r"brew(\.\w+)?\s+(upgrade|reinstall|install)") else {
+        return false;
+    };
 
     tokio::process::Command::new("ps")
         .args(["aux", "-o", "args"])
@@ -312,6 +314,23 @@ mod tests {
         assert!(
             !body.contains(".unwrap()") && body.contains(".ok()?"),
             "an invalid regex must return None, not panic the CLI"
+        );
+    }
+
+    #[test]
+    fn quit_and_brew_regexes_do_not_unwrap() {
+        let production = include_str!("mod.rs").split("#[cfg(test)]").next().expect("production");
+        let pid = production.find("pid = ").expect("pid regex");
+        let pid_body = &production[pid..production.len().min(pid + 250)];
+        assert!(
+            !pid_body.contains(".unwrap()") && pid_body.contains(".and_then(|re| re.captures(&info))"),
+            "macOS quit pid parse must not unwrap a static regex"
+        );
+        let brew = production.find("is_brew_reinstall").expect("brew");
+        let brew_body = &production[brew..production.len().min(brew + 400)];
+        assert!(
+            !brew_body.contains(".unwrap()") && brew_body.contains("let Ok(regex) = regex::bytes::Regex::new"),
+            "is_brew_reinstall must not unwrap a static regex"
         );
     }
 
