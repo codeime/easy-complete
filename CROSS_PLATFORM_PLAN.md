@@ -351,7 +351,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 
 ## 8. 当前执行指针
 
-- 分支：`fix/cross-platform-audit-1` @ `54dee500`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
+- 分支：`fix/cross-platform-audit-1` @ `8ba16257`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
 - **发运：** 仍只有 macOS Apple Silicon DMG。Linux / Windows 是 WIP，不是产品（无 Linux 包、无 Windows 安装器）。
 - 本文件就是 M0 的文档交付物
 - 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `clippy -D warnings`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
@@ -362,7 +362,8 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - 2026-08-23 续 4（M2 + D3）：泛 `CI=true` **不再**挡住 wrap（只拦 `GITHUB_ACTIONS` / `Q_CI`；不要把 `Q_FORCE_FIGTERM_LAUNCH` 写进 rc）。本机 `ecterm` + bash/zsh/fish OSC 697 钩子把 `git ch` 送到 mock `remote.sock`，引擎 stdout 含 `checkout`（无 caret、无浮层）。D3：map 后再发 `_NET_WM_STATE_ABOVE`；`ec-overlay-spike` 在 `:2` 上 `_NET_WM_WINDOW_TYPE_NOTIFICATION` + ABOVE，且不是 `_NET_ACTIVE_WINDOW`。`setup.sh` 仍只装编译依赖（GTK 托盘 / X11 / Vulkan 头），不装 WebKit；caret 运行时依赖 IBus/AT-SPI 不写进 apt。
 - 2026-08-23 续 5（`0ddd0de2` 审计收口）：`platform/mod.rs` 活路是 macos / linux_caret / windows_caret / stub。考古 `platform/linux/**` 与 `platform/windows.rs` **已删除，勿恢复、勿翻 cfg**。`local_webview_data_dir` 已去掉；Linux uninstall 只清 `easy-complete` 数据前缀。figterm history SQLite 走 `spawn_blocking`。desktop IPC `send_event` 关闭环时 warn 而不是 unwrap。`get_current_buffer` 原地 truncate。同一次 complete 快照 `AutocompleteFlags`。非 Mac 屏幕列表改名 `overlay_screens`。`GLOBAL_PROXY.set` / `spawn_engine` 失败走可诊断退出。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。
 - 2026-08-23 续 6（`54dee500`）：本机 Ubuntu 上 `cargo test -p fig_desktop` 全绿（115 + 1 ignored）。AppImage autostart 走 `set_enabled_in(ctx)`：AppImage 链到本地 desktop entry（不是 FUSE `current_exe`），前缀安装写 `--is-startup` 文件；`app.launchOnStartup` 仍是门闩。设置权限门在非 macOS 只看 shell integration，不因 Accessibility/IME 卡住。figterm mutex/rwlock poison 恢复；`UnixTerminal::Drop` warn 而不是 unwrap；history SQLite 改独立 `std::thread`（不再用 forever `spawn_blocking` 占 blocking pool）。去掉空的 `WryIdMap` / JS handler channel。`webview/` 模块名未改（rename churn）。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。Linux tarball 已按变更二进制重打。
-- 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要把 `mesa-vulkan-drivers` 写进 rust-linux job，**不要复活考古 `platform/linux/` / `platform/windows.rs`**。`webview/` → bootstrap 仍可选。
+- 2026-08-23 续 7（`8ba16257`）：P1-2 已关。`fig_desktop/src/webview/` 改名为 `bootstrap/`，`WebviewManager` → `AppRuntime`，通知状态去掉 WebView 前缀。行为不变。`fig_desktop_api` 仍由 `fig_desktop` 链接（macOS 发运），与 `ec_overlay_spike` 都**不**在 `default-members`；dist 脚本不打 spike。本机 `cargo test -p fig_desktop` 116 + 1 ignored。本机未测 macOS AX/IME/DMG，未假装 Windows live runtime。Linux tarball 已按变更二进制重打。
+- 下一步：push 后看第一次 `rust-linux` / `rust-windows`；Windows 手测 named pipe 往返、ConPTY、caret、HWND。不要为了翻 skip 去给 Ubuntu 装 shellcheck，不要装 WebKit，不要把 `mesa-vulkan-drivers` 写进 rust-linux job，**不要复活考古 `platform/linux/` / `platform/windows.rs`**，不要把 `webview/` 目录名请回来。
 
 进度勾选：
 
