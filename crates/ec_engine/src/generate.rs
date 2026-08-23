@@ -878,10 +878,10 @@ mod tests {
     fn script_generator_filters_prefix() {
         let spec = Spec {
             names: vec!["demo".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 script: vec!["printf".into(), "alpha\nbeta\nalpaca\n".into()],
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let suggestions = generate(&spec, &["demo".into(), "al".into()], "al", "/", false);
@@ -895,11 +895,11 @@ mod tests {
     fn script_split_on_uses_the_compiler_separator() {
         let spec = Spec {
             names: vec!["demo".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 script: vec!["printf".into(), "alpha,beta,alpaca".into()],
                 split_on: Some(",".into()),
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let suggestions = generate(&spec, &["demo".into(), "al".into()], "al", "/", false);
@@ -949,10 +949,10 @@ mod tests {
         .unwrap();
         let spec = Spec {
             names: vec!["npm".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 builtin: Some(Builtin::NpmScripts),
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let cwd = dir.path().display().to_string();
@@ -1030,10 +1030,10 @@ mod tests {
     fn git_ref_output_is_prefix_filtered() {
         let spec = Spec {
             names: vec!["checkout".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 script: vec!["printf".into(), "feature-x\nmain\norigin/foo\n".into()],
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let suggestions = generate(
@@ -1077,10 +1077,10 @@ mod tests {
 
         let spec = Spec {
             names: vec!["git".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 builtin: Some(Builtin::GitAliases),
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let suggestions = generate(&spec, &["git".into()], "co", &cwd, false);
@@ -1101,10 +1101,10 @@ mod tests {
         fs::write(dir.path().join("readme.md"), "x").unwrap();
         let spec = Spec {
             names: vec!["cd".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 templates: vec![Template::Folders],
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let suggestions = generate(
@@ -1124,7 +1124,7 @@ mod tests {
             names: vec!["ls".into()],
             options: vec![Arc::new(OptionSpec {
                 names: vec!["--color".into()],
-                args: vec![ArgSpec {
+                args: vec![Arc::new(ArgSpec {
                     suggestions: vec![
                         SuggestionSeed {
                             names: vec!["always".into()],
@@ -1138,13 +1138,13 @@ mod tests {
                         },
                     ],
                     ..ArgSpec::default()
-                }],
+                })],
                 ..OptionSpec::default()
             })],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 templates: vec![Template::Filepaths],
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let suggestions = generate(&spec, &["ls".into(), "--color".into(), "a".into()], "a", "/", false);
@@ -1157,20 +1157,20 @@ mod tests {
         let spec = Spec {
             names: vec!["demo".into()],
             args: vec![
-                ArgSpec {
+                Arc::new(ArgSpec {
                     suggestions: vec![SuggestionSeed {
                         names: vec!["alpha".into()],
                         ..SuggestionSeed::default()
                     }],
                     ..ArgSpec::default()
-                },
-                ArgSpec {
+                }),
+                Arc::new(ArgSpec {
                     suggestions: vec![SuggestionSeed {
                         names: vec!["beta".into()],
                         ..SuggestionSeed::default()
                     }],
                     ..ArgSpec::default()
-                },
+                }),
             ],
             ..Spec::default()
         };
@@ -1185,7 +1185,7 @@ mod tests {
     fn duplicate_static_and_builtin_rows_are_removed() {
         let spec = Spec {
             names: vec!["demo".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 suggestions: vec![
                     SuggestionSeed {
                         names: vec!["same".into()],
@@ -1197,7 +1197,7 @@ mod tests {
                     },
                 ],
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let suggestions = generate(&spec, &["demo".into(), "s".into()], "s", "/", false);

@@ -204,7 +204,7 @@ impl OverlayState {
             if let Some(index) = self
                 .items
                 .iter()
-                .position(|item| crate::list::selection_identity(item) == identity)
+                .position(|item| crate::list::matches_selection_identity(item, &identity))
             {
                 self.selected = index;
             } else {
@@ -650,6 +650,26 @@ mod tests {
         first.display_name = Some("After".into());
         first.query_term = Some("after".into());
         assert_eq!(first_identity, crate::list::selection_identity(&first));
+        assert!(crate::list::matches_selection_identity(&first, &first_identity));
+    }
+
+    #[test]
+    fn set_suggestions_does_not_clone_row_keys_to_keep_selection() {
+        let src = include_str!("overlay.rs");
+        let start = src
+            .find("pub fn set_suggestions_with_match_term")
+            .expect("set_suggestions_with_match_term");
+        let rest = &src[start..];
+        let end = rest
+            .find("\n    fn refresh_common_prefix")
+            .expect("refresh_common_prefix");
+        let body = &rest[..end];
+        assert!(
+            body.contains("crate::list::selection_identity")
+                && body.contains("matches_selection_identity(item, &identity)")
+                && !body.contains("selection_identity(item) == identity"),
+            "keep-selection must clone identity once from the old row, then compare fields"
+        );
     }
 
     #[test]

@@ -218,8 +218,10 @@ pub struct OptionSpec {
     pub names: Vec<String>,
     #[serde(default)]
     pub description: String,
+    /// Shared like [`Spec::args`]: walk into `--opt value` clones a pointer,
+    /// not the option's generator tree.
     #[serde(default)]
-    pub args: Vec<ArgSpec>,
+    pub args: Vec<Arc<ArgSpec>>,
     #[serde(flatten)]
     pub meta: SuggestionMeta,
     #[serde(default, alias = "loadSpec")]
@@ -269,8 +271,10 @@ pub struct Spec {
     /// lookup walker merges the parent set into this set as it descends.
     #[serde(default, alias = "persistentOptions")]
     pub persistent_options: Vec<Arc<OptionSpec>>,
+    /// Shared so walk and listing clone pointers, not generator trees
+    /// (templates, scripts, suggestion seeds, JS hook ids).
     #[serde(default)]
-    pub args: Vec<ArgSpec>,
+    pub args: Vec<Arc<ArgSpec>>,
     #[serde(default, alias = "additionalSuggestions")]
     pub additional_suggestions: Vec<SuggestionSeed>,
     #[serde(flatten)]
@@ -699,11 +703,11 @@ fn resolve_spec_references(spec: &mut Spec, root: &Path, files: &HashMap<Arc<str
     }
 
     for arg in &mut spec.args {
-        resolve_arg_spec(arg, root, files, stack);
+        resolve_arg_spec(Arc::make_mut(arg), root, files, stack);
     }
     for option in &mut spec.options {
         for arg in &mut Arc::make_mut(option).args {
-            resolve_arg_spec(arg, root, files, stack);
+            resolve_arg_spec(Arc::make_mut(arg), root, files, stack);
         }
     }
 }
@@ -800,6 +804,22 @@ mod tests {
     }
 
     #[test]
+    fn args_are_shared_arcs() {
+        let path = Arc::new(ArgSpec {
+            name: "path".into(),
+            templates: vec![Template::Folders],
+            ..ArgSpec::default()
+        });
+        let mkdir = Spec {
+            names: vec!["mkdir".into()],
+            args: vec![Arc::clone(&path)],
+            ..Spec::default()
+        };
+        assert!(std::ptr::eq(mkdir.args[0].as_ref(), path.as_ref()));
+        assert!(Arc::ptr_eq(&mkdir.clone().args[0], &path));
+    }
+
+    #[test]
     fn nested_subcommands_are_shared_arcs() {
         let checkout = Arc::new(Spec {
             names: vec!["checkout".into()],
@@ -852,6 +872,11 @@ mod tests {
         let mkdir = registry.get("mkdir").expect("mkdir spec");
         assert_eq!(mkdir.args[0].templates, vec![Template::Folders]);
         assert!(mkdir.options.iter().any(|opt| opt.names.iter().any(|n| n == "-p")));
+        let cloned = mkdir.clone();
+        assert!(
+            Arc::ptr_eq(&cloned.args[0], &mkdir.args[0]),
+            "cloning a spec must share argument trees"
+        );
     }
 
     #[test]

@@ -118,6 +118,13 @@ pub fn selection_identity(item: &SuggestionItem) -> SelectionIdentity {
     )
 }
 
+pub fn matches_selection_identity(item: &SuggestionItem, identity: &SelectionIdentity) -> bool {
+    item.name == identity.0
+        && item.kind == identity.1
+        && item.insert_value == identity.2
+        && item.description == identity.3
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ClickInsert {
     pub name: String,
@@ -510,7 +517,6 @@ fn merge_runs(runs: Vec<TextRun>) -> Vec<TextRun> {
 }
 
 pub fn name_runs(name: &str, search: &str, fuzzy: bool, common_prefix: &str) -> Vec<TextRun> {
-    let chars: Vec<char> = name.chars().collect();
     let mut runs = if search.is_empty() {
         vec![TextRun {
             text: name.to_string(),
@@ -518,21 +524,7 @@ pub fn name_runs(name: &str, search: &str, fuzzy: bool, common_prefix: &str) -> 
         }]
     } else if fuzzy {
         match fuzzy_indexes(name, search) {
-            Some(indexes) => {
-                let marked: std::collections::HashSet<usize> = indexes.into_iter().collect();
-                chars
-                    .iter()
-                    .enumerate()
-                    .map(|(index, ch)| TextRun {
-                        text: ch.to_string(),
-                        kind: if marked.contains(&index) {
-                            RunKind::Match
-                        } else {
-                            RunKind::Text
-                        },
-                    })
-                    .collect()
-            },
+            Some(indexes) => runs_for_fuzzy_indexes(name, &indexes),
             None => vec![TextRun {
                 text: name.to_string(),
                 kind: RunKind::Text,
@@ -574,6 +566,48 @@ pub fn name_runs(name: &str, search: &str, fuzzy: bool, common_prefix: &str) -> 
             }
         }
         runs = merge_runs(runs);
+    }
+    runs
+}
+
+fn runs_for_fuzzy_indexes(name: &str, indexes: &[usize]) -> Vec<TextRun> {
+    if indexes.is_empty() {
+        return vec![TextRun {
+            text: name.to_string(),
+            kind: RunKind::Text,
+        }];
+    }
+    let marked: std::collections::HashSet<usize> = indexes.iter().copied().collect();
+    let mut runs = Vec::new();
+    let mut span_start = 0;
+    let mut span_kind = RunKind::Text;
+    let mut started = false;
+    for (char_index, (byte_index, _)) in name.char_indices().enumerate() {
+        let kind = if marked.contains(&char_index) {
+            RunKind::Match
+        } else {
+            RunKind::Text
+        };
+        if !started {
+            span_start = byte_index;
+            span_kind = kind;
+            started = true;
+            continue;
+        }
+        if kind != span_kind {
+            runs.push(TextRun {
+                text: name[span_start..byte_index].to_string(),
+                kind: span_kind,
+            });
+            span_start = byte_index;
+            span_kind = kind;
+        }
+    }
+    if started {
+        runs.push(TextRun {
+            text: name[span_start..].to_string(),
+            kind: span_kind,
+        });
     }
     runs
 }
@@ -764,7 +798,6 @@ impl Render for SuggestionList {
                                     item,
                                     ix == overlay.selected,
                                     search_term,
-                                    &overlay.search_term,
                                     fuzzy,
                                     common_prefix.as_ref(),
                                     theme,
@@ -851,7 +884,6 @@ fn suggestion_row(
     item: &SuggestionItem,
     is_selected: bool,
     search_term: &str,
-    insertion_search_term: &str,
     fuzzy: bool,
     common_prefix: &str,
     theme: OverlayTheme,
@@ -891,8 +923,6 @@ fn suggestion_row(
     );
     match_bg.a = 0.8;
     let match_text = brightness(text, 0.95 * 1.25);
-    let click_item = item.clone();
-    let insertion_search_term = insertion_search_term.to_string();
     let title_name = item.display_name.as_deref().unwrap_or(&item.name);
     let runs = name_runs(title_name, search_term, fuzzy, common_prefix);
     let mut title = div()
@@ -945,13 +975,17 @@ fn suggestion_row(
         // matching the old acceptance timing this avoids accepting a row when
         // the user presses and drags out of it before releasing.
         .on_click(move |_event, _window, cx| {
-            state.update(cx, |overlay, cx| {
+            let payload = state.update(cx, |overlay, cx| {
                 overlay.selected = ix;
                 overlay.has_changed_index = true;
                 cx.notify();
+                overlay
+                    .items
+                    .get(ix)
+                    .map(|item| click_insert_for(item, &overlay.search_term))
             });
-            if let Some(insert) = &click {
-                insert(click_insert_for(&click_item, &insertion_search_term));
+            if let (Some(insert), Some(payload)) = (click.as_ref(), payload) {
+                insert(payload);
             }
         })
         .into_any_element()
@@ -1561,6 +1595,43 @@ mod tests {
         assert!(
             render_body.contains("overlay.common_prefix.clone()") && !render_body.contains("common_prefix_for("),
             "paint must use the prefix stored on OverlayState, not recompute it each frame"
+        );
+    }
+
+    #[test]
+    fn suggestion_row_does_not_clone_the_item_on_paint() {
+        let src = include_str!("list.rs");
+        let start = src.find("fn suggestion_row(").expect("suggestion_row");
+        let end = src[start..].find("\nfn row_corner_radii").expect("next fn") + start;
+        let body = &src[start..end];
+        assert!(
+            !body.contains("item.clone()") && !body.contains("click_item"),
+            "paint must not clone SuggestionItem (strings + icon) for a click that may never happen"
+        );
+        assert!(
+            body.contains(".items")
+                && body.contains(".get(ix)")
+                && body.contains("click_insert_for(item, &overlay.search_term)"),
+            "click must look the row up from overlay state"
+        );
+    }
+
+    #[test]
+    fn fuzzy_name_runs_are_consecutive_spans() {
+        let runs = name_runs("checkout", "ch", true, "");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].kind, RunKind::Match);
+        assert_eq!(runs[0].text, "ch");
+        assert_eq!(runs[1].kind, RunKind::Text);
+        assert_eq!(runs[1].text, "eckout");
+
+        let src = include_str!("list.rs");
+        let start = src.find("fn runs_for_fuzzy_indexes").expect("runs_for_fuzzy_indexes");
+        let end = src[start..].find("\nfn underline_prefix").expect("underline_prefix") + start;
+        let body = &src[start..end];
+        assert!(
+            !body.contains("ch.to_string()") && body.contains("name[span_start..byte_index]"),
+            "fuzzy highlight must slice consecutive spans, not allocate a String per character"
         );
     }
 

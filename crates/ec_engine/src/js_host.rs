@@ -1052,10 +1052,10 @@ fn option_from_fig_json(value: &JsonValue) -> Option<OptionSpec> {
     })
 }
 
-fn args_from_fig(value: Option<&JsonValue>) -> Vec<ArgSpec> {
+fn args_from_fig(value: Option<&JsonValue>) -> Vec<Arc<ArgSpec>> {
     match value {
-        Some(JsonValue::Array(items)) => items.iter().filter_map(arg_from_fig_json).collect(),
-        Some(item) => arg_from_fig_json(item).into_iter().collect(),
+        Some(JsonValue::Array(items)) => items.iter().filter_map(arg_from_fig_json).map(Arc::new).collect(),
+        Some(item) => arg_from_fig_json(item).map(Arc::new).into_iter().collect(),
         None => Vec::new(),
     }
 }
@@ -1454,10 +1454,10 @@ mod tests {
     fn merge_keeps_wrapper_names_and_existing_args() {
         let wrapper = Spec {
             names: vec!["php".into()],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 name: "file".into(),
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let generated = Spec {
@@ -1466,10 +1466,10 @@ mod tests {
                 names: vec!["artisan".into()],
                 ..Spec::default()
             })],
-            args: vec![ArgSpec {
+            args: vec![Arc::new(ArgSpec {
                 name: "other".into(),
                 ..ArgSpec::default()
-            }],
+            })],
             ..Spec::default()
         };
         let merged = merge_generated_spec(&wrapper, generated);

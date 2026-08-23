@@ -36,8 +36,8 @@ pub use linux_overlay::{OverlayX11Hints, overlay_x11_activates, overlay_x11_hint
 pub use list::{
     ClickInsert, DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_ROW_HEIGHT, DEFAULT_WIDTH, DESCRIPTION_HEIGHT,
     DEV_BANNER_HEIGHT, OverlayTheme, POPOUT_WIDTH, SuggestionItem, SuggestionList, TabPrefix, common_prefix_for,
-    kind_label, layout_gap, layout_pad, longest_common_prefix, match_prefix_bytes, overlay_content_size,
-    overlay_content_size_with_context, selection_identity, tab_prefix_insertion,
+    kind_label, layout_gap, layout_pad, longest_common_prefix, match_prefix_bytes, matches_selection_identity,
+    overlay_content_size, overlay_content_size_with_context, selection_identity, tab_prefix_insertion,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{

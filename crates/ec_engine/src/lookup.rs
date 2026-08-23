@@ -434,7 +434,7 @@ fn command_is_disabled_from(commands: &[String], command: &str) -> bool {
 
 #[derive(Debug)]
 pub(crate) struct ActiveArg {
-    pub arg: ArgSpec,
+    pub arg: Arc<ArgSpec>,
     /// Normalized value used to filter generator output.
     pub query: String,
     /// Raw shell text used as the result search term for deletion.
@@ -467,7 +467,7 @@ pub(crate) struct CompletionContext {
 
 #[derive(Debug, Clone)]
 struct OptionArgState {
-    arg: ArgSpec,
+    arg: Arc<ArgSpec>,
     /// Number of values already consumed for this option argument. A zero
     /// count means the flag was entered and is waiting for its first value.
     count: usize,
@@ -505,7 +505,7 @@ fn can_consume_options(
     after_double_dash: bool,
     entered_args: bool,
     option_arg: Option<&OptionArgState>,
-    subcommand_arg: Option<&ArgSpec>,
+    subcommand_arg: Option<&Arc<ArgSpec>>,
     subcommand_variadic_count: usize,
 ) -> bool {
     if after_double_dash {
@@ -1071,7 +1071,7 @@ fn active_arg<'a>(
     })
 }
 
-fn positional_arg(args: &[ArgSpec], index: usize) -> Option<&ArgSpec> {
+fn positional_arg(args: &[Arc<ArgSpec>], index: usize) -> Option<&Arc<ArgSpec>> {
     let arg = args.get(index).or_else(|| args.last().filter(|arg| arg.is_variadic))?;
     if arg.name.is_empty()
         && arg.description.is_empty()
@@ -1444,7 +1444,7 @@ pub fn complete(
     let fuzzy = effective_fuzzy(
         request.fuzzy,
         Some(context.spec.as_ref()),
-        context.active_arg.as_ref().map(|active| &active.arg),
+        context.active_arg.as_ref().map(|active| active.arg.as_ref()),
     );
     let current = context.spec.as_ref();
     let persistent_refs: Vec<&OptionSpec> = context.persistent_options.iter().map(Arc::as_ref).collect();
@@ -1634,8 +1634,9 @@ pub fn buffer_before_cursor(buffer: &str, cursor: Option<u32>) -> &str {
     &buffer[..end]
 }
 
-pub fn args_hint(args: &[ArgSpec]) -> String {
-    args.iter()
+pub fn args_hint<'a, A: AsRef<ArgSpec> + 'a>(args: impl IntoIterator<Item = &'a A>) -> String {
+    args.into_iter()
+        .map(AsRef::as_ref)
         .filter(|arg| !arg.name.is_empty())
         .map(|arg| {
             let mut base = arg.name.clone();
@@ -1669,25 +1670,28 @@ fn select_named_candidate<'a>(
     fuzzy: bool,
     prefer_long_name: bool,
 ) -> Option<&'a String> {
-    let matching_names = item_names
-        .iter()
-        .filter(|candidate| matches_query(candidate, query, fuzzy))
-        .collect::<Vec<_>>();
-    if matching_names.is_empty() {
-        display_name
+    if prefer_long_name {
+        let mut best: Option<&String> = None;
+        for candidate in item_names {
+            if matches_query(candidate, query, fuzzy) && best.is_none_or(|current| candidate.len() > current.len()) {
+                best = Some(candidate);
+            }
+        }
+        if best.is_some() {
+            return best;
+        }
+        return display_name
             .filter(|display| matches_query(display, query, fuzzy))
-            .and_then(|_| {
-                if prefer_long_name {
-                    item_names.iter().max_by_key(|candidate| candidate.len())
-                } else {
-                    item_names.first()
-                }
-            })
-    } else if prefer_long_name {
-        matching_names.into_iter().max_by_key(|candidate| candidate.len())
-    } else {
-        matching_names.into_iter().next()
+            .and_then(|_| item_names.iter().max_by_key(|candidate| candidate.len()));
     }
+    item_names
+        .iter()
+        .find(|candidate| matches_query(candidate, query, fuzzy))
+        .or_else(|| {
+            display_name
+                .filter(|display| matches_query(display, query, fuzzy))
+                .and_then(|_| item_names.first())
+        })
 }
 
 fn hidden_item_is_visible(hidden: bool, item_names: &[String], query: &str) -> bool {
@@ -1734,7 +1738,7 @@ pub(crate) fn effective_fuzzy_for_tokens(
     effective_fuzzy(
         user_fuzzy,
         Some(context.spec.as_ref()),
-        context.active_arg.as_ref().map(|active| &active.arg),
+        context.active_arg.as_ref().map(|active| active.arg.as_ref()),
     )
 }
 
@@ -1847,20 +1851,29 @@ fn option_is_excluded(option: &OptionSpec, passed: &[Arc<OptionSpec>]) -> bool {
     })
 }
 
-fn option_priority(option: &OptionSpec, passed: &[Arc<OptionSpec>]) -> Option<i64> {
+/// Names from `dependsOn` that no passed option has satisfied. Built once
+/// per option listing so `curl -` does not allocate a HashSet per row.
+fn unmet_option_depends(passed: &[Arc<OptionSpec>]) -> HashSet<&str> {
     let mut unmet = HashSet::new();
+    if passed.is_empty() {
+        return unmet;
+    }
     for candidate in passed {
-        unmet.extend(candidate.depends_on.iter().cloned());
+        unmet.extend(candidate.depends_on.iter().map(String::as_str));
     }
     for candidate in passed {
         for name in &candidate.names {
-            unmet.remove(name);
+            unmet.remove(name.as_str());
         }
     }
+    unmet
+}
+
+fn option_priority(option: &OptionSpec, unmet: &HashSet<&str>) -> Option<i64> {
     option
         .names
         .iter()
-        .any(|name| unmet.contains(name))
+        .any(|name| unmet.contains(name.as_str()))
         .then_some(75)
         .or(option.meta.priority)
 }
@@ -1884,6 +1897,7 @@ fn collect_option_suggestions(
         })
         .collect();
     options.sort_by(|left, right| cmp_named_names(&left.names, &right.names));
+    let unmet = unmet_option_depends(passed);
     collect_named(
         &options,
         |opt| opt.names.as_slice(),
@@ -1897,7 +1911,7 @@ fn collect_option_suggestions(
         },
         |opt| option_separator(opt, directives),
         |opt| opt.args.first().is_some_and(|arg| !arg.is_optional),
-        |opt| option_priority(opt, passed),
+        |opt| option_priority(opt, &unmet),
         "option",
         query,
         search_term,
@@ -1936,6 +1950,7 @@ fn option_chain_suggestions(
     directives: &ParserDirectives,
 ) -> Vec<Suggestion> {
     let mandatory_arg = chain.option.args.first().is_some_and(|arg| !arg.is_optional);
+    let unmet = unmet_option_depends(passed);
     let mut suggestions = Vec::new();
 
     for option in all_options(spec, persistent) {
@@ -1998,7 +2013,7 @@ fn option_chain_suggestions(
                 option_separator(option, directives),
                 should_add_space,
                 option.meta.hidden,
-                option_priority(option, passed),
+                option_priority(option, &unmet),
                 option.meta.icon.clone(),
             )
             .with_primary_name(if is_current {
@@ -2016,8 +2031,8 @@ fn option_chain_suggestions(
     suggestions
 }
 
-fn should_add_space(args: &[ArgSpec], requires_subcommand: Option<bool>, has_subcommands: bool) -> bool {
-    if args.first().is_some_and(|arg| !arg.is_optional) {
+fn should_add_space<A: AsRef<ArgSpec>>(args: &[A], requires_subcommand: Option<bool>, has_subcommands: bool) -> bool {
+    if args.first().is_some_and(|arg| !arg.as_ref().is_optional) {
         return true;
     }
     requires_subcommand.unwrap_or(has_subcommands)
@@ -2408,8 +2423,37 @@ mod tests {
             "persistent option merge must Arc::clone, not clone the OptionSpec"
         );
         assert!(
-            src.contains("share_option(") && src.contains("option_priority(opt, passed)"),
+            src.contains("share_option(") && src.contains("option_priority(opt, &unmet)"),
             "walk shares option Arcs; listing applies priority on references"
+        );
+    }
+
+    #[test]
+    fn listing_and_walk_do_not_deep_clone_arg_specs() {
+        let src = include_str!("lookup.rs");
+        let deep_walk = ["Arc", "new(arg.clone())"].join("::");
+        assert!(
+            !src.contains(&deep_walk),
+            "walk must share ArgSpec, not wrap a cloned generator tree"
+        );
+        assert!(
+            src.contains("pub arg: Arc<ArgSpec>") && src.contains("struct OptionArgState"),
+            "ActiveArg and OptionArgState share ArgSpec"
+        );
+        let cloned_depends = ["depends_on.iter()", "cloned()"].join(".");
+        assert!(
+            !src.contains(&cloned_depends) && src.contains("unmet_option_depends(passed)"),
+            "option listing must borrow dependsOn names once, not clone them per row"
+        );
+        let start = src.find("fn select_named_candidate").expect("select_named_candidate");
+        let rest = &src[start..];
+        let end = rest
+            .find("\nfn hidden_item_is_visible")
+            .expect("hidden_item_is_visible");
+        let body = &rest[..end];
+        assert!(
+            !body.contains("matching_names") && !body.contains("collect::<Vec<_>>") && body.contains(".find("),
+            "listing must take the first matching name without collecting a Vec"
         );
     }
 
@@ -2689,19 +2733,19 @@ mod tests {
     #[test]
     fn args_hint_formats_optional_and_variadic() {
         assert_eq!(
-            args_hint(&[ArgSpec {
+            args_hint(&[Arc::new(ArgSpec {
                 name: "path".into(),
                 is_optional: true,
                 is_variadic: true,
                 ..ArgSpec::default()
-            }]),
+            })]),
             "[path...]"
         );
         assert_eq!(
-            args_hint(&[ArgSpec {
+            args_hint(&[Arc::new(ArgSpec {
                 name: "branch".into(),
                 ..ArgSpec::default()
-            }]),
+            })]),
             "<branch>"
         );
     }
@@ -3645,18 +3689,18 @@ mod tests {
             ..ArgSpec::default()
         };
         let inherited = ArgSpec::default();
-        fn active(arg: &ArgSpec) -> ActiveArg {
+        fn active(arg: ArgSpec) -> ActiveArg {
             ActiveArg {
-                arg: arg.clone(),
+                arg: Arc::new(arg),
                 query: "value".into(),
                 search_term: "value".into(),
                 exclusive: false,
             }
         }
 
-        let disabled_active = active(&disabled);
-        let enabled_active = active(&enabled);
-        let inherited_active = active(&inherited);
+        let disabled_active = active(disabled);
+        let enabled_active = active(enabled);
+        let inherited_active = active(inherited);
         assert!(!suggest_current_token_for(Some(&disabled_active), true));
         assert!(suggest_current_token_for(Some(&enabled_active), false));
         assert!(suggest_current_token_for(Some(&inherited_active), true));
