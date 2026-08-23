@@ -323,7 +323,7 @@ impl MenuElement {
                     image_icon.clone(), // Some(muda::Icon::from_rgba(bytes, width, height).unwrap()),
                     None,
                 );
-                menu.append(&menu_item).unwrap();
+                append_or_warn(menu.append(&menu_item));
             },
             MenuElement::Entry {
                 emoji_icon,
@@ -337,10 +337,10 @@ impl MenuElement {
                     _ => text.to_string(),
                 };
                 let menu_item = IconMenuItem::with_id(MenuId::new(id), text, true, image_icon.clone(), *accelerator);
-                menu.append(&menu_item).unwrap();
+                append_or_warn(menu.append(&menu_item));
             },
             MenuElement::Separator => {
-                menu.append(&PredefinedMenuItem::separator()).unwrap();
+                append_or_warn(menu.append(&PredefinedMenuItem::separator()));
             },
             MenuElement::SubMenu { title, elements } => {
                 let sub_menu = Submenu::new(title, true);
@@ -348,7 +348,7 @@ impl MenuElement {
                     element.add_to_submenu(&sub_menu);
                 }
 
-                menu.append(&sub_menu).unwrap();
+                append_or_warn(menu.append(&sub_menu));
             },
         }
     }
@@ -363,7 +363,7 @@ impl MenuElement {
                     image_icon.clone(), // Some(muda::Icon::from_rgba(bytes, width, height).unwrap()),
                     None,
                 );
-                submenu.append(&menu_item).unwrap();
+                append_or_warn(submenu.append(&menu_item));
             },
             MenuElement::Entry {
                 emoji_icon,
@@ -377,10 +377,10 @@ impl MenuElement {
                     _ => text.to_string(),
                 };
                 let menu_item = muda::MenuItem::with_id(MenuId::new(id), text, true, *accelerator);
-                submenu.append(&menu_item).unwrap();
+                append_or_warn(submenu.append(&menu_item));
             },
             MenuElement::Separator => {
-                submenu.append(&PredefinedMenuItem::separator()).unwrap();
+                append_or_warn(submenu.append(&PredefinedMenuItem::separator()));
             },
             MenuElement::SubMenu { title, elements } => {
                 let sub_menu = Submenu::new(title, true);
@@ -388,9 +388,15 @@ impl MenuElement {
                     element.add_to_submenu(&sub_menu);
                 }
 
-                submenu.append(&sub_menu).unwrap();
+                append_or_warn(submenu.append(&sub_menu));
             },
         }
+    }
+}
+
+fn append_or_warn(result: muda::Result<()>) {
+    if let Err(err) = result {
+        warn!(%err, "failed to append tray menu item");
     }
 }
 
@@ -472,6 +478,29 @@ mod tests {
         assert!(
             src.contains("decode_tray_icon") && src.contains("failed to decode tray icon"),
             "tray icon decode should warn and return None"
+        );
+    }
+
+    #[test]
+    fn tray_menu_append_does_not_unwrap() {
+        let _menu = super::get_context_menu(true);
+        let production = include_str!("tray.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            !production.contains("menu.append(") || !production.contains(&["append(&menu_item)", ".unwrap()"].concat()),
+            "tray menu append must not panic the desktop"
+        );
+        assert!(
+            !production.contains(&["append(&menu_item)", ".unwrap()"].concat())
+                && !production.contains(&["separator())", ".unwrap()"].concat())
+                && !production.contains(&["append(&sub_menu)", ".unwrap()"].concat()),
+            "muda append failures warn and skip"
+        );
+        assert!(
+            production.contains("append_or_warn") && production.contains("failed to append tray menu item"),
+            "append errors must warn"
         );
     }
 }

@@ -779,12 +779,8 @@ fn apply_generate_spec(current: &mut Arc<Spec>, tokens: &[String]) {
         return;
     };
     let timeout = Duration::from_millis(u64::try_from(crate::generate::DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000));
-    let generated = if let Some(key) = current.generate_spec_cache_key.as_deref() {
-        let cache_key = format!("{}:{key}", tokens.first().cloned().unwrap_or_default());
-        crate::js_host::cached_spec(host, &cache_key, || host.generate_spec(hook_id, tokens, cwd, timeout))
-    } else {
-        host.generate_spec(hook_id, tokens, cwd, timeout)
-    };
+    let cache_key = host.generate_spec_cache_key(hook_id, current.generate_spec_cache_key.as_deref(), cwd, tokens);
+    let generated = crate::js_host::cached_spec(host, &cache_key, || host.generate_spec(hook_id, tokens, cwd, timeout));
     let Some(generated) = generated else {
         return;
     };
@@ -2318,6 +2314,23 @@ mod tests {
         assert!(
             body.contains("tokens") && body.contains("ends_with_space") && body.contains("buffer"),
             "lookup::complete takes the pre-parsed completion buffer"
+        );
+    }
+
+    #[test]
+    fn generate_spec_always_goes_through_the_spec_cache() {
+        let src = include_str!("lookup.rs");
+        let start = src.find("fn apply_generate_spec").expect("apply_generate_spec");
+        let rest = &src[start..];
+        let end = rest.find("\nfn enter_loaded_spec").expect("enter_loaded_spec");
+        let body = &rest[..end];
+        assert!(
+            body.contains("generate_spec_cache_key") && body.contains("cached_spec"),
+            "generateSpec must pick a cache key and go through cached_spec"
+        );
+        assert!(
+            !body.contains("} else {\n        host.generate_spec"),
+            "missing generateSpecCacheKey must not skip the in-process spec cache"
         );
     }
 

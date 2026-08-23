@@ -748,6 +748,85 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn generate_spec_without_cache_key_runs_once_when_tokens_are_unused() {
+        let _lock = engine_lock();
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("hooks")).unwrap();
+        fs::write(
+            dir.path().join("hooks/demo_generateSpec_0.js"),
+            "export default async(e,t)=>{await t({command:\"sh\",args:[\"-c\",\"printf x >> runs\"]});return {name:\"demo\",subcommands:[{name:\"alpha\"},{name:\"bravo\"}]};}\n",
+        )
+        .unwrap();
+        write_spec(
+            dir.path(),
+            "demo",
+            r#"{"names":["demo"],"jsGenerateSpec":"demo#generateSpec#0"}"#,
+        );
+        let mut engine = Engine::new_with_frecency(dir.path().to_path_buf(), Frecency::default()).expect("engine");
+        let cwd = dir.path().display().to_string();
+        let listed = engine
+            .complete(CompleteRequest {
+                buffer: "demo ".into(),
+                cwd: cwd.clone(),
+                ..CompleteRequest::default()
+            })
+            .expect("complete");
+        let names: Vec<_> = listed.suggestions.iter().map(|row| row.name.as_str()).collect();
+        assert!(names.contains(&"alpha") && names.contains(&"bravo"), "{names:?}");
+        for buffer in ["demo a", "demo b"] {
+            engine
+                .complete(CompleteRequest {
+                    buffer: buffer.into(),
+                    cwd: cwd.clone(),
+                    ..CompleteRequest::default()
+                })
+                .expect("complete");
+        }
+        let runs = fs::read_to_string(dir.path().join("runs")).unwrap_or_default();
+        assert_eq!(
+            runs.matches('x').count(),
+            1,
+            "token-independent generateSpec must not re-run for demo / demo a / demo b: {runs:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generate_spec_without_cache_key_reruns_when_tokens_are_used() {
+        let _lock = engine_lock();
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("hooks")).unwrap();
+        fs::write(
+            dir.path().join("hooks/demo_generateSpec_0.js"),
+            "export default async(e,t)=>{await t({command:\"sh\",args:[\"-c\",\"printf x >> runs\"]});return {name:\"demo\",subcommands:[{name:e[1]||\"none\"}]};}\n",
+        )
+        .unwrap();
+        write_spec(
+            dir.path(),
+            "demo",
+            r#"{"names":["demo"],"jsGenerateSpec":"demo#generateSpec#0"}"#,
+        );
+        let mut engine = Engine::new_with_frecency(dir.path().to_path_buf(), Frecency::default()).expect("engine");
+        let cwd = dir.path().display().to_string();
+        for buffer in ["demo a", "demo b"] {
+            engine
+                .complete(CompleteRequest {
+                    buffer: buffer.into(),
+                    cwd: cwd.clone(),
+                    ..CompleteRequest::default()
+                })
+                .expect("complete");
+        }
+        let runs = fs::read_to_string(dir.path().join("runs")).unwrap_or_default();
+        assert_eq!(
+            runs.matches('x').count(),
+            2,
+            "token-dependent generateSpec must re-run when remaining tokens change: {runs:?}"
+        );
+    }
+
     fn engine_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|err| err.into_inner())

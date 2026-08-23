@@ -215,6 +215,43 @@ globalThis.console = {
         spec_from_fig_json(&json)
     }
 
+    /// Cache key for a `generateSpec` hook.
+    ///
+    /// An explicit Fig `generateSpecCacheKey` keeps the historical
+    /// `{firstToken}:{key}` form. Otherwise a hook whose first parameter never
+    /// appears in the body is keyed by hook + cwd so `git ch` / `git che` share
+    /// one `git help -a` result, while mask `--maskfile` and pnpm extra args
+    /// keep the token list in the key.
+    pub(crate) fn generate_spec_cache_key(
+        &self,
+        hook_id: &str,
+        explicit: Option<&str>,
+        cwd: &str,
+        tokens: &[String],
+    ) -> String {
+        if let Some(key) = explicit {
+            return format!("{}:{key}", tokens.first().map(String::as_str).unwrap_or_default());
+        }
+        let mut key = String::with_capacity(hook_id.len() + cwd.len() + 16);
+        key.push_str(hook_id);
+        key.push('\x1f');
+        key.push_str(cwd);
+        if self
+            .hook_source(hook_id)
+            .is_some_and(|source| hook_source_ignores_first_param(&source))
+        {
+            return key;
+        }
+        key.push('\x1f');
+        for (i, token) in tokens.iter().enumerate() {
+            if i > 0 {
+                key.push('\x1f');
+            }
+            key.push_str(token);
+        }
+        key
+    }
+
     fn call_hook<F>(&self, hook_id: &str, budget: Duration, invoke: F) -> Option<JsonValue>
     where
         F: for<'js> FnOnce(&Ctx<'js>, Function<'js>) -> rquickjs::Result<JsValue<'js>>,
@@ -333,6 +370,89 @@ pub fn cache_key(cache_by_directory: bool, cwd: &str, cache_key: Option<&str>, t
     } else {
         format!(",{second}")
     }
+}
+
+/// True when a generateSpec hook's first parameter never appears in the body.
+///
+/// Conservative: a parse failure or a non-identifier first param is treated as
+/// "uses tokens" so mask `--maskfile` / pnpm extra args stay distinct.
+pub(crate) fn hook_source_ignores_first_param(source: &str) -> bool {
+    let Some((param, body)) = js_first_param_and_body(source) else {
+        return false;
+    };
+    if param.is_empty() {
+        return true;
+    }
+    if !is_simple_js_ident(param) {
+        return false;
+    }
+    !contains_js_ident(body, param)
+}
+
+fn js_first_param_and_body(source: &str) -> Option<(&str, &str)> {
+    let mut s = source.trim();
+    s = s.strip_prefix("export default")?.trim_start();
+    if let Some(rest) = s.strip_prefix("async") {
+        if rest.starts_with(|c: char| c.is_whitespace() || c == '(' || c == 'f') {
+            s = rest.trim_start();
+        }
+    }
+    if let Some(rest) = s.strip_prefix("function") {
+        s = rest.trim_start();
+    }
+    if !s.starts_with('(') {
+        let name_end = s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))?;
+        s = s[name_end..].trim_start();
+    }
+    s = s.strip_prefix('(')?;
+    let close = s.find(')')?;
+    let first = s[..close].split(',').next().unwrap_or("").trim();
+    let mut body = s[close + 1..].trim_start();
+    if let Some(rest) = body.strip_prefix("=>") {
+        body = rest.trim_start();
+    }
+    Some((first, body))
+}
+
+fn is_simple_js_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    is_js_ident_start(first) && chars.all(is_js_ident_continue)
+}
+
+fn is_js_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || c == '$'
+}
+
+fn is_js_ident_continue(c: char) -> bool {
+    is_js_ident_start(c) || c.is_ascii_digit()
+}
+
+fn contains_js_ident(src: &str, ident: &str) -> bool {
+    let bytes = src.as_bytes();
+    let needle = ident.as_bytes();
+    if needle.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let before_ok = i == 0 || !is_js_ident_continue_byte(bytes[i - 1]);
+            let after = i + needle.len();
+            let after_ok = after == bytes.len() || !is_js_ident_continue_byte(bytes[after]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_js_ident_continue_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
 /// Ceiling for each per-engine hook cache. Directory-keyed generators mint a
@@ -1320,5 +1440,73 @@ mod tests {
         assert_eq!(merged.names, vec!["php"]);
         assert_eq!(merged.args[0].name, "file");
         assert!(merged.find_subcommand("artisan").is_some());
+    }
+
+    #[test]
+    fn hook_source_ignores_first_param_on_git_not_mask_or_pnpm_install() {
+        assert!(hook_source_ignores_first_param(
+            "export default async function() { return { name: 'php' }; }\n"
+        ));
+        assert!(hook_source_ignores_first_param(
+            "export default async(e,t)=>{let{stdout:i}=await t({command:\"git\",args:[\"help\",\"-a\"]});return {name:\"git\"};}"
+        ));
+        assert!(!hook_source_ignores_first_param(
+            "export default async(e,m)=>{var n=e.indexOf(\"--maskfile\");return {name:\"mask\"};}"
+        ));
+        assert!(!hook_source_ignores_first_param(
+            "export default async generateSpec(e){let n=e.filter(a=>a.trim()!==\"\"&&!a.startsWith(\"-\")).length>2;return {name:\"install\"};}"
+        ));
+        assert!(hook_source_ignores_first_param(include_str!(
+            "../../../bundle/specs-ir/hooks/git_generateSpec_0.js"
+        )));
+        assert!(hook_source_ignores_first_param(include_str!(
+            "../../../bundle/specs-ir/hooks/hub_generateSpec_0.js"
+        )));
+        assert!(!hook_source_ignores_first_param(include_str!(
+            "../../../bundle/specs-ir/hooks/mask_generateSpec_0.js"
+        )));
+        assert!(!hook_source_ignores_first_param(include_str!(
+            "../../../bundle/specs-ir/hooks/pnpm_generateSpec_2.js"
+        )));
+    }
+
+    #[test]
+    fn generate_spec_cache_key_drops_tokens_when_the_hook_ignores_them() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("demo_generateSpec_0.js"),
+            "export default async(e,t)=>{return {name:\"demo\"};}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("masky_generateSpec_0.js"),
+            "export default async(e,t)=>{return {name:e[1]||\"none\"};}\n",
+        )
+        .unwrap();
+        let host = JsHost::new(dir.path().to_path_buf());
+        let unused_a =
+            host.generate_spec_cache_key("demo#generateSpec#0", None, "/tmp/repo", &["demo".into(), "a".into()]);
+        let unused_b =
+            host.generate_spec_cache_key("demo#generateSpec#0", None, "/tmp/repo", &["demo".into(), "b".into()]);
+        assert_eq!(unused_a, unused_b);
+        assert!(unused_a.contains("demo#generateSpec#0"));
+        assert!(unused_a.contains("/tmp/repo"));
+        assert!(!unused_a.contains('\x1f') || unused_a.matches('\x1f').count() == 1);
+
+        let used_a =
+            host.generate_spec_cache_key("masky#generateSpec#0", None, "/tmp/repo", &["masky".into(), "a".into()]);
+        let used_b =
+            host.generate_spec_cache_key("masky#generateSpec#0", None, "/tmp/repo", &["masky".into(), "b".into()]);
+        assert_ne!(used_a, used_b);
+
+        assert_eq!(
+            host.generate_spec_cache_key(
+                "demo#generateSpec#0",
+                Some("help-a"),
+                "/tmp",
+                &["demo".into(), "z".into()]
+            ),
+            "demo:help-a"
+        );
     }
 }

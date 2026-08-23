@@ -193,26 +193,53 @@ fn command_output(status: i32, stdout: Vec<u8>, stderr: Vec<u8>) -> CommandOutpu
     }
 }
 
+/// Cap stdout/stderr as they are read. `wait_with_output` buffers the whole
+/// pipe first, so a noisy generator could OOM the engine worker before the
+/// 256 KiB truncate. Unix polls both pipes on the attempt thread; Windows
+/// still uses a waiter (no live PeekNamedPipe here) but the readers stop at
+/// [`MAX_STDOUT`].
 #[cfg(not(unix))]
-fn wait_child_output_threaded(child: Child, timeout: Duration) -> Result<CommandOutput, CommandError> {
+fn read_capped(mut reader: impl std::io::Read) -> Vec<u8> {
+    use std::io::ErrorKind;
+
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    loop {
+        if buf.len() >= MAX_STDOUT {
+            break;
+        }
+        match reader.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                let room = MAX_STDOUT - buf.len();
+                buf.extend_from_slice(&tmp[..n.min(room)]);
+            },
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+#[cfg(not(unix))]
+fn wait_child_output_threaded(mut child: Child, timeout: Duration) -> Result<CommandOutput, CommandError> {
     use std::sync::mpsc;
     use std::thread;
 
     let pid = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
+        let out_handle = stdout.map(|pipe| thread::spawn(move || read_capped(pipe)));
+        let err_handle = stderr.map(|pipe| thread::spawn(move || read_capped(pipe)));
+        let status = child.wait().map(|status| status.code().unwrap_or(-1)).unwrap_or(-1);
+        let stdout = out_handle.and_then(|handle| handle.join().ok()).unwrap_or_default();
+        let stderr = err_handle.and_then(|handle| handle.join().ok()).unwrap_or_default();
+        let _ = tx.send((status, stdout, stderr));
     });
     match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => {
-            let status = output.status.code().unwrap_or(-1);
-            let mut stdout = output.stdout;
-            stdout.truncate(MAX_STDOUT);
-            let mut stderr = output.stderr;
-            stderr.truncate(MAX_STDOUT);
-            Ok(command_output(status, stdout, stderr))
-        },
-        Ok(Err(_)) => Err(CommandError::Failed),
+        Ok((status, stdout, stderr)) => Ok(command_output(status, stdout, stderr)),
         Err(_) => {
             kill_process_group(pid);
             Err(CommandError::TimedOut)
@@ -430,25 +457,26 @@ fn drain_stdout(stdout: &mut impl std::io::Read, tmp: &mut [u8], buf: &mut Vec<u
 }
 
 #[cfg(not(unix))]
-fn wait_child_threaded(child: Child, timeout: Duration, require_success: bool) -> RunResult {
+fn wait_child_threaded(mut child: Child, timeout: Duration, require_success: bool) -> RunResult {
     use std::sync::mpsc;
     use std::thread;
 
     let pid = child.id();
+    let stdout = child.stdout.take();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
+        let stdout = stdout.map(read_capped).unwrap_or_default();
+        let status = child.wait();
+        let _ = tx.send((status, stdout));
     });
     match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => {
-            if require_success && !output.status.success() {
+        Ok((Ok(status), stdout)) => {
+            if require_success && !status.success() {
                 return RunResult::Failed;
             }
-            let mut stdout = output.stdout;
-            stdout.truncate(MAX_STDOUT);
             RunResult::Output(String::from_utf8_lossy(&stdout).into_owned())
         },
-        Ok(Err(_)) => RunResult::Failed,
+        Ok((Err(_), _)) => RunResult::Failed,
         Err(_) => {
             kill_process_group(pid);
             RunResult::TimedOut
@@ -602,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_execute_full_still_waits_on_a_helper_thread() {
+    fn windows_execute_full_caps_while_reading_on_a_helper_thread() {
         let src = include_str!("process.rs");
         let start = src
             .find("fn wait_child_output_threaded")
@@ -611,12 +639,19 @@ mod tests {
         let end = rest.find("/// [`execute`]").unwrap_or(rest.len());
         let body = &rest[..end];
         assert!(
-            body.contains("wait_with_output") && body.contains("thread::spawn"),
-            "Windows executeCommand still buffers the whole pipe on a waiter; do not claim it polls"
+            body.contains("thread::spawn") && body.contains("read_capped"),
+            "Windows executeCommand still uses a waiter thread; do not claim PeekNamedPipe poll"
         );
         assert!(
-            body.contains("stdout.truncate(MAX_STDOUT)"),
-            "Windows still truncates after wait, not while reading"
+            !body.contains("wait_with_output") && !body.contains("stdout.truncate(MAX_STDOUT)"),
+            "Windows must cap as it reads, not buffer the whole pipe then truncate"
+        );
+        let child_start = src.find("fn wait_child_threaded").expect("wait_child_threaded");
+        let child = &src[child_start..];
+        let child_end = child.find("fn reap(").unwrap_or(child.len());
+        assert!(
+            child[..child_end].contains("read_capped") && !child[..child_end].contains("wait_with_output"),
+            "Windows generator execute must cap stdout while reading too"
         );
     }
 
