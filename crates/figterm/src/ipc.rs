@@ -1,4 +1,4 @@
-//! Utiities for IPC with Tauri App
+//! Local figterm socket and remote desktop IPC.
 
 use std::io;
 use std::pin::Pin;
@@ -159,11 +159,10 @@ pub async fn spawn_figterm_ipc(
                             match read_half.recv_message::<FigtermRequestMessage>().await {
                                 Ok(Some(message)) => {
                                     // debug!("Received message: {message:?}");
-                                    incoming_tx
-                                        .clone()
-                                        .send_async((message, response_tx.clone()))
-                                        .await
-                                        .unwrap();
+                                    if let Err(err) = incoming_tx.send_async((message, response_tx.clone())).await {
+                                        error!(%err, "Sender error");
+                                        break;
+                                    }
                                 },
                                 Ok(None) => {
                                     debug!("Received EOF");
@@ -337,6 +336,23 @@ fn send_remote_unlock(main_loop_sender: &Sender<MainLoopEvent>) {
 mod tests {
     use super::send_remote_unlock;
     use crate::MainLoopEvent;
+
+    #[test]
+    fn local_ipc_incoming_send_does_not_unwrap() {
+        let src = include_str!("ipc.rs");
+        let start = src.find("pub async fn spawn_figterm_ipc").expect("spawn_figterm_ipc");
+        let rest = &src[start..];
+        let end = rest.find("pub async fn spawn_remote_ipc").unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(
+            !body.contains(".unwrap()"),
+            "a closed incoming_tx must log like EventHandler, not panic ecterm"
+        );
+        assert!(
+            body.contains("Sender error"),
+            "local IPC send failure should log Sender error"
+        );
+    }
 
     #[test]
     fn ssh_flush_main_loop_sender_does_not_unwrap() {

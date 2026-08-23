@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use thiserror::Error;
 use tracing::info;
@@ -17,6 +17,10 @@ static Q_LOG_LEVEL_GLOBAL: Mutex<Option<String>> = Mutex::new(None);
 static MAX_LEVEL: Mutex<Option<LevelFilter>> = Mutex::new(None);
 static ENV_FILTER_RELOADABLE_HANDLE: Mutex<Option<tracing_subscriber::reload::Handle<EnvFilter, Registry>>> =
     Mutex::new(None);
+
+fn recover_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|err| err.into_inner())
+}
 
 // A logging error
 #[derive(Debug, Error)]
@@ -59,7 +63,7 @@ pub struct LogGuard {
 pub fn initialize_logging<T: AsRef<Path>>(args: LogArgs<T>) -> Result<LogGuard, Error> {
     let filter_layer = create_filter_layer();
     let (reloadable_filter_layer, reloadable_handle) = tracing_subscriber::reload::Layer::new(filter_layer);
-    ENV_FILTER_RELOADABLE_HANDLE.lock().unwrap().replace(reloadable_handle);
+    recover_mutex(&ENV_FILTER_RELOADABLE_HANDLE).replace(reloadable_handle);
 
     // First we construct the file logging layer if a file name was provided.
     let (file_layer, _file_guard) = match args.log_file_path {
@@ -138,7 +142,7 @@ pub fn initialize_logging<T: AsRef<Path>>(args: LogArgs<T>) -> Result<LogGuard, 
 ///
 /// Returns a string identifying the current log level.
 pub fn get_log_level() -> String {
-    Q_LOG_LEVEL_GLOBAL.lock().unwrap().clone().unwrap_or_else(|| {
+    recover_mutex(&Q_LOG_LEVEL_GLOBAL).clone().unwrap_or_else(|| {
         fig_os_shim::Env::new()
             .q_log_level()
             .unwrap_or_else(|_| DEFAULT_FILTER.to_string())
@@ -154,14 +158,12 @@ pub fn set_log_level(level: String) -> Result<String, Error> {
     info!("Setting log level to {level:?}");
 
     let old_level = get_log_level();
-    *Q_LOG_LEVEL_GLOBAL.lock().unwrap() = Some(level);
+    *recover_mutex(&Q_LOG_LEVEL_GLOBAL) = Some(level);
 
     let filter_layer = create_filter_layer();
-    *MAX_LEVEL.lock().unwrap() = filter_layer.max_level_hint();
+    *recover_mutex(&MAX_LEVEL) = filter_layer.max_level_hint();
 
-    ENV_FILTER_RELOADABLE_HANDLE
-        .lock()
-        .unwrap()
+    recover_mutex(&ENV_FILTER_RELOADABLE_HANDLE)
         .as_ref()
         .expect("set_log_level must not be called before logging is initialized")
         .reload(filter_layer)?;
@@ -175,12 +177,12 @@ pub fn set_log_level(level: String) -> Result<String, Error> {
 ///
 /// The max log level which is set every time the log level is set.
 pub fn get_log_level_max() -> LevelFilter {
-    let max_level = *MAX_LEVEL.lock().unwrap();
+    let max_level = *recover_mutex(&MAX_LEVEL);
     match max_level {
         Some(level) => level,
         None => {
             let filter_layer = create_filter_layer();
-            *MAX_LEVEL.lock().unwrap() = filter_layer.max_level_hint();
+            *recover_mutex(&MAX_LEVEL) = filter_layer.max_level_hint();
             filter_layer.max_level_hint().unwrap_or(DEFAULT_FILTER)
         },
     }
@@ -250,5 +252,26 @@ mod tests {
         ] {
             assert!(logs.contains(i));
         }
+    }
+
+    #[test]
+    fn log_level_locks_recover_from_poison() {
+        let mutex = Mutex::new(0u8);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("poison");
+        }));
+        *recover_mutex(&mutex) = 1;
+        assert_eq!(*recover_mutex(&mutex), 1);
+
+        let production = include_str!("lib.rs").split("#[cfg(test)]").next().expect("production");
+        assert!(
+            !production.contains(".lock().unwrap()"),
+            "fig_log must recover mutex poison instead of panicking ecterm / desktop / CLI"
+        );
+        assert!(
+            production.contains("recover_mutex("),
+            "poison recovery should go through recover_mutex"
+        );
     }
 }
