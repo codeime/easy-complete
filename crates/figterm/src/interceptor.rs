@@ -1,20 +1,17 @@
 use anyhow::Result;
 use dashmap::DashMap;
 use fig_proto::figterm::Action;
-use fig_settings::keybindings::{KeyBinding, KeyBindings};
+use fig_settings::keybindings::{KeyBinding, KeyBindings, intercepts_while_hidden};
 use tracing::trace;
 
 use crate::input::{KeyCode, KeyEvent, Modifiers};
-
-// TODO: remove hardcoded list of global actions and use `availability`
-const GLOBAL_ACTIONS: &[&str] = &["toggleAutocomplete", "showAutocomplete"];
 
 const IGNORE_ACTION: &str = "ignore";
 
 /// Read this setting at the point where a global Tab is intercepted.
 ///
 /// `figterm` is a long-lived process and normally loads the settings file once
-/// at startup.  `onlyShowOnTab` is editable from the dashboard while a shell is
+/// at startup.  `onlyShowOnTab` is editable from settings while a shell is
 /// still running, though, so caching it in a `LazyLock` makes the old setting
 /// stick until the terminal is restarted.  Refresh the settings snapshot
 /// before reading it; this branch only runs for a Tab while the overlay is
@@ -103,9 +100,6 @@ pub struct KeyInterceptor {
     intercept: bool,
 
     window_visible: bool,
-
-    // TODO: this should be based on `availability`
-    _global_actions: Vec<Action>,
 
     mappings: DashMap<KeyEvent, String, fnv::FnvBuildHasher>,
 }
@@ -214,7 +208,7 @@ impl KeyInterceptor {
 
                 match self.mappings.get(key_event) {
                     Some(action) if action.value() == IGNORE_ACTION => None,
-                    Some(action) if GLOBAL_ACTIONS.contains(&action.value().as_str()) => Some(action.value().clone()),
+                    Some(action) if intercepts_while_hidden(action.value()) => Some(action.value().clone()),
                     _ => None,
                 }
             },
@@ -300,5 +294,60 @@ mod tests {
         assert_eq!(tab_only_action(&tab, true), Some("showAutocompleteFromTab"));
         assert_eq!(tab_only_action(&enter, true), None);
         assert_eq!(tab_only_action(&tab, false), None);
+    }
+
+    #[test]
+    fn hidden_overlay_does_not_steal_esc_or_enter() {
+        let mut interceptor = KeyInterceptor::new();
+        interceptor.load_key_intercepts().unwrap();
+        interceptor.set_actions(
+            &[Action {
+                identifier: "showAutocomplete".into(),
+                bindings: vec!["control+s".into()],
+            }],
+            false,
+        );
+        interceptor.set_intercept_global(true);
+        interceptor.set_intercept(false);
+
+        assert_eq!(
+            interceptor.intercept_key(&KeyEvent {
+                key: KeyCode::Escape,
+                modifiers: Modifiers::NONE
+            }),
+            None,
+            "parked overlay must not steal ESC from the shell"
+        );
+        assert_eq!(
+            interceptor.intercept_key(&KeyEvent {
+                key: KeyCode::Enter,
+                modifiers: Modifiers::NONE
+            }),
+            None,
+            "insertSelected is WhenFocused"
+        );
+        assert_eq!(
+            interceptor.intercept_key(&KeyEvent {
+                key: KeyCode::Char('s'),
+                modifiers: Modifiers::CTRL
+            }),
+            Some("showAutocomplete".into())
+        );
+    }
+
+    #[test]
+    fn global_intercept_uses_actions_json_availability() {
+        let production = include_str!("interceptor.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains("intercepts_while_hidden") && !production.contains("GLOBAL_ACTIONS"),
+            "hidden-overlay intercept must use actions.json availability, not a hardcoded pair"
+        );
+        assert!(
+            !production.contains("_global_actions"),
+            "availability lives in fig_settings::keybindings, not a dead interceptor field"
+        );
     }
 }

@@ -594,6 +594,27 @@ mod tests {
                 && workspace.contains("\"signal\""),
             "workspace tokio lists used features instead of full"
         );
+        assert!(
+            !std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../figterm/src/inline")).exists()
+                && !std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_cli/src/cli/inline.rs")).exists()
+                && !std::path::Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../ec_cli/src/cli/internal/inline_shell_completion.rs"
+                ))
+                .exists()
+                && !std::path::Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../fig_integrations/src/shell/inline_shell_completion"
+                ))
+                .exists(),
+            "Amazon Q inline shell completion is gone; proto handlers stay no-ops"
+        );
+        let figterm_message = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../figterm/src/message.rs"));
+        assert!(
+            figterm_message.contains("FigtermRequest::InlineShellCompletion(_)")
+                && !figterm_message.contains("crate::inline"),
+            "figterm still drops inline-shell-completion proto requests without restoring the module"
+        );
     }
 
     #[test]

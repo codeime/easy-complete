@@ -1,8 +1,12 @@
 use std::fmt::Display;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, JsonStore, OldSettings};
+
+static HARDCODED_DESCRIPTIONS: LazyLock<Vec<KeyBindingDescription>> =
+    LazyLock::new(|| serde_json::from_str(include_str!("actions.json")).expect("Unable to load hardcoded actions"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -33,22 +37,52 @@ pub struct KeyBinding {
 #[serde(transparent)]
 pub struct KeyBindings(pub Vec<KeyBinding>);
 
+/// Bundled autocomplete actions: identifier, availability, default bindings.
+pub fn hardcoded_descriptions() -> &'static [KeyBindingDescription] {
+    &HARDCODED_DESCRIPTIONS
+}
+
+/// `None` for private overlay actions such as `showAutocompleteFromTab`.
+pub fn action_availability(identifier: &str) -> Option<Availability> {
+    hardcoded_descriptions()
+        .iter()
+        .find(|description| description.identifier == identifier)
+        .and_then(|description| description.availability)
+}
+
+/// PTY intercept while the overlay is hidden but still holding rows.
+///
+/// `Always` in `actions.json` is the WebView "works without overlay key
+/// focus" bit — the panel is never activating. Once the list is parked, ESC
+/// (`hideAutocomplete`) must reach the shell; intercepting it would steal
+/// the second Escape after hide-until-shown / onlyShowOnTab.
+pub fn intercepts_while_hidden(identifier: &str) -> bool {
+    action_availability(identifier) == Some(Availability::Always) && identifier != "hideAutocomplete"
+}
+
+/// One entry per identifier that has a default binding, for figterm intercept.
+pub fn default_action_bindings() -> Vec<(String, Vec<String>)> {
+    hardcoded_descriptions()
+        .iter()
+        .filter_map(|description| {
+            let bindings = description.default_bindings.as_ref()?;
+            if bindings.is_empty() {
+                return None;
+            }
+            Some((description.identifier.clone(), bindings.clone()))
+        })
+        .collect()
+}
+
 impl KeyBindings {
     pub fn load_hardcoded() -> Self {
-        let hardcoded_descriptions: Vec<KeyBindingDescription> =
-            serde_json::from_str(include_str!("actions.json")).expect("Unable to load hardcoded actions");
-
-        let key_bindings = hardcoded_descriptions
-            .into_iter()
+        let key_bindings = hardcoded_descriptions()
+            .iter()
             .flat_map(|description| {
-                description
-                    .default_bindings
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |binding| KeyBinding {
-                        identifier: description.identifier.clone(),
-                        binding,
-                    })
+                description.default_bindings.iter().flatten().map(|binding| KeyBinding {
+                    identifier: description.identifier.clone(),
+                    binding: binding.clone(),
+                })
             })
             .collect();
 
@@ -133,5 +167,54 @@ mod test {
 
         assert_eq!(json.0[3].identifier, "decreaseSize");
         assert_eq!(json.0[3].binding, "control+=");
+    }
+
+    #[test]
+    fn availability_matches_actions_json() {
+        assert_eq!(action_availability("insertSelected"), Some(Availability::WhenFocused));
+        assert_eq!(action_availability("hideAutocomplete"), Some(Availability::Always));
+        assert_eq!(action_availability("showAutocomplete"), Some(Availability::Always));
+        assert_eq!(action_availability("toggleAutocomplete"), Some(Availability::Always));
+        assert_eq!(action_availability("showAutocompleteFromTab"), None);
+    }
+
+    #[test]
+    fn hide_autocomplete_is_always_but_does_not_steal_esc_while_hidden() {
+        assert!(intercepts_while_hidden("showAutocomplete"));
+        assert!(intercepts_while_hidden("toggleAutocomplete"));
+        assert!(!intercepts_while_hidden("hideAutocomplete"));
+        assert!(!intercepts_while_hidden("insertSelected"));
+        assert!(!intercepts_while_hidden("showAutocompleteFromTab"));
+    }
+
+    #[test]
+    fn default_bindings_follow_actions_json_not_the_gpui_port_drift() {
+        let bindings = default_action_bindings();
+        let find = |id: &str| {
+            bindings
+                .iter()
+                .find(|(identifier, _)| identifier == id)
+                .map(|(_, keys)| keys.as_slice())
+        };
+        assert_eq!(find("selectSuggestion1"), Some(["control+1".to_string()].as_slice()));
+        assert_eq!(find("toggleDescription"), Some(["command+i".to_string()].as_slice()));
+        assert_eq!(
+            find("navigateUp"),
+            Some(
+                [
+                    "shift+tab".to_string(),
+                    "up".to_string(),
+                    "control+k".to_string(),
+                    "control+p".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            find("navigateDown"),
+            Some(["down".to_string(), "control+j".to_string(), "control+n".to_string()].as_slice())
+        );
+        assert!(find("showAutocomplete").is_none());
+        assert!(find("toggleAutocomplete").is_none());
     }
 }

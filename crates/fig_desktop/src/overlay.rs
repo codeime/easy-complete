@@ -18,7 +18,7 @@ use ec_gpui::{
 use fig_proto::figterm::Action;
 use fig_proto::local::caret_position_hook::Origin;
 use fig_remote_ipc::figterm::{FigtermCommand, FigtermState, InterceptMode};
-use fig_settings::keybindings::{KeyBinding, KeyBindings};
+use fig_settings::keybindings::{Availability, KeyBinding, KeyBindings, action_availability, default_action_bindings};
 use gpui::{App, AppContext as _, Entity, Pixels, Point, Size, px, size};
 use tao::dpi::{LogicalPosition, LogicalSize, Position};
 use tracing::{debug, error, warn};
@@ -1168,7 +1168,17 @@ fn description_hint_from_settings() -> String {
         })
         .map(|binding| format_keybinding(&binding.binding))
         .filter(|binding| !binding.is_empty())
-        .unwrap_or_else(|| "⌃k".into())
+        .unwrap_or_else(default_toggle_description_hint)
+}
+
+fn default_toggle_description_hint() -> String {
+    default_action_bindings()
+        .into_iter()
+        .find(|(identifier, _)| identifier == "toggleDescription")
+        .and_then(|(_, bindings)| bindings.into_iter().next())
+        .map(|binding| format_keybinding(&binding))
+        .filter(|binding| !binding.is_empty())
+        .unwrap_or_else(|| "⌘i".into())
 }
 
 fn format_keybinding(binding: &str) -> String {
@@ -1890,24 +1900,7 @@ fn set_intercept_flags(figterm_state: &FigtermState, session_id: Uuid, intercept
 }
 
 fn action_requires_visible(action: &str) -> bool {
-    matches!(
-        action,
-        "navigateUp"
-            | "navigateDown"
-            | "insertSelected"
-            | "insertCommonPrefixOrInsertSelected"
-            | "insertSelectedAndExecute"
-            | "execute"
-            | "insertCommonPrefix"
-            | "insertCommonPrefixOrNavigateDown"
-            | "toggleDescription"
-            | "showDescription"
-            | "hideDescription"
-            | "toggleHistoryMode"
-            | "toggleFuzzySearch"
-            | "increaseSize"
-            | "decreaseSize"
-    ) || action.starts_with("selectSuggestion")
+    action_availability(action) == Some(Availability::WhenFocused)
 }
 
 fn action_is_allowed(action: &str, visible: bool, loading: bool) -> bool {
@@ -1937,38 +1930,15 @@ fn select_suggestion_index(n: usize, len: usize) -> Option<usize> {
     (n >= 1 && n <= len).then(|| n - 1)
 }
 
-const DEFAULT_OVERLAY_BINDINGS: &[(&str, &[&str])] = &[
-    ("insertSelected", &["enter"]),
-    ("insertCommonPrefix", &["tab"]),
-    ("hideAutocomplete", &["esc"]),
-    ("navigateUp", &["shift+tab", "up", "control+p"]),
-    ("navigateDown", &["down", "control+n"]),
-    ("selectSuggestion1", &["command+1"]),
-    ("selectSuggestion2", &["command+2"]),
-    ("selectSuggestion3", &["command+3"]),
-    ("selectSuggestion4", &["command+4"]),
-    ("selectSuggestion5", &["command+5"]),
-    ("selectSuggestion6", &["command+6"]),
-    ("selectSuggestion7", &["command+7"]),
-    ("selectSuggestion8", &["command+8"]),
-    ("selectSuggestion9", &["command+9"]),
-    ("selectSuggestion10", &["command+0"]),
-    ("toggleDescription", &["control+k"]),
-    ("toggleHistoryMode", &["control+r"]),
-];
-
 fn overlay_actions() -> Vec<Action> {
     let user = KeyBindings::load_from_settings("autocomplete").unwrap_or_else(|_| KeyBindings(Vec::new()));
-    merge_overlay_actions(DEFAULT_OVERLAY_BINDINGS, user)
+    merge_overlay_actions(default_action_bindings(), user)
 }
 
-fn merge_overlay_actions(defaults: &[(&str, &[&str])], user: KeyBindings) -> Vec<Action> {
+fn merge_overlay_actions(defaults: impl IntoIterator<Item = (String, Vec<String>)>, user: KeyBindings) -> Vec<Action> {
     let mut actions: Vec<Action> = defaults
-        .iter()
-        .map(|(identifier, bindings)| Action {
-            identifier: (*identifier).to_string(),
-            bindings: bindings.iter().map(|binding| (*binding).to_string()).collect(),
-        })
+        .into_iter()
+        .map(|(identifier, bindings)| Action { identifier, bindings })
         .collect();
     for KeyBinding { identifier, binding } in user {
         actions.push(Action {
@@ -3031,7 +3001,7 @@ mod tests {
                 binding: "tab".into(),
             },
         ]);
-        let actions = merge_overlay_actions(DEFAULT_OVERLAY_BINDINGS, user);
+        let actions = merge_overlay_actions(default_action_bindings(), user);
         assert!(
             actions
                 .iter()
@@ -3052,5 +3022,45 @@ mod tests {
         assert_eq!(format_keybinding("command+i"), "⌘i");
         assert_eq!(format_keybinding("control+shift+k"), "⌃⇧k");
         assert_eq!(format_keybinding("option+return"), "⌥↵");
+    }
+
+    #[test]
+    fn overlay_defaults_come_from_actions_json() {
+        let src = include_str!("overlay.rs");
+        let overlay_actions = rust_fn_body(src, "fn overlay_actions");
+        assert!(
+            overlay_actions.contains("default_action_bindings()")
+                && !src.contains(&["const ", "DEFAULT_OVERLAY_BINDINGS"].concat()),
+            "overlay intercept bindings must come from actions.json, not a GPUI-port copy"
+        );
+        let requires_visible = rust_fn_body(src, "fn action_requires_visible");
+        assert!(
+            requires_visible.contains("Availability::WhenFocused") && !requires_visible.contains("toggleHistoryMode"),
+            "action_requires_visible must use actions.json availability"
+        );
+        assert!(
+            !src.contains(&["\"", "⌃k\""].concat()) && src.contains("default_toggle_description_hint"),
+            "description hint fallback must follow toggleDescription's default binding"
+        );
+        assert_eq!(default_toggle_description_hint(), "⌘i");
+        let actions = merge_overlay_actions(default_action_bindings(), KeyBindings(Vec::new()));
+        let bindings = |id: &str| {
+            actions
+                .iter()
+                .find(|action| action.identifier == id)
+                .map(|action| action.bindings.as_slice())
+        };
+        assert_eq!(
+            bindings("selectSuggestion1"),
+            Some(["control+1".to_string()].as_slice())
+        );
+        assert_eq!(
+            bindings("toggleDescription"),
+            Some(["command+i".to_string()].as_slice())
+        );
+        assert!(bindings("navigateUp").is_some_and(|keys| keys.iter().any(|key| key == "control+k")));
+        assert!(bindings("navigateDown").is_some_and(|keys| keys.iter().any(|key| key == "control+j")));
+        assert!(bindings("increaseSize").is_some());
+        assert!(bindings("showAutocomplete").is_none());
     }
 }
