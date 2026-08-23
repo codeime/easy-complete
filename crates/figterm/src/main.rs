@@ -577,9 +577,11 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
     // Two workers is enough for this process: the main loop is one `block_on`,
     // and the rest is I/O (stdin, the figterm listener, remote IPC, history).
     // The default pool is one thread per core, and `ecterm` multiplies by tab,
-    // so that was paying for stacks the grid never used.
+    // so that was paying for stacks the grid never used. Cap blocking at 8
+    // like the desktop so a tab cannot grow an unbounded blocking pool.
     let runtime = runtime::Builder::new_multi_thread()
         .worker_threads(2)
+        .max_blocking_threads(8)
         .enable_all()
         .thread_name_fn(|| {
             static ATOMIC_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -785,7 +787,9 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
                                                     .unwrap_or_default();
                                                 let context = shell_state_to_context(term.shell_state());
                                                 let hook = fig_proto::remote_hooks::new_intercepted_key_hook(context, action, s);
-                                                remote_sender.send(hook_to_message(hook)).unwrap();
+                                                if let Err(err) = remote_sender.send(hook_to_message(hook)) {
+                                                    error!(%err, "Sender error");
+                                                }
 
                                                 if event.key == KeyCode::Escape {
                                                     key_interceptor.reset();
@@ -1018,6 +1022,43 @@ mod tests {
     #[test]
     fn hostname_does_not_need_sysinfo() {
         assert!(hostname().is_some_and(|name| !name.is_empty()));
+    }
+
+    #[test]
+    fn intercept_remote_sender_does_not_unwrap() {
+        let production = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        // Concat so `rg` for the old unwrap is empty of this pin too.
+        assert!(
+            !production.contains(&["remote_sender.send(hook_to_message(hook))", ".unwrap()"].concat()),
+            "a closed intercept channel must log instead of panicking ecterm"
+        );
+        assert!(
+            production.contains("remote_sender.send(hook_to_message(hook))"),
+            "intercept still sends the intercepted-key hook"
+        );
+        assert!(
+            production.contains("Sender error"),
+            "intercept send failure should log like EventHandler"
+        );
+    }
+
+    #[test]
+    fn tokio_runtime_caps_blocking_threads() {
+        let production = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
+        assert!(
+            production.contains(".worker_threads(2)"),
+            "ecterm must keep two tokio workers"
+        );
+        assert!(
+            production.contains(".max_blocking_threads(8)"),
+            "ecterm blocking pool must match the desktop cap of 8"
+        );
     }
 
     #[test]
