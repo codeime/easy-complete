@@ -11,7 +11,6 @@ use std::sync::{Arc, OnceLock};
 use fig_os_shim::Context;
 use fig_remote_ipc::figterm::FigtermState;
 use gpui::AppContext as _;
-use tao::window::Theme as TaoTheme;
 use tracing::{debug, error, warn};
 
 use self::menu::menu_bar;
@@ -25,14 +24,6 @@ use crate::tray::build_tray;
 use crate::{EventLoopProxy, EventLoopWindowTarget, file_watcher, local_ipc};
 
 pub const AUTOCOMPLETE_WINDOW_TITLE: &str = ec_gpui::OVERLAY_WINDOW_TITLE;
-
-fn map_theme(theme: &str) -> Option<TaoTheme> {
-    match theme {
-        "dark" => Some(TaoTheme::Dark),
-        "light" => Some(TaoTheme::Light),
-        _ => None,
-    }
-}
 
 pub struct AppRuntime {
     pub(crate) event_rx: flume::Receiver<Event>,
@@ -60,12 +51,11 @@ impl AppRuntime {
     pub fn new(context: Arc<Context>, visible: bool, show_settings_after_normal_launch: bool) -> Self {
         #[cfg(target_os = "macos")]
         if !visible {
-            use tao::platform::macos::ActivationPolicy;
-
             use crate::platform::ACTIVATION_POLICY;
+            use crate::platform::caret::MacosActivationPolicy;
 
-            *crate::utils::recover_mutex(&ACTIVATION_POLICY) = ActivationPolicy::Accessory;
-            crate::platform::set_activation_policy(ActivationPolicy::Accessory);
+            *crate::utils::recover_mutex(&ACTIVATION_POLICY) = MacosActivationPolicy::Accessory;
+            crate::platform::set_activation_policy(MacosActivationPolicy::Accessory);
         }
 
         let (proxy, event_rx) = crate::event_loop::channel();
@@ -290,11 +280,8 @@ async fn init_notification_listeners(proxy: EventLoopProxy) {
         settings,
         "app.theme",
         |notification: JsonNotification, proxy: &EventLoopProxy| {
-            let theme = notification.into_string().as_deref().and_then(map_theme);
-            debug!(?theme, "Theme changed");
-            proxy.send_event_or_warn(Event::WindowEventAll {
-                window_event: WindowEvent::SetTheme(theme),
-            });
+            debug!(theme = ?notification.into_string(), "Theme changed");
+            proxy.send_event_or_warn(Event::ThemeChanged);
         }
     );
 

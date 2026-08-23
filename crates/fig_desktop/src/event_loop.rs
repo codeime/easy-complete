@@ -1,8 +1,8 @@
-//! Event-loop types used by `fig_desktop` after the process host moved from tao to GPUI.
+//! Event-loop types used by `fig_desktop` after the process host moved from wry/tao to GPUI.
 //!
 //! Background tasks (IPC, accessibility, tray) still post [`crate::event::Event`]s. The GPUI
-//! application drains them on its UI thread. This replaces `tao::event_loop::EventLoopProxy`
-//! so the rest of the crate can keep calling `send_event`.
+//! application drains them on its UI thread. This replaces the old windowing crate's
+//! event-loop proxy so the rest of the crate can keep calling `send_event`.
 
 use std::fmt;
 
@@ -44,15 +44,15 @@ impl EventLoopProxy {
     }
 }
 
-/// Stand-in for tao's window-target. Dashboard windows are created with AppKit directly; this
-/// type only carries activation-policy changes onto `NSApplication`.
+/// Stand-in for the old window-target. Settings windows are GPUI; this type
+/// only carries activation-policy changes onto `NSApplication`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EventLoopWindowTarget;
 
 impl EventLoopWindowTarget {
     /// Apply an `NSApplicationActivationPolicy` at runtime.
     #[cfg(target_os = "macos")]
-    pub fn set_activation_policy_at_runtime(&self, policy: tao::platform::macos::ActivationPolicy) {
+    pub fn set_activation_policy_at_runtime(&self, policy: crate::platform::caret::MacosActivationPolicy) {
         crate::platform::set_activation_policy(policy);
     }
 }
@@ -66,13 +66,12 @@ pub(crate) fn channel() -> (EventLoopProxy, flume::Receiver<Event>) {
 mod tests {
     use super::*;
     use crate::event::Event;
-    use tao::event_loop::ControlFlow;
 
     #[test]
     fn send_event_or_warn_does_not_panic_after_disconnect() {
         let (proxy, rx) = channel();
         drop(rx);
-        proxy.send_event_or_warn(Event::ControlFlow(ControlFlow::Exit));
-        assert!(proxy.send_event(Event::ControlFlow(ControlFlow::Exit)).is_err());
+        proxy.send_event_or_warn(Event::Quit);
+        assert!(proxy.send_event(Event::Quit).is_err());
     }
 }

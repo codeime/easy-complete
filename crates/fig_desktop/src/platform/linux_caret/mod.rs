@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use tao::dpi::Position;
 use tracing::info;
 
 use super::{PlatformBoundEvent, PlatformWindow};
 use crate::bootstrap::WindowId;
+use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::utils::Rect;
 use crate::{EventLoopProxy, EventLoopWindowTarget};
 
@@ -97,8 +97,8 @@ impl PlatformStateImpl {
         let window = *self.active_window.lock();
         window.map(|window| PlatformWindow {
             rect: Rect {
-                position: tao::dpi::LogicalPosition::new(window.outer_x as f64, window.outer_y as f64).into(),
-                size: tao::dpi::LogicalSize::new(window.outer_width as f64, window.outer_height as f64).into(),
+                position: LogicalPosition::new(window.outer_x as f64, window.outer_y as f64).into(),
+                size: LogicalSize::new(window.outer_width as f64, window.outer_height as f64).into(),
             },
             inner: PlatformWindowImpl {
                 wm_class: String::new(),

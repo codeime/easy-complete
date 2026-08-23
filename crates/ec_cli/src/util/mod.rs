@@ -2,7 +2,6 @@ mod cli_context;
 pub mod desktop;
 #[cfg(unix)]
 pub mod pid_file;
-mod region_check;
 pub mod spinner;
 
 use std::env;
@@ -27,7 +26,6 @@ use fig_util::consts::APP_BUNDLE_ID;
 use fig_util::{CLI_BINARY_NAME, PRODUCT_NAME};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
-pub use region_check::region_check;
 use tracing::warn;
 
 /// Glob patterns against full paths
@@ -189,14 +187,6 @@ pub fn app_not_running_message() -> String {
         "\n{}\n{PRODUCT_NAME} app might not be running, to launch {PRODUCT_NAME} run: {}\n",
         format!("Unable to connect to {PRODUCT_NAME} app").bold(),
         format!("{CLI_BINARY_NAME} launch").magenta()
-    )
-}
-
-pub fn login_message() -> String {
-    format!(
-        "{}\nLooks like you aren't logged in to {PRODUCT_NAME}, to login run: {}",
-        "Not logged in".bold(),
-        format!("{CLI_BINARY_NAME} login").magenta()
     )
 }
 

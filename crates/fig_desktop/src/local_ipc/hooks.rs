@@ -1,7 +1,7 @@
 use anyhow::Result;
 use fig_proto::local::{CaretPositionHook, FileChangedHook, FocusedWindowDataHook};
-use tao::dpi::{LogicalPosition, LogicalSize};
 
+use crate::dpi::{LogicalPosition, LogicalSize};
 use crate::event::{WindowEvent, WindowPosition};
 use crate::platform::PlatformState;
 use crate::{AUTOCOMPLETE_ID, Event, EventLoopProxy};
@@ -34,10 +34,6 @@ pub async fn caret_position(
                 caret_size: LogicalSize::new(width, height).into(),
                 origin: hook.origin(),
             }),
-            size: None,
-            anchor: None,
-            tx: None,
-            dry_run: false,
         },
     });
 

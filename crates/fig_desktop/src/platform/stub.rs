@@ -1,11 +1,12 @@
-//! Stand-in for desktop platforms that do not yet have a caret backend
-//! (currently Windows). Linux uses `linux_caret/`. Do not invent a window-rect
-//! placement fallback.
+//! Stand-in for desktop platforms that do not have a caret backend.
+//! Linux uses `linux_caret/`; Windows uses `windows_caret.rs`. Do not invent
+//! a window-rect placement fallback.
 
 use std::sync::Arc;
 
 use serde::Serialize;
-use tao::dpi::Position;
+
+use crate::dpi::Position;
 use tracing::info;
 
 use super::{PlatformBoundEvent, PlatformWindow};

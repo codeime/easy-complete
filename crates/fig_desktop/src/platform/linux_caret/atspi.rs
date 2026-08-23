@@ -374,10 +374,6 @@ fn send_caret(proxy: &EventLoopProxy, caret: crate::platform::caret::CaretOnScre
                 caret_size: caret.size,
                 origin: caret.origin,
             }),
-            size: None,
-            anchor: None,
-            tx: None,
-            dry_run: false,
         },
     });
 }

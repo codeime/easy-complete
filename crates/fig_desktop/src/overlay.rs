@@ -20,10 +20,10 @@ use fig_proto::local::caret_position_hook::Origin;
 use fig_remote_ipc::figterm::{FigtermCommand, FigtermState, InterceptMode};
 use fig_settings::keybindings::{Availability, KeyBinding, KeyBindings, action_availability, default_action_bindings};
 use gpui::{App, AppContext as _, Entity, Pixels, Point, Size, px, size};
-use tao::dpi::{LogicalPosition, LogicalSize, Position};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
+use crate::dpi::LogicalSize;
 use crate::event::{Event, WindowPosition};
 use crate::event_loop::EventLoopProxy;
 use crate::platform::PlatformState;
@@ -1226,7 +1226,7 @@ fn overlay_metrics() -> OverlayMetrics {
     }
 }
 
-fn overlay_window_size_from(overlay: &OverlayState) -> LogicalSize<f64> {
+fn overlay_window_size_from(overlay: &OverlayState) -> LogicalSize {
     let (width, height) = overlay_content_size_with_context(
         overlay.items.len(),
         overlay.effective_row_height(),
@@ -1953,7 +1953,7 @@ fn merge_overlay_actions(defaults: impl IntoIterator<Item = (String, Vec<String>
 
 fn overlay_bounds(
     position: WindowPosition,
-    overlay_size: LogicalSize<f64>,
+    overlay_size: LogicalSize,
     platform_state: &PlatformState,
     popout: bool,
     flip_height: f64,
@@ -1961,10 +1961,7 @@ fn overlay_bounds(
 ) -> (Point<Pixels>, Size<Pixels>, bool, bool) {
     match position {
         WindowPosition::Absolute(pos) => {
-            let logical: LogicalPosition<f64> = match pos {
-                Position::Logical(p) => LogicalPosition::new(p.x, p.y),
-                Position::Physical(p) => p.to_logical(1.0),
-            };
+            let logical = pos.to_logical(1.0);
             (
                 gpui::point(px(logical.x as f32), px(logical.y as f32)),
                 size(px(overlay_size.width as f32), px(overlay_size.height as f32)),
@@ -1983,14 +1980,8 @@ fn overlay_bounds(
             caret_size,
             origin,
         } => {
-            let mut caret: LogicalPosition<f64> = match caret_position {
-                Position::Logical(p) => LogicalPosition::new(p.x, p.y),
-                Position::Physical(p) => p.to_logical(1.0),
-            };
-            let caret_size: LogicalSize<f64> = match caret_size {
-                tao::dpi::Size::Logical(s) => LogicalSize::new(s.width, s.height),
-                tao::dpi::Size::Physical(s) => s.to_logical(1.0),
-            };
+            let mut caret = caret_position.to_logical(1.0);
+            let caret_size = caret_size.to_logical(1.0);
             caret.y = caret_y_in_screen_space(caret.y, caret_size.height, origin, screens.first().copied());
             let mut edges = screen_edges_containing(screens, caret.x, caret.y);
             let mut flip_bottom = edges.map(|(_, _, _, bottom)| bottom);
@@ -2106,21 +2097,9 @@ fn caret_y_in_screen_space(
 }
 
 fn window_edges(rect: &crate::utils::Rect) -> (f64, f64, f64, f64) {
-    let pos = match rect.position {
-        Position::Logical(p) => (p.x, p.y),
-        Position::Physical(p) => {
-            let p = p.to_logical(1.0);
-            (p.x, p.y)
-        },
-    };
-    let size = match rect.size {
-        tao::dpi::Size::Logical(s) => (s.width, s.height),
-        tao::dpi::Size::Physical(s) => {
-            let s = s.to_logical(1.0);
-            (s.width, s.height)
-        },
-    };
-    (pos.0, pos.1, pos.0 + size.0, pos.1 + size.1)
+    let pos = rect.position.to_logical(1.0);
+    let size = rect.size.to_logical(1.0);
+    (pos.x, pos.y, pos.x + size.width, pos.y + size.height)
 }
 
 #[allow(clippy::type_complexity)]

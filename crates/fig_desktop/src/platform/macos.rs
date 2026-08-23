@@ -25,12 +25,11 @@ use objc::runtime::{BOOL, Class, Object, Sel, class_addMethod};
 use objc::{Encode, EncodeArguments, Encoding, msg_send, sel, sel_impl};
 use objc2_foundation::{NSDictionary, NSOperationQueue, ns_string};
 use serde::Serialize;
-use tao::dpi::{LogicalPosition, LogicalSize, Position};
-use tao::platform::macos::ActivationPolicy;
 use tracing::{debug, error, trace, warn};
 
 use super::{PlatformBoundEvent, PlatformWindow};
 use crate::bootstrap::{GLOBAL_PROXY, WindowId};
+use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{
     MACOS_AX_MESSAGING_TIMEOUT_SECS, MacosActivationPolicy, MacosOverlayEnable, hide_overlay_on_element_change,
@@ -59,13 +58,13 @@ static MACOS_VERSION: LazyLock<semver::Version> = LazyLock::new(|| {
     semver::Version::new(version.major() as u64, version.minor() as u64, version.patch() as u64)
 });
 
-pub static ACTIVATION_POLICY: Mutex<ActivationPolicy> = Mutex::new(ActivationPolicy::Regular);
+pub static ACTIVATION_POLICY: Mutex<MacosActivationPolicy> = Mutex::new(MacosActivationPolicy::Regular);
 
 #[allow(dead_code)]
 pub fn activate_app() {
     // LSUIElement/menu-bar apps can switch back from Accessory to Regular without
     // AppKit automatically bringing the process forward. Explicit activation keeps
-    // dashboard opens from being treated like a wallpaper/desktop click on macOS.
+    // settings opens from being treated like a wallpaper/desktop click on macOS.
     unsafe {
         let Some(application) = Class::get("NSApplication") else {
             return;
@@ -194,12 +193,8 @@ impl PlatformWindowImpl {
     }
 }
 
-pub fn set_activation_policy(policy: ActivationPolicy) {
-    let ns_policy: i64 = macos_ns_activation_policy(match policy {
-        ActivationPolicy::Regular => MacosActivationPolicy::Regular,
-        ActivationPolicy::Prohibited => MacosActivationPolicy::Prohibited,
-        _ => MacosActivationPolicy::Accessory,
-    });
+pub fn set_activation_policy(policy: MacosActivationPolicy) {
+    let ns_policy: i64 = macos_ns_activation_policy(policy);
     unsafe {
         let Some(application) = Class::get("NSApplication") else {
             return;
@@ -464,10 +459,7 @@ impl PlatformStateImpl {
                 settings_visible,
             } => {
                 let settings_visible = settings_visible.unwrap_or_else(crate::settings_ui::is_open);
-                let policy = match macos_settings_activation_policy(fullscreen, settings_visible) {
-                    MacosActivationPolicy::Regular => ActivationPolicy::Regular,
-                    MacosActivationPolicy::Accessory | MacosActivationPolicy::Prohibited => ActivationPolicy::Accessory,
-                };
+                let policy = macos_settings_activation_policy(fullscreen, settings_visible);
 
                 let mut policy_lock = crate::utils::recover_mutex(&ACTIVATION_POLICY);
                 if *policy_lock != policy {
@@ -641,10 +633,6 @@ impl PlatformStateImpl {
                                 caret_size: caret.size,
                                 origin: Origin::TopLeft,
                             }),
-                            size: None,
-                            anchor: None,
-                            tx: None,
-                            dry_run: false,
                         },
                     })
                     .ok();

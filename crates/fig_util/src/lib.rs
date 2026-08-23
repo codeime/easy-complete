@@ -82,19 +82,6 @@ pub fn gen_hex_string() -> String {
     hex::encode(buf)
 }
 
-pub fn search_xdg_data_dirs(ext: impl AsRef<std::path::Path>) -> Option<PathBuf> {
-    let ext = ext.as_ref();
-    if let Ok(xdg_data_dirs) = std::env::var("XDG_DATA_DIRS") {
-        for base in xdg_data_dirs.split(':') {
-            let check = Path::new(base).join(ext);
-            if check.exists() {
-                return Some(check);
-            }
-        }
-    }
-    None
-}
-
 /// Returns the path to the original executable, not the symlink
 pub fn current_exe_origin() -> Result<PathBuf, Error> {
     Ok(std::env::current_exe()?.canonicalize()?)

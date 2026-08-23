@@ -1,12 +1,9 @@
 use std::borrow::Cow;
 
 use fig_proto::local::caret_position_hook::Origin;
-use tao::dpi::{LogicalSize, Position, Size};
-use tao::event_loop::ControlFlow;
-use tao::window::Theme;
-use tokio::sync::mpsc::UnboundedSender;
 
 use crate::bootstrap::WindowId;
+use crate::dpi::{Position, Size};
 use crate::platform::PlatformBoundEvent;
 
 #[allow(clippy::enum_variant_names)]
@@ -16,12 +13,12 @@ pub enum Event {
         window_id: WindowId,
         window_event: WindowEvent,
     },
-    WindowEventAll {
-        window_event: WindowEvent,
-    },
 
     PlatformBoundEvent(PlatformBoundEvent),
-    ControlFlow(ControlFlow),
+    /// Quit the GPUI application. Replaces the leftover tao `ControlFlow::Exit`.
+    Quit,
+    /// Overlay theme setting changed. The list re-reads `autocomplete.theme`.
+    ThemeChanged,
     SetTrayVisible(bool),
 
     /// Settings file or native settings UI changed. Re-apply overlay theme
@@ -114,11 +111,6 @@ pub enum WindowPosition {
     },
 }
 
-pub struct WindowGeometryResult {
-    pub is_above: bool,
-    pub is_clipped: bool,
-}
-
 #[derive(Debug, Clone)]
 pub enum WindowEvent {
     /// Sets the window to be enabled or disabled
@@ -126,14 +118,10 @@ pub enum WindowEvent {
     /// This will cause events to be ignored other than [`WindowEvent::Hide`] and
     /// [`WindowEvent::SetEnabled(true)`]
     SetEnabled(bool),
-    /// Sets the theme of the window (light, dark, or system if None)
-    SetTheme(Option<Theme>),
+    /// Place the overlay from a caret. The WebView geometry RPC (size, anchor,
+    /// measure-only) is gone; GPUI only consumes the caret position.
     UpdateWindowGeometry {
         position: Option<WindowPosition>,
-        size: Option<LogicalSize<f64>>,
-        anchor: Option<LogicalSize<f64>>,
-        dry_run: bool,
-        tx: Option<UnboundedSender<WindowGeometryResult>>,
     },
     /// Hides the window.
     Hide,

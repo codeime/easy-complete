@@ -69,10 +69,10 @@ pub struct InstallArgs {
     /// Don't confirm automatic installation.
     #[arg(long)]
     pub no_confirm: bool,
-    /// Force installation of q
+    /// Force installation
     #[arg(long)]
     pub force: bool,
-    /// Install q globally
+    /// Install globally
     #[arg(long)]
     pub global: bool,
 }

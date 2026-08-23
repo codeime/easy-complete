@@ -65,7 +65,6 @@ rfd = "0.17.2"
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tao = { version = "0.36.0", features = ["serde"] }
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true

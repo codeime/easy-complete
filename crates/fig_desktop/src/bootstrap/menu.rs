@@ -3,7 +3,6 @@ use fig_util::consts::PRODUCT_NAME;
 use fig_util::consts::url::{ISSUE_TRACKER, RELEASE_NOTES, USER_MANUAL};
 #[allow(unused_imports)]
 use muda::{Menu, MenuEvent, Submenu};
-use tao::event_loop::ControlFlow;
 
 use crate::event::{Event, WindowEvent};
 use crate::{EventLoopProxy, SETTINGS_ID};
@@ -133,7 +132,7 @@ pub fn menu_bar() -> Menu {
 
 pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
     match &menu_event.id().0 {
-        menu_id if menu_id == SETTINGS_QUIT => proxy.send_event_or_warn(Event::ControlFlow(ControlFlow::Exit)),
+        menu_id if menu_id == SETTINGS_QUIT => proxy.send_event_or_warn(Event::Quit),
         menu_id if menu_id == SETTINGS_CLOSE => proxy.send_event_or_warn(Event::WindowEvent {
             window_id: SETTINGS_ID,
             window_event: WindowEvent::Close,

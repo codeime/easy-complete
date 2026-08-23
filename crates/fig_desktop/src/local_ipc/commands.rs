@@ -11,7 +11,6 @@ use fig_proto::local::{
 use fig_remote_ipc::figterm::FigtermState;
 use fig_settings::StateProvider;
 use fig_settings::settings::SettingsProvider;
-use tao::event_loop::ControlFlow;
 use tracing::error;
 
 use super::{LocalResponse, LocalResult};
@@ -47,7 +46,7 @@ pub async fn debug(command: DebugModeCommand, proxy: &EventLoopProxy) -> LocalRe
 
 pub async fn quit(_: QuitCommand, proxy: &EventLoopProxy) -> LocalResult {
     proxy
-        .send_event(Event::ControlFlow(ControlFlow::Exit))
+        .send_event(Event::Quit)
         .map(|_| LocalResponse::Success(None))
         .map_err(|_err| {
             #[allow(clippy::exit)]

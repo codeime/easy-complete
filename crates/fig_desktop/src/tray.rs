@@ -9,7 +9,6 @@ use fig_util::consts::PRODUCT_NAME;
 use fig_util::url::USER_MANUAL;
 use muda::accelerator::Accelerator;
 use muda::{IconMenuItem, Menu, MenuEvent, MenuId, PredefinedMenuItem, Submenu};
-use tao::event_loop::ControlFlow;
 use tracing::{error, trace, warn};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -77,7 +76,7 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
             tray_update(proxy);
         },
         "quit" => {
-            proxy.send_event_or_warn(Event::ControlFlow(ControlFlow::Exit));
+            proxy.send_event_or_warn(Event::Quit);
         },
         "settings" => {
             proxy.send_event_or_warn(Event::WindowEvent {

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use ec_engine::{EngineClient, default_specs_dir};
 use gpui::{App, Application, Entity};
 use muda::MenuEvent;
-use tao::event_loop::ControlFlow;
 use tracing::{debug, error, info, trace};
 use tray_icon::TrayIcon;
 
@@ -43,13 +42,8 @@ impl DesktopHost {
                 window_id,
                 window_event,
             } => self.dispatch_window_event(window_id, window_event, cx),
-            Event::WindowEventAll { window_event } => {
-                if matches!(window_event, WindowEvent::SetTheme(_)) {
-                    self.overlay.apply_theme(cx);
-                }
-            },
-            Event::ControlFlow(ControlFlow::Exit) => cx.quit(),
-            Event::ControlFlow(_) => {},
+            Event::ThemeChanged => self.overlay.apply_theme(cx),
+            Event::Quit => cx.quit(),
             Event::ReloadTray => {
                 #[cfg(target_os = "linux")]
                 crate::linux_tray::reload();
@@ -174,7 +168,7 @@ impl DesktopHost {
             id if id == AUTOCOMPLETE_ID => match window_event {
                 WindowEvent::Hide | WindowEvent::Close => self.overlay.hide(cx),
                 WindowEvent::SetEnabled(enabled) => self.overlay.set_enabled(enabled, cx),
-                WindowEvent::UpdateWindowGeometry { position, .. } => {
+                WindowEvent::UpdateWindowGeometry { position } => {
                     if let Some(position) = position {
                         self.overlay.apply_position(position, &self.platform_state, cx);
                     }

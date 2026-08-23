@@ -5,10 +5,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::{Deserialize, Serialize};
-use tao::dpi::{Position, Size};
-#[cfg(any(target_os = "linux", test))]
-use tao::window::Icon;
 use tracing::warn;
+
+use crate::dpi::{Position, Size};
 
 /// Recover a [`Mutex`] after another thread panicked while holding it.
 ///
@@ -56,51 +55,6 @@ pub fn is_cargo_debug_build() -> bool {
     cfg!(debug_assertions) && !fig_settings::state::get_bool_or("developer.override-cargo-debug", false)
 }
 
-#[cfg(target_os = "linux")]
-#[allow(dead_code)] // XDG icon helper retained for packaging; tray embeds PNG
-pub fn icon() -> Option<Icon> {
-    load_icon(
-        fig_util::search_xdg_data_dirs("icons/hicolor/512x512/apps/fig.png")
-            .unwrap_or_else(|| "/usr/share/icons/hicolor/512x512/apps/fig.png".into()),
-    )
-    .or_else(load_from_memory)
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-pub fn icon() -> Option<Icon> {
-    load_from_memory()
-}
-
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-fn load_icon(path: impl AsRef<std::path::Path>) -> Option<Icon> {
-    let image = image::open(path).ok()?.into_rgba8();
-    let (width, height) = image.dimensions();
-    let rgba = image.into_raw();
-    Icon::from_rgba(rgba, width, height).ok()
-}
-
-#[cfg(any(target_os = "linux", test))]
-#[allow(dead_code)]
-fn load_from_memory() -> Option<Icon> {
-    // Same bundled PNG as before; failure degrades instead of panicking.
-    let image = match image::load_from_memory(include_bytes!("../icons/icon.png")) {
-        Ok(image) => image.into_rgba8(),
-        Err(err) => {
-            warn!(?err, "failed to decode bundled icon");
-            return None;
-        },
-    };
-    let (width, height) = image.dimensions();
-    match Icon::from_rgba(image.into_raw(), width, height) {
-        Ok(icon) => Some(icon),
-        Err(err) => {
-            warn!(?err, "failed to build bundled icon");
-            None
-        },
-    }
-}
-
 /// A logical rect, where the origin point is the top left corner.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
@@ -111,26 +65,26 @@ pub struct Rect {
 #[allow(dead_code)]
 impl Rect {
     pub fn left(&self, scale_factor: f64) -> f64 {
-        self.position.to_logical::<f64>(scale_factor).x
+        self.position.to_logical(scale_factor).x
     }
 
     pub fn right(&self, scale_factor: f64) -> f64 {
-        self.position.to_logical::<f64>(scale_factor).x + self.size.to_logical::<f64>(scale_factor).width
+        self.position.to_logical(scale_factor).x + self.size.to_logical(scale_factor).width
     }
 
     pub fn top(&self, scale_factor: f64) -> f64 {
-        self.position.to_logical::<f64>(scale_factor).y
+        self.position.to_logical(scale_factor).y
     }
 
     pub fn bottom(&self, scale_factor: f64) -> f64 {
-        self.position.to_logical::<f64>(scale_factor).y + self.size.to_logical::<f64>(scale_factor).height
+        self.position.to_logical(scale_factor).y + self.size.to_logical(scale_factor).height
     }
 
     pub fn contains(&self, point: Position, scale_factor: f64) -> bool {
-        let point = point.to_logical::<f64>(scale_factor);
+        let point = point.to_logical(scale_factor);
 
-        let rect_position = self.position.to_logical::<f64>(scale_factor);
-        let rect_size = self.size.to_logical::<f64>(scale_factor);
+        let rect_position = self.position.to_logical(scale_factor);
+        let rect_size = self.size.to_logical(scale_factor);
 
         let contains_x = point.x >= rect_position.x && point.x <= rect_position.x + rect_size.width;
         let contains_y = point.y >= rect_position.y && point.y <= rect_position.y + rect_size.height;
@@ -230,7 +184,7 @@ mod tests {
             "SetEnabled on a closed event loop must log, not panic the focus task"
         );
         let caret = macos.find("Sending caret update").expect("caret update");
-        let window = &macos[caret..caret + 2000];
+        let window = &macos[caret..macos.len().min(caret + 2000)];
         assert!(
             !window.contains(".unwrap()"),
             "a missing overlay event_sender must skip the caret send, not panic"
@@ -258,16 +212,10 @@ mod tests {
         );
     }
 
-    #[cfg_attr(target_os = "linux", ignore)]
-    #[test]
-    fn test_icon() {
-        assert!(icon().is_some(), "bundled icon.png must decode");
-    }
-
     #[test]
     fn bundled_icon_png_decodes() {
         assert!(
-            load_from_memory().is_some(),
+            image::load_from_memory(include_bytes!("../icons/icon.png")).is_ok(),
             "crates/fig_desktop/icons/icon.png must still decode on the happy path"
         );
     }

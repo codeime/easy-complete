@@ -8,7 +8,6 @@ use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
-use tao::dpi::Position;
 use tracing::info;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -19,6 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::{PlatformBoundEvent, PlatformWindow};
 use crate::bootstrap::AUTOCOMPLETE_ID;
 use crate::bootstrap::WindowId;
+use crate::dpi::Position;
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::platform::caret::{
     CaretOnScreen, Win32CaretPollAction, win32_caret_from_gui_thread, win32_caret_poll_action,
@@ -149,10 +149,6 @@ fn send_caret(proxy: &EventLoopProxy, caret: CaretOnScreen) {
                 caret_size: caret.size,
                 origin: caret.origin,
             }),
-            size: None,
-            anchor: None,
-            tx: None,
-            dry_run: false,
         },
     });
 }

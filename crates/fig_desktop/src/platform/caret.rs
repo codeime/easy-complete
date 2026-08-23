@@ -13,7 +13,8 @@
 use fig_proto::local::caret_position_hook::Origin;
 use fig_util::Terminal;
 use fig_util::terminal::PositioningKind;
-use tao::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
+
+use crate::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 
 /// IME-only terminals (Otty, Ghostty, Kitty, …) report the caret through IMK,
 /// not AX, so an in-window focused-element change is noise we cannot follow
@@ -29,7 +30,7 @@ pub(crate) fn hide_overlay_on_element_change(bundle_id: &str) -> bool {
     )
 }
 
-/// tao / NSApplication activation policy, without AppKit.
+/// NSApplication activation policy, without AppKit.
 ///
 /// `macos.rs` is `cfg(macos)`. Linux CI pins the NS integer mapping and the
 /// fullscreen / settings-window rule here.
@@ -41,7 +42,6 @@ pub(crate) enum MacosActivationPolicy {
 }
 
 /// `NSApplicationActivationPolicyRegular` is 0, Accessory 1, Prohibited 2.
-/// Unknown future tao variants map to Accessory, matching the previous `_ => 1`.
 pub(crate) fn macos_ns_activation_policy(policy: MacosActivationPolicy) -> i64 {
     match policy {
         MacosActivationPolicy::Regular => 0,
@@ -804,6 +804,58 @@ mod tests {
             figterm_message.contains("FigtermRequest::InlineShellCompletion(_)")
                 && !figterm_message.contains("crate::inline"),
             "figterm still drops inline-shell-completion proto requests without restoring the module"
+        );
+
+        let desktop_manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+        assert!(
+            !desktop_manifest.contains("tao"),
+            "GPUI host must not keep the wry/tao windowing crate"
+        );
+        let event = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/event.rs"));
+        assert!(
+            event.contains("Quit")
+                && event.contains("ThemeChanged")
+                && !event.contains("WindowEventAll")
+                && !event.contains("SetTheme")
+                && !event.contains("dry_run")
+                && !event.contains("WindowGeometryResult"),
+            "desktop events are GPUI quit/theme, not tao ControlFlow or WebView geometry RPC"
+        );
+        assert!(
+            !include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/utils.rs")).contains("fig.png"),
+            "desktop must not look up the leftover fig.png XDG icon"
+        );
+        assert!(
+            !workspace.contains("aws-smithy") && !workspace.contains("aws-types"),
+            "Amazon Q smithy workspace deps are gone"
+        );
+        let env = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_os_shim/src/env.rs"));
+        assert!(
+            !env.contains("amazon_q_sigv4")
+                && !env.contains("AMAZON_Q_CHAT_SHELL")
+                && !env.contains("Q_CLI_CLIENT_APPLICATION")
+                && !env.contains("Q_BACKEND")
+                && !env.contains("Q_USE_SENDMESSAGE")
+                && !env.contains("Q_CUSTOM_CERT"),
+            "unused Amazon Q env helpers are gone; keep Q_TERM / Q_PARENT / Q_LOG_LEVEL"
+        );
+        assert!(
+            !std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ec_cli/src/util/region_check.rs"
+            ))
+            .exists()
+                && !std::path::Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../ec_cli/tests/chat_response_stubs"
+                ))
+                .exists(),
+            "GovCloud region_check and Amazon Q chat fixtures are gone"
+        );
+        assert!(
+            !include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../fig_util/src/lib.rs"))
+                .contains("search_xdg_data_dirs"),
+            "fig_util must not keep the fig.png XDG lookup"
         );
     }
 

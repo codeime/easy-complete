@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use crate::dpi::Position;
 #[cfg(target_os = "macos")]
 use macos_utils::window_server::ApplicationSpecifier;
 use serde::Serialize;
-use tao::dpi::Position;
 
 use crate::bootstrap::WindowId;
 use crate::utils::Rect;
