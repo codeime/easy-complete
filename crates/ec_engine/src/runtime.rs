@@ -101,23 +101,39 @@ pub(crate) struct AutocompleteFlags {
 
 impl AutocompleteFlags {
     pub(crate) fn snapshot() -> Self {
-        let settings = fig_settings::settings::Settings::new();
-        let custom = settings.get_string_or("beta.history.customCommand", String::new());
+        use fig_settings::JsonStore;
+        // One `OldSettings::load` + one map, not a `get_*` (and its RwLock /
+        // file read) per flag. CLI never `init_global`, so the old path
+        // re-read settings.json ~10 times each complete.
+        let map = fig_settings::OldSettings::load()
+            .map(|settings| settings.map().clone())
+            .unwrap_or_default();
+        Self::from_map(&map)
+    }
+
+    fn from_map(map: &fig_settings::Map) -> Self {
+        fn bool_or(map: &fig_settings::Map, key: &str, default: bool) -> bool {
+            map.get(key).and_then(serde_json::Value::as_bool).unwrap_or(default)
+        }
+        fn string_or<'a>(map: &'a fig_settings::Map, key: &str) -> Option<&'a str> {
+            map.get(key).and_then(serde_json::Value::as_str)
+        }
+        let custom = string_or(map, "beta.history.customCommand").unwrap_or("");
         Self {
-            hide_auto_execute: settings.get_bool_or("autocomplete.hideAutoExecuteSuggestion", false),
-            only_show_on_tab: settings.get_bool_or("autocomplete.onlyShowOnTab", false),
-            immediately_run_dangerous: settings.get_bool_or("autocomplete.immediatelyRunDangerousCommands", false),
-            prefer_verbose: settings.get_bool_or("autocomplete.preferVerboseSuggestions", false),
-            always_suggest_current_token: settings.get_bool_or("autocomplete.alwaysSuggestCurrentToken", false),
-            immediately_execute_after_space: settings.get_bool_or("autocomplete.immediatelyExecuteAfterSpace", false),
-            history_disable_loading: settings.get_bool_or("autocomplete.history.disableLoading", false),
-            history_all_shells: settings.get_bool_or("beta.history.allShells", false),
-            history_custom_command: (!custom.is_empty()).then_some(custom),
-            alphabetical: settings.get_string_or("autocomplete.sortMethod", "default".into()) == "alphabetical",
-            disable_for_commands: settings
-                .get::<Vec<String>>("autocomplete.disableForCommands")
-                .ok()
-                .flatten()
+            hide_auto_execute: bool_or(map, "autocomplete.hideAutoExecuteSuggestion", false),
+            only_show_on_tab: bool_or(map, "autocomplete.onlyShowOnTab", false),
+            immediately_run_dangerous: bool_or(map, "autocomplete.immediatelyRunDangerousCommands", false),
+            prefer_verbose: bool_or(map, "autocomplete.preferVerboseSuggestions", false),
+            always_suggest_current_token: bool_or(map, "autocomplete.alwaysSuggestCurrentToken", false),
+            immediately_execute_after_space: bool_or(map, "autocomplete.immediatelyExecuteAfterSpace", false),
+            history_disable_loading: bool_or(map, "autocomplete.history.disableLoading", false),
+            history_all_shells: bool_or(map, "beta.history.allShells", false),
+            history_custom_command: (!custom.is_empty()).then(|| custom.to_owned()),
+            alphabetical: string_or(map, "autocomplete.sortMethod") == Some("alphabetical"),
+            disable_for_commands: map
+                .get("autocomplete.disableForCommands")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
                 .unwrap_or_default(),
         }
     }
@@ -595,6 +611,41 @@ mod tests {
         assert!(flags.history_custom_command.is_none());
         assert!(!flags.alphabetical);
         assert!(flags.disable_for_commands.is_empty());
+    }
+
+    #[test]
+    fn snapshot_loads_settings_map_once() {
+        let src = include_str!("runtime.rs");
+        let start = src.find("pub(crate) fn snapshot()").expect("snapshot");
+        let rest = &src[start..];
+        let end = rest.find("\n    fn from_map").expect("from_map");
+        let body = &rest[..end];
+        assert!(
+            body.contains("OldSettings::load") && body.contains("settings.map().clone()"),
+            "snapshot must load one settings map, not one get_* per flag"
+        );
+        assert!(
+            !body.contains("Settings::new") && !body.contains("get_bool_or") && !body.contains("get_string_or"),
+            "snapshot must not re-enter Settings getters (each is a load / RwLock)"
+        );
+        assert_eq!(
+            AutocompleteFlags::from_map(&fig_settings::Map::new()),
+            AutocompleteFlags::default()
+        );
+        let mut map = fig_settings::Map::new();
+        map.insert("autocomplete.hideAutoExecuteSuggestion".into(), true.into());
+        map.insert("autocomplete.sortMethod".into(), "alphabetical".into());
+        map.insert("beta.history.customCommand".into(), "hist".into());
+        map.insert(
+            "autocomplete.disableForCommands".into(),
+            serde_json::json!(["git", "npm"]),
+        );
+        let flags = AutocompleteFlags::from_map(&map);
+        assert!(flags.hide_auto_execute);
+        assert!(flags.alphabetical);
+        assert_eq!(flags.history_custom_command.as_deref(), Some("hist"));
+        assert_eq!(flags.disable_for_commands, ["git", "npm"]);
+        assert!(!flags.only_show_on_tab);
     }
 
     #[test]
