@@ -108,7 +108,7 @@ impl JsHost {
     ///
     /// An empty `clis` list clears everything. Otherwise only keys that belong
     /// to those CLI names (hook id prefix, generateSpec first token, or the
-    /// first token of a suggestion listing) are removed.
+    /// owning CLI token on a suggestion listing) are removed.
     pub fn clear_caches_for(&self, clis: &[String]) {
         if clis.is_empty() {
             self.suggestion_cache
@@ -516,7 +516,8 @@ fn retain_cli_keys<T>(cache: &Mutex<HashMap<String, T>>, clis: &[String]) {
 /// Whether a generateSpec / generator cache key is for `cli`.
 ///
 /// Hook ids are `{cli}#…` or `{cli}/…`. Explicit `generateSpecCacheKey` is
-/// `{firstToken}:{key}`. Suggestion listings are `{script|custom}:…,{tokens}`.
+/// `{firstToken}:{key}`. Suggestion listings start with the CLI token so a
+/// Fig `cache.cacheKey` that is not the CLI name still belongs to that CLI.
 /// `script:` / `custom:` themselves are generator kinds, not CLI names.
 pub(crate) fn cache_key_belongs_to_cli(key: &str, cli: &str) -> bool {
     if cli.is_empty() {
@@ -621,8 +622,11 @@ pub fn cached_suggestions(
     let Some(policy) = owned_cache_policy(arg) else {
         return Arc::new(run());
     };
+    // Own the listing with tokens[0] even when `cache.cacheKey` replaces the
+    // token list, so `--cli oxlint` can drop `oxlint-rules` / doppler `configs`.
+    let first = tokens.first().map_or("", String::as_str);
     let key = format!(
-        "{kind}:{}",
+        "{first}\x1f{kind}:{}",
         cache_key(policy.by_directory, cwd, policy.key.as_deref(), tokens)
     );
     let lookup = CachePolicy {
@@ -1665,11 +1669,15 @@ mod tests {
         assert!(cache_key_belongs_to_cli("git:userKey", "git"));
         assert!(cache_key_belongs_to_cli("script:,git checkout", "git"));
         assert!(cache_key_belongs_to_cli("script:/tmp,git", "git"));
+        assert!(cache_key_belongs_to_cli("oxlint\x1fscript:,oxlint-rules", "oxlint"));
+        assert!(cache_key_belongs_to_cli("doppler\x1fscript:/tmp,configs", "doppler"));
         assert!(!cache_key_belongs_to_cli("gitk#generateSpec#0", "git"));
         assert!(!cache_key_belongs_to_cli("script:,gitea", "git"));
         assert!(!cache_key_belongs_to_cli("script:,git checkout", "script"));
         assert!(!cache_key_belongs_to_cli("custom:/tmp,env", "git"));
         assert!(!cache_key_belongs_to_cli("demo#generateSpec#0\x1f/tmp", "git"));
+        assert!(!cache_key_belongs_to_cli("oxlint\x1fscript:,oxlint-rules", "ox"));
+        assert!(!cache_key_belongs_to_cli("oxlint\x1fscript:,oxlint-rules", "script"));
     }
 
     #[test]
@@ -1722,6 +1730,55 @@ mod tests {
             vec![Suggestion::new("rebuilt", "", "subcommand")]
         });
         assert_eq!(git_rows[0].name, "rebuilt");
+    }
+
+    #[test]
+    fn clear_caches_for_cli_drops_listings_whose_cache_key_is_not_the_cli() {
+        let host = JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
+        let oxlint = ArgSpec {
+            cache_key: Some("oxlint-rules".into()),
+            ..ArgSpec::default()
+        };
+        let doppler = ArgSpec {
+            cache_key: Some("configs".into()),
+            cache_by_directory: Some(true),
+            ..ArgSpec::default()
+        };
+        let demo = ArgSpec {
+            cache_key: Some("rows".into()),
+            ..ArgSpec::default()
+        };
+        let _ = cached_suggestions(&host, &oxlint, &["oxlint".into()], "/tmp", "script", || {
+            vec![Suggestion::new("correctness", "", "arg")]
+        });
+        let _ = cached_suggestions(&host, &doppler, &["doppler".into()], "/tmp", "script", || {
+            vec![Suggestion::new("dev", "", "arg")]
+        });
+        let _ = cached_suggestions(&host, &demo, &["demo".into()], "/tmp", "script", || {
+            vec![Suggestion::new("alpha", "", "arg")]
+        });
+        host.clear_caches_for(&[String::from("oxlint")]);
+        let oxlint_rows = cached_suggestions(&host, &oxlint, &["oxlint".into()], "/tmp", "script", || {
+            vec![Suggestion::new("rebuilt", "", "arg")]
+        });
+        assert_eq!(oxlint_rows[0].name, "rebuilt");
+        let doppler_rows = cached_suggestions(&host, &doppler, &["doppler".into()], "/tmp", "script", || {
+            panic!("doppler configs listing must remain")
+        });
+        assert_eq!(doppler_rows[0].name, "dev");
+        let demo_rows = cached_suggestions(&host, &demo, &["demo".into()], "/tmp", "script", || {
+            panic!("demo rows listing must remain")
+        });
+        assert_eq!(demo_rows[0].name, "alpha");
+        host.clear_caches_for(&[String::from("doppler")]);
+        let doppler_rows = cached_suggestions(&host, &doppler, &["doppler".into()], "/tmp", "script", || {
+            vec![Suggestion::new("rebuilt-configs", "", "arg")]
+        });
+        assert_eq!(doppler_rows[0].name, "rebuilt-configs");
+        let demo_rows = cached_suggestions(&host, &demo, &["demo".into()], "/tmp", "script", || {
+            panic!("demo rows listing must remain after doppler clear")
+        });
+        assert_eq!(demo_rows[0].name, "alpha");
     }
 
     #[test]
