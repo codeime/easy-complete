@@ -457,8 +457,13 @@ impl Engine {
 
     /// Drop in-process generateSpec / generator caches. Hook JS is re-read on
     /// the next complete. Does not touch the acceptance index or spec IR index.
+    /// Empty `clis` clears every CLI; otherwise only matching keys are dropped.
     pub fn clear_caches(&mut self) {
-        self.js_host.clear_caches();
+        self.clear_caches_for(&[]);
+    }
+
+    pub fn clear_caches_for(&mut self, clis: &[String]) {
+        self.js_host.clear_caches_for(clis);
     }
 
     /// Record a successful completion acceptance. This updates the engine's

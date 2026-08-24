@@ -32,6 +32,7 @@ enum JobKind {
         timestamp: u64,
     },
     ClearCaches {
+        clis: Vec<String>,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
 }
@@ -142,9 +143,9 @@ impl EngineClient {
                             );
                             continue;
                         },
-                        JobKind::ClearCaches { reply } => {
+                        JobKind::ClearCaches { clis, reply } => {
                             if let Some(engine) = engine.as_mut() {
-                                engine.clear_caches();
+                                engine.clear_caches_for(&clis);
                             }
                             let _ = reply.send(Ok(()));
                             continue;
@@ -170,13 +171,14 @@ impl EngineClient {
                                 timestamp,
                             );
                         },
-                        |reply| pending_clears.push(reply),
+                        |clis, reply| pending_clears.push((clis, reply)),
                     );
                     if !pending_clears.is_empty() {
+                        let clis = merge_cache_clear_filters(pending_clears.iter().map(|(clis, _)| clis.as_slice()));
                         if let Some(engine) = engine.as_mut() {
-                            engine.clear_caches();
+                            engine.clear_caches_for(&clis);
                         }
-                        for reply in pending_clears {
+                        for (_, reply) in pending_clears {
                             let _ = reply.send(Ok(()));
                         }
                     }
@@ -292,11 +294,16 @@ impl EngineClient {
     /// Drop generateSpec / generator caches on the supervisor. A complete that
     /// is already on the attempt thread finishes against the old cache; the
     /// next job sees an empty one. Does not rebuild the spec IR index.
+    /// Empty `clis` clears every CLI.
     pub async fn clear_caches(&self) -> anyhow::Result<()> {
+        self.clear_caches_for(Vec::new()).await
+    }
+
+    pub async fn clear_caches_for(&self, clis: Vec<String>) -> anyhow::Result<()> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Job {
-                kind: JobKind::ClearCaches { reply },
+                kind: JobKind::ClearCaches { clis, reply },
             })
             .map_err(|_err| anyhow!("engine thread is gone"))?;
         rx.await.map_err(|_err| anyhow!("engine dropped the reply"))?
@@ -304,10 +311,14 @@ impl EngineClient {
 
     /// Block the current thread until caches are cleared. CLI / tests only.
     pub fn clear_caches_blocking(&self) -> anyhow::Result<()> {
+        self.clear_caches_for_blocking(Vec::new())
+    }
+
+    pub fn clear_caches_for_blocking(&self, clis: Vec<String>) -> anyhow::Result<()> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Job {
-                kind: JobKind::ClearCaches { reply },
+                kind: JobKind::ClearCaches { clis, reply },
             })
             .map_err(|_err| anyhow!("engine thread is gone"))?;
         rx.blocking_recv().map_err(|_err| anyhow!("engine dropped the reply"))?
@@ -491,10 +502,25 @@ fn rebuild_engine(
     Ok(Engine::from_registry(specs_dir, registry, acceptance.clone()))
 }
 
+fn merge_cache_clear_filters<'a>(filters: impl IntoIterator<Item = &'a [String]>) -> Vec<String> {
+    let mut merged = Vec::new();
+    for clis in filters {
+        if clis.is_empty() {
+            return Vec::new();
+        }
+        for cli in clis {
+            if !merged.iter().any(|existing| existing == cli) {
+                merged.push(cli.clone());
+            }
+        }
+    }
+    merged
+}
+
 fn drain_to_latest<A, C>(rx: &mpsc::Receiver<Job>, first: Job, mut on_acceptance: A, mut on_clear: C) -> Job
 where
     A: FnMut(String, String, u64),
-    C: FnMut(oneshot::Sender<anyhow::Result<()>>),
+    C: FnMut(Vec<String>, oneshot::Sender<anyhow::Result<()>>),
 {
     let mut job = first;
     while let Ok(next) = rx.try_recv() {
@@ -504,7 +530,7 @@ where
                 accepted_name,
                 timestamp,
             } => on_acceptance(root_command, accepted_name, timestamp),
-            JobKind::ClearCaches { reply } => on_clear(reply),
+            JobKind::ClearCaches { clis, reply } => on_clear(clis, reply),
             JobKind::Complete { request, reply } => {
                 // A newer request makes the current one irrelevant, but its
                 // caller is still waiting on the reply channel. Finish it
@@ -685,7 +711,7 @@ mod tests {
             &rx,
             first,
             |_, _, _| unreachable!("no acceptance in this test"),
-            |_| unreachable!("no cache clear in this test"),
+            |_, _| unreachable!("no cache clear in this test"),
         );
         let JobKind::Complete { request, .. } = latest.kind else {
             unreachable!("latest job should be a completion")
@@ -735,7 +761,7 @@ mod tests {
             |command, name, _| {
                 records.push((command, name));
             },
-            |_| unreachable!("no cache clear in this test"),
+            |_, _| unreachable!("no cache clear in this test"),
         );
         assert_eq!(records, vec![("git".into(), "status".into())]);
         let JobKind::Complete { request, .. } = latest.kind else {
@@ -752,7 +778,10 @@ mod tests {
         let (reply_b, _rx_b) = oneshot::channel();
         tx.send(completion_job(CompleteRequest::default(), reply_a)).unwrap();
         tx.send(Job {
-            kind: JobKind::ClearCaches { reply: reply_clear },
+            kind: JobKind::ClearCaches {
+                clis: Vec::new(),
+                reply: reply_clear,
+            },
         })
         .unwrap();
         tx.send(completion_job(
@@ -769,7 +798,8 @@ mod tests {
             &rx,
             rx.recv().unwrap(),
             |_, _, _| unreachable!("no acceptance in this test"),
-            |reply| {
+            |clis, reply| {
+                assert!(clis.is_empty(), "ResetCache / empty --cli still clears all");
                 cleared += 1;
                 let _ = reply.send(Ok(()));
             },
@@ -780,6 +810,27 @@ mod tests {
             unreachable!("latest job should be a completion");
         };
         assert_eq!(request.buffer, "git ");
+    }
+
+    #[test]
+    fn merge_cache_clear_filters_empty_means_all() {
+        let git = vec!["git".to_string()];
+        let demo_and_git = vec!["demo".to_string(), "git".to_string()];
+        let empty: Vec<String> = Vec::new();
+        assert_eq!(
+            merge_cache_clear_filters(std::iter::empty::<&[String]>()),
+            Vec::<String>::new(),
+            "no pending filters is a full clear"
+        );
+        assert_eq!(
+            merge_cache_clear_filters([&empty[..], &git[..]]),
+            Vec::<String>::new(),
+            "an empty --cli among pending clears still means all"
+        );
+        assert_eq!(
+            merge_cache_clear_filters([&git[..], &demo_and_git[..]]),
+            vec!["git".to_string(), "demo".to_string()]
+        );
     }
 
     #[test]
@@ -1022,7 +1073,7 @@ mod tests {
             &rx,
             rx.recv().unwrap(),
             |_, _, _| unreachable!("no acceptance in this test"),
-            |_| unreachable!("no cache clear in this test"),
+            |_, _| unreachable!("no cache clear in this test"),
         );
         let JobKind::Complete { reply, .. } = job.kind else {
             unreachable!("job should be a completion")

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, BoxShadow, Context, Entity, FontWeight, Image, InteractiveElement, IntoElement, ParentElement, Render,
-    Rgba, ScrollStrategy, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div, hsla, point, px,
-    rgb, uniform_list,
+    Rgba, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div, hsla,
+    point, px, rgb, uniform_list,
 };
 
 use crate::icons::{history_icon_image_element, identifier_icon_element, named_icon_element, png_icon_element};
@@ -786,7 +786,6 @@ impl Render for SuggestionList {
                     let common_prefix = common_prefix.clone();
                     let state = state.clone();
                     let click = click.clone();
-                    let suggestion_font_family = font_family.clone();
                     move |range, _window, cx| {
                         let overlay = state.read(cx);
                         range
@@ -805,7 +804,7 @@ impl Render for SuggestionList {
                                     icon_size,
                                     font_size,
                                     corners,
-                                    suggestion_font_family.clone(),
+                                    &overlay.font_family,
                                     state.clone(),
                                     click.clone(),
                                     ix,
@@ -893,7 +892,7 @@ fn suggestion_row(
     // Top and bottom radii this row must reproduce to keep the card's corners
     // intact, since GPUI's overflow clip does not follow a border radius.
     corners: (f32, f32),
-    font_family: String,
+    font_family: &SharedString,
     state: Entity<OverlayState>,
     click: Option<Arc<dyn Fn(ClickInsert) + Send + Sync>>,
     ix: usize,
@@ -1613,6 +1612,17 @@ mod tests {
                 && body.contains(".get(ix)")
                 && body.contains("click_insert_for(item, &overlay.search_term)"),
             "click must look the row up from overlay state"
+        );
+        assert!(
+            body.contains("font_family: &SharedString") && !body.contains("font_family: String"),
+            "paint must not clone a String font family per visible row"
+        );
+        let render = src.find("impl Render for SuggestionList").expect("render");
+        let render_end = src[render..].find("fn suggestion_row(").expect("row") + render;
+        let render_body = &src[render..render_end];
+        assert!(
+            render_body.contains("&overlay.font_family") && !render_body.contains("suggestion_font_family"),
+            "visible rows reuse OverlayState.font_family instead of cloning a String into the list closure"
         );
     }
 

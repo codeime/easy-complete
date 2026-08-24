@@ -172,7 +172,7 @@ async fn handle_local_ipc<Ctx>(
                                 Ok(LocalResponse::Success(None))
                             },
                             ResetCache(_) => {
-                                proxy.send_event_or_warn(Event::ClearEngineCaches);
+                                proxy.send_event_or_warn(Event::ClearEngineCaches { clis: Vec::new() });
                                 Ok(LocalResponse::Success(None))
                             },
                             RestartSettingsListener(_) => {
@@ -241,7 +241,9 @@ async fn handle_local_ipc<Ctx>(
                     },
                     Some(KeyboardFocusChanged(_)) => hooks::focus_change(&proxy).await,
                     Some(Event(_)) => hooks::event().await,
-                    Some(ClearAutocompleteCache(_)) => hooks::clear_autocomplete_cache(&proxy).await,
+                    Some(ClearAutocompleteCache(request)) => {
+                        hooks::clear_autocomplete_cache(request.clis, &proxy).await
+                    },
                     Some(
                         Init(_)
                         | PostExec(_)
@@ -279,6 +281,10 @@ mod tests {
         assert!(
             production.contains("ResetCache(_) =>") && production.contains("Event::ClearEngineCaches"),
             "ResetCache must clear engine caches, not return Unknown command"
+        );
+        assert!(
+            production.contains("ClearAutocompleteCache(request)") && production.contains("request.clis"),
+            "ClearAutocompleteCache.clis must reach the overlay, not be discarded as _"
         );
         assert!(
             production.contains("RestartSettingsListener(_) =>")

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, Bounds, Entity, Pixels, Point, Size, WindowBounds, WindowHandle, WindowOptions, point, px,
-    size,
+    App, AppContext as _, Bounds, Entity, Pixels, Point, SharedString, Size, WindowBounds, WindowHandle, WindowOptions,
+    point, px, size,
 };
 
 use crate::list::{DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_ROW_HEIGHT, DEFAULT_WIDTH, SuggestionList};
@@ -34,7 +34,7 @@ pub struct OverlayState {
     pub current_arg_name: String,
     pub current_arg_description: String,
     pub theme: crate::list::OverlayTheme,
-    pub font_family: String,
+    pub font_family: SharedString,
     /// When false, suggestion titles use the legacy Monaco fallback while
     /// descriptions keep GPUI's system UI font. A configured family applies
     /// to the whole overlay, matching the old CSS variable behavior.
@@ -98,7 +98,7 @@ impl OverlayState {
             current_arg_name: String::new(),
             current_arg_description: String::new(),
             theme: crate::list::OverlayTheme::default(),
-            font_family: "Monaco".into(),
+            font_family: SharedString::from("Monaco"),
             custom_font_family: false,
             font_size: DEFAULT_FONT_SIZE,
             row_height: DEFAULT_ROW_HEIGHT,

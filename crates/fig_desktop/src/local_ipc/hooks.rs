@@ -70,8 +70,8 @@ pub async fn event() -> Result<()> {
     Ok(())
 }
 
-pub async fn clear_autocomplete_cache(proxy: &EventLoopProxy) -> Result<()> {
-    proxy.send_event_or_warn(Event::ClearEngineCaches);
+pub async fn clear_autocomplete_cache(clis: Vec<String>, proxy: &EventLoopProxy) -> Result<()> {
+    proxy.send_event_or_warn(Event::ClearEngineCaches { clis });
     Ok(())
 }
 
@@ -109,8 +109,12 @@ mod tests {
             .next()
             .expect("production");
         assert!(
-            production.contains("Event::ClearEngineCaches"),
+            production.contains("Event::ClearEngineCaches { clis }"),
             "ClearAutocompleteCache must drop engine generateSpec / generator caches"
+        );
+        assert!(
+            production.contains("clear_autocomplete_cache(clis"),
+            "the hook must pass ClearAutocompleteCache.clis through, not drop the --cli filter"
         );
         assert!(
             !production.contains("Engine caches are request-keyed"),

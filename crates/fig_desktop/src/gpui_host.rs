@@ -61,8 +61,9 @@ impl DesktopHost {
                 if autocomplete_enabled {
                     self.overlay.recomplete(cx);
                 }
+                self.overlay.refresh_figterm_intercept();
             },
-            Event::ClearEngineCaches => self.overlay.clear_engine_caches(),
+            Event::ClearEngineCaches { clis } => self.overlay.clear_engine_caches(clis),
             Event::ReloadAccessibility => {
                 #[cfg(target_os = "linux")]
                 crate::linux_tray::reload();
@@ -376,7 +377,7 @@ mod tests {
             "settings changes refresh the overlay; they are not an auth reload"
         );
         assert!(
-            production.contains("Event::ClearEngineCaches =>") && production.contains("clear_engine_caches"),
+            production.contains("Event::ClearEngineCaches { clis }") && production.contains("clear_engine_caches"),
             "ClearAutocompleteCache must reach the overlay's engine client"
         );
     }

@@ -105,17 +105,28 @@ impl JsHost {
 
     /// Drop generateSpec / generator result caches and on-disk hook source.
     /// The next completion re-reads hook JS and re-runs generators.
-    pub fn clear_caches(&self) {
-        self.suggestion_cache
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clear();
-        self.spec_cache.lock().unwrap_or_else(|err| err.into_inner()).clear();
-        self.sources.lock().unwrap_or_else(|err| err.into_inner()).clear();
-        self.hook_ignores_tokens
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clear();
+    ///
+    /// An empty `clis` list clears everything. Otherwise only keys that belong
+    /// to those CLI names (hook id prefix, generateSpec first token, or the
+    /// first token of a suggestion listing) are removed.
+    pub fn clear_caches_for(&self, clis: &[String]) {
+        if clis.is_empty() {
+            self.suggestion_cache
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clear();
+            self.spec_cache.lock().unwrap_or_else(|err| err.into_inner()).clear();
+            self.sources.lock().unwrap_or_else(|err| err.into_inner()).clear();
+            self.hook_ignores_tokens
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clear();
+            return;
+        }
+        retain_cli_keys(&self.suggestion_cache, clis);
+        retain_cli_keys(&self.spec_cache, clis);
+        retain_cli_keys(&self.sources, clis);
+        retain_cli_keys(&self.hook_ignores_tokens, clis);
     }
 
     /// Bind this host for the duration of a completion attempt so generators
@@ -494,6 +505,41 @@ fn is_js_ident_continue_byte(b: u8) -> bool {
 /// maps without bound. Wholesale clearing at the cap is fine: entries are
 /// cheap to regenerate and the cap is far above one session's working set.
 const MAX_CACHE_ENTRIES: usize = 512;
+
+fn retain_cli_keys<T>(cache: &Mutex<HashMap<String, T>>, clis: &[String]) {
+    cache
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .retain(|key, _| !clis.iter().any(|cli| cache_key_belongs_to_cli(key, cli)));
+}
+
+/// Whether a generateSpec / generator cache key is for `cli`.
+///
+/// Hook ids are `{cli}#…` or `{cli}/…`. Explicit `generateSpecCacheKey` is
+/// `{firstToken}:{key}`. Suggestion listings are `{script|custom}:…,{tokens}`.
+/// `script:` / `custom:` themselves are generator kinds, not CLI names.
+pub(crate) fn cache_key_belongs_to_cli(key: &str, cli: &str) -> bool {
+    if cli.is_empty() {
+        return false;
+    }
+    if let Some(head) = key.split('\x1f').next()
+        && let Some(rest) = head.strip_prefix(cli)
+        && (rest.is_empty() || rest.starts_with('#') || rest.starts_with('/'))
+    {
+        return true;
+    }
+    if let Some((prefix, _)) = key.split_once(':')
+        && prefix == cli
+        && prefix != "script"
+        && prefix != "custom"
+    {
+        return true;
+    }
+    if let Some((_, after_comma)) = key.split_once(',') {
+        return after_comma.split(' ').next() == Some(cli);
+    }
+    false
+}
 
 fn evict_at_cap<T>(cache: &mut HashMap<String, T>, key: &str) {
     if cache.len() >= MAX_CACHE_ENTRIES && !cache.contains_key(key) {
@@ -1610,6 +1656,72 @@ mod tests {
         });
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first[0].name, "alpha");
+    }
+
+    #[test]
+    fn cache_key_belongs_to_cli_matches_hook_id_and_first_token() {
+        assert!(cache_key_belongs_to_cli("git#generateSpec#0\x1f/tmp", "git"));
+        assert!(cache_key_belongs_to_cli("git/lfs#custom#1", "git"));
+        assert!(cache_key_belongs_to_cli("git:userKey", "git"));
+        assert!(cache_key_belongs_to_cli("script:,git checkout", "git"));
+        assert!(cache_key_belongs_to_cli("script:/tmp,git", "git"));
+        assert!(!cache_key_belongs_to_cli("gitk#generateSpec#0", "git"));
+        assert!(!cache_key_belongs_to_cli("script:,gitea", "git"));
+        assert!(!cache_key_belongs_to_cli("script:,git checkout", "script"));
+        assert!(!cache_key_belongs_to_cli("custom:/tmp,env", "git"));
+        assert!(!cache_key_belongs_to_cli("demo#generateSpec#0\x1f/tmp", "git"));
+    }
+
+    #[test]
+    fn clear_caches_for_one_cli_keeps_the_other() {
+        let host = JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
+        let git = cached_spec(&host, "git#generateSpec#0\x1f/tmp", || {
+            Some(Spec {
+                names: vec!["git".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("git miss");
+        let demo = cached_spec(&host, "demo#generateSpec#0\x1f/tmp", || {
+            Some(Spec {
+                names: vec!["demo".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("demo miss");
+        let git_arg = ArgSpec {
+            cache_key: Some("git".into()),
+            ..ArgSpec::default()
+        };
+        let demo_arg = ArgSpec {
+            cache_key: Some("demo".into()),
+            ..ArgSpec::default()
+        };
+        let _ = cached_suggestions(&host, &git_arg, &["git".into()], "/tmp", "script", || {
+            vec![Suggestion::new("status", "", "subcommand")]
+        });
+        let _ = cached_suggestions(&host, &demo_arg, &["demo".into()], "/tmp", "script", || {
+            vec![Suggestion::new("alpha", "", "subcommand")]
+        });
+        host.clear_caches_for(&[String::from("git")]);
+        assert!(
+            cached_spec(&host, "git#generateSpec#0\x1f/tmp", || None).is_none(),
+            "git generateSpec must be dropped"
+        );
+        let demo_hit = cached_spec(&host, "demo#generateSpec#0\x1f/tmp", || {
+            panic!("demo generateSpec must remain")
+        })
+        .expect("demo hit");
+        assert!(Arc::ptr_eq(&demo, &demo_hit));
+        let _ = git;
+        let demo_rows = cached_suggestions(&host, &demo_arg, &["demo".into()], "/tmp", "script", || {
+            panic!("demo generator cache must remain")
+        });
+        assert_eq!(demo_rows[0].name, "alpha");
+        let git_rows = cached_suggestions(&host, &git_arg, &["git".into()], "/tmp", "script", || {
+            vec![Suggestion::new("rebuilt", "", "subcommand")]
+        });
+        assert_eq!(git_rows[0].name, "rebuilt");
     }
 
     #[test]

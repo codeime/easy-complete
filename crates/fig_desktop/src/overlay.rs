@@ -19,7 +19,7 @@ use fig_proto::figterm::Action;
 use fig_proto::local::caret_position_hook::Origin;
 use fig_remote_ipc::figterm::{FigtermCommand, FigtermState, InterceptMode};
 use fig_settings::keybindings::{Availability, KeyBinding, KeyBindings, action_availability, default_action_bindings};
-use gpui::{App, AppContext as _, Entity, Pixels, Point, Size, px, size};
+use gpui::{App, AppContext as _, Entity, Pixels, Point, SharedString, Size, px, size};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -708,20 +708,33 @@ impl OverlayController {
         );
     }
 
-    /// Re-run the current buffer even when its text is unchanged. Settings
-    /// changes (notably the auto-execute visibility toggle) must update the
-    /// retained rows immediately instead of waiting for another keystroke.
+    /// Settings / keybindings changed while this overlay may already be
+    /// intercepting. Re-push `InterceptFigJs` with a freshly loaded action
+    /// list. Does not recompute visibility: a visible list outside a layout
+    /// pass would otherwise drop intercept. The keystroke path still skips
+    /// unchanged modes before `overlay_actions()`.
+    pub fn refresh_figterm_intercept(&self) {
+        let Some(session_id) = self.current_session() else {
+            return;
+        };
+        refresh_intercept_actions(&self.figterm_state, session_id);
+    }
+
     /// Fire-and-forget: the supervisor clears caches before the next complete.
-    /// Do not block the GPUI thread waiting on the engine worker.
-    pub fn clear_engine_caches(&self) {
+    /// Do not block the GPUI thread waiting on the engine worker. Empty `clis`
+    /// drops every CLI; otherwise only matching generateSpec / generator keys.
+    pub fn clear_engine_caches(&self, clis: Vec<String>) {
         let engine = self.engine.clone();
         tokio::spawn(async move {
-            if let Err(err) = engine.clear_caches().await {
+            if let Err(err) = engine.clear_caches_for(clis).await {
                 error!(%err, "failed to clear autocomplete caches");
             }
         });
     }
 
+    /// Re-run the current buffer even when its text is unchanged. Settings
+    /// changes (notably the auto-execute visibility toggle) must update the
+    /// retained rows immediately instead of waiting for another keystroke.
     pub fn recomplete(&mut self, cx: &mut App) {
         let Some(current_session) = self.current_session() else {
             return;
@@ -1119,7 +1132,7 @@ impl OverlayController {
 fn apply_settings(overlay: &mut OverlayState) {
     let metrics = overlay_metrics();
     overlay.theme = resolve_overlay_theme();
-    overlay.font_family = metrics.font_family;
+    overlay.font_family = SharedString::from(metrics.font_family);
     overlay.custom_font_family = metrics.custom_font_family;
     overlay.font_size = metrics.font_size;
     overlay.row_height = metrics.row_height;
@@ -1904,6 +1917,32 @@ fn set_intercept_flags(figterm_state: &FigtermState, session_id: Uuid, intercept
     }
 }
 
+/// Push a new action list to figterm without touching intercept mode.
+///
+/// `set_intercept_flags` skips when the Locked/Unlocked pair is unchanged so
+/// a keystroke does not re-read `actions.json`. Settings reload is the one
+/// caller that must send anyway, and only for a session that is already
+/// intercepting — hide/show still owns the first InterceptFigJs.
+fn refresh_intercept_actions(figterm_state: &FigtermState, session_id: Uuid) {
+    for session in figterm_state.inner.lock().linked_sessions.values_mut() {
+        if session.id != session_id {
+            continue;
+        }
+        let enable = bool::from(session.intercept);
+        let enable_global = bool::from(session.intercept_global);
+        if !enable && !enable_global {
+            break;
+        }
+        let _ = session.sender.send(FigtermCommand::InterceptFigJs {
+            intercept_keystrokes: enable,
+            intercept_global_keystrokes: enable_global,
+            actions: overlay_actions(),
+            override_actions: true,
+        });
+        break;
+    }
+}
+
 fn action_requires_visible(action: &str) -> bool {
     action_availability(action) == Some(Availability::WhenFocused)
 }
@@ -1962,66 +2001,44 @@ fn overlay_bounds(
     flip_height: f64,
     screens: &[(f64, f64, f64, f64)],
 ) -> (Point<Pixels>, Size<Pixels>, bool, bool) {
-    match position {
-        WindowPosition::Absolute(pos) => {
-            let logical = pos.to_logical(1.0);
-            (
-                gpui::point(px(logical.x as f32), px(logical.y as f32)),
-                size(px(overlay_size.width as f32), px(overlay_size.height as f32)),
-                false,
-                false,
-            )
-        },
-        WindowPosition::Centered => (
-            gpui::point(px(120.), px(120.)),
-            size(px(overlay_size.width as f32), px(overlay_size.height as f32)),
-            false,
-            false,
-        ),
-        WindowPosition::RelativeToCaret {
-            caret_position,
-            caret_size,
-            origin,
-        } => {
-            let mut caret = caret_position.to_logical(1.0);
-            let caret_size = caret_size.to_logical(1.0);
-            caret.y = caret_y_in_screen_space(caret.y, caret_size.height, origin, screens.first().copied());
-            let mut edges = screen_edges_containing(screens, caret.x, caret.y);
-            let mut flip_bottom = edges.map(|(_, _, _, bottom)| bottom);
-            let window_bottom = platform_state
-                .get_active_window()
-                .map(|active| window_edges(&active.rect).3);
-            (edges, flip_bottom) = tighten_flip_bottom_with_terminal(edges, flip_bottom, window_bottom);
-            let (place_width, place_height, place_flip) =
-                overlay_size_in_screen_space(overlay_size.width, overlay_size.height, flip_height);
-            let (x, y, on_left, is_above) = place_overlay_at_caret(
-                caret.x,
-                caret.y,
-                caret_size.height,
-                place_width,
-                place_height,
-                place_flip,
-                edges,
-                flip_bottom,
-                popout,
-            );
-            (
-                gpui::point(px(x as f32), px(y as f32)),
-                size(px(overlay_size.width as f32), px(overlay_size.height as f32)),
-                on_left,
-                is_above,
-            )
-        },
-    }
+    let WindowPosition::RelativeToCaret {
+        caret_position,
+        caret_size,
+        origin,
+    } = position;
+    let mut caret = caret_position.to_logical(1.0);
+    let caret_size = caret_size.to_logical(1.0);
+    caret.y = caret_y_in_screen_space(caret.y, caret_size.height, origin, screens.first().copied());
+    let mut edges = screen_edges_containing(screens, caret.x, caret.y);
+    let mut flip_bottom = edges.map(|(_, _, _, bottom)| bottom);
+    let window_bottom = platform_state
+        .get_active_window()
+        .map(|active| window_edges(&active.rect).3);
+    (edges, flip_bottom) = tighten_flip_bottom_with_terminal(edges, flip_bottom, window_bottom);
+    let (place_width, place_height, place_flip) =
+        overlay_size_in_screen_space(overlay_size.width, overlay_size.height, flip_height);
+    let (x, y, on_left, is_above) = place_overlay_at_caret(
+        caret.x,
+        caret.y,
+        caret_size.height,
+        place_width,
+        place_height,
+        place_flip,
+        edges,
+        flip_bottom,
+        popout,
+    );
+    (
+        gpui::point(px(x as f32), px(y as f32)),
+        size(px(overlay_size.width as f32), px(overlay_size.height as f32)),
+        on_left,
+        is_above,
+    )
 }
 
 fn refuse_caret_without_screens(position: WindowPosition, screens: &[(f64, f64, f64, f64)]) -> bool {
-    match position {
-        WindowPosition::RelativeToCaret { origin, .. } => {
-            screens.is_empty() && overlay_parks_caret_when_screens_empty(cfg!(target_os = "macos"), origin)
-        },
-        _ => false,
-    }
+    let WindowPosition::RelativeToCaret { origin, .. } = position;
+    screens.is_empty() && overlay_parks_caret_when_screens_empty(cfg!(target_os = "macos"), origin)
 }
 
 fn overlay_size_in_screen_space(width: f64, height: f64, flip_height: f64) -> (f64, f64, f64) {
@@ -2450,6 +2467,23 @@ mod tests {
             skip < actions,
             "keybinding reload must sit behind the unchanged-mode skip"
         );
+        let refresh = rust_fn_body(src, "fn refresh_intercept_actions");
+        assert!(
+            refresh.contains("overlay_actions()")
+                && refresh.contains("override_actions: true")
+                && !refresh.contains("next_intercept_modes"),
+            "settings reload must re-push InterceptFigJs without the unchanged-mode skip"
+        );
+        assert!(
+            !refresh.contains("InterceptFigJSVisible"),
+            "action-list refresh must not toggle intercept visibility"
+        );
+        let host = include_str!("gpui_host.rs");
+        let reload = rust_fn_body(host, "Event::ReloadSettings =>");
+        assert!(
+            reload.contains("refresh_figterm_intercept()"),
+            "ReloadSettings must refresh figterm intercept while the overlay is up"
+        );
     }
 
     #[test]
@@ -2459,11 +2493,11 @@ mod tests {
             .next()
             .expect("production");
         assert!(
-            production.contains("pub fn clear_engine_caches") && production.contains("engine.clear_caches()"),
-            "overlay must own the EngineClient cache-clear path"
+            production.contains("pub fn clear_engine_caches") && production.contains("engine.clear_caches_for(clis)"),
+            "overlay must own the EngineClient cache-clear path and honor --cli"
         );
         assert!(
-            !production.contains("blocking_recv") || production.contains("clear_caches().await"),
+            !production.contains("blocking_recv") || production.contains("clear_caches_for(clis).await"),
             "cache clear must not block the GPUI thread"
         );
     }
@@ -2567,6 +2601,21 @@ mod tests {
         assert!(
             !layout.contains("window-rect") && !layout.contains("PositionRelativeToRect"),
             "caret placement must not fall back to the terminal window rect"
+        );
+        assert!(
+            bounds.contains("RelativeToCaret")
+                && !bounds.contains("Centered")
+                && !bounds.contains("Absolute")
+                && !bounds.contains("px(120.)"),
+            "dead Centered/Absolute placement arms must stay deleted; they were not caret park"
+        );
+        let event = include_str!("event.rs");
+        let window_position = rust_fn_body(event, "pub enum WindowPosition");
+        assert!(
+            window_position.contains("RelativeToCaret")
+                && !window_position.contains("Centered")
+                && !window_position.contains("Absolute"),
+            "WindowPosition is caret-only; Centered/Absolute were unused"
         );
     }
 
