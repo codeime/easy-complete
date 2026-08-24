@@ -820,6 +820,10 @@ mod tests {
             ci.matches("-p ec_hitoolbox").count() >= 2,
             "HIToolbox palette rewrite policy belongs on rust-linux and rust-windows"
         );
+        assert!(
+            ci.contains("name: Rust (Linux)") && ci.contains("name: Rust (Windows)"),
+            "clippy/test are not macOS-only: rust-linux and rust-windows are first-class jobs"
+        );
     }
 
     #[test]
@@ -834,6 +838,7 @@ mod tests {
 
         let linux = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/build-linux.sh"));
         let macos = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/build-app.sh"));
+        let windows_build = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/build-windows.sh"));
         assert!(
             !linux.contains("ec_overlay_spike") && !macos.contains("ec_overlay_spike"),
             "dist profiles must not ship the overlay spike"
@@ -841,6 +846,19 @@ mod tests {
         assert!(
             linux.contains("-p fig_desktop") && macos.contains("-p fig_desktop"),
             "dist still builds fig_desktop"
+        );
+        assert!(
+            linux.contains("cargo build --locked") && windows_build.contains("cargo build --locked"),
+            "Linux and Windows prefix scripts must match rust-linux/windows --locked"
+        );
+        assert!(
+            !workspace.lines().any(|line| line.trim() == "panic = \"abort\""),
+            "dist profile must unwind so the engine attempt thread catch_unwind isolates panics"
+        );
+        assert!(
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../ec_engine/src/worker.rs"))
+                .contains("std::panic::catch_unwind"),
+            "engine watchdog catch_unwind is why dist cannot abort"
         );
         assert!(
             !workspace.contains("fig_desktop_api")

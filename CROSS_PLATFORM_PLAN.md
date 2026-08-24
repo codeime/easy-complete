@@ -1,6 +1,6 @@
 # Easy Complete 跨平台改造计划
 
-**分支:** `feat/cross-platform`
+**分支:** `feat/cross-platform`（执行指针：`fix/cross-platform-audit-1`，见 §8）
 **日期:** 2026-08-20
 **状态:** 已评估、已修订。macOS 产品面保持唯一发运目标，直到本计划对应里程碑合入并有 CI 绿灯。
 **依据:** 仓库现状 + 交叉编译实测 + 深度调研报告（Partial）。本文件取代口头推断。
@@ -51,12 +51,14 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
 
 ## 2. 现状（经核对）
 
+> **快照日期 2026-08-20。** 下面 2.1–2.4 里「编不过」的条目已在后续 PR 关掉；现行门禁、cfg 与执行指针以 **§8** 为准。
+
 ### 2.1 发运与 CI
 
 - 自 **v2.0.45** 起，发行管线端到端改为 ARM64-only，并删除过时的 universal / Linux / Windows Makefile 与 Linux 打包资源。
 - `scripts/build-app.sh` 在非 Darwin/arm64 上直接退出。唯一发运物是 `.app`：`easy-complete`、`ec`、`ecterm`、`Contents/Helpers/EasyCompleteInputMethod.app`。
 - `install.sh` / `uninstall.sh` / `make-dmg.sh` / `sign-macos-app.sh` / `notarize-dmg.sh` 只围绕该 bundle。
-- `.github/workflows/ci.yml`：JavaScript 在 `ubuntu-latest`，**Rust clippy / test / dist 只在 `macos-15`**。Release 只打 ARM DMG。
+- `.github/workflows/ci.yml`：JavaScript 在 `ubuntu-latest`。Rust：`macos-15` 工作区 clippy/test + dist 发运二进制；`rust-linux`（ubuntu-latest）与 `rust-windows`（windows-latest）对同一 crate 列表做 clippy `-D warnings` + test + 无头 `ec engine complete`（含 `fig_desktop` / `ec_gpui`）。两 job **不是**桌面会话：无 live X11/IBus/HWND/ConPTY I/O，也不是发运。Release 只打 ARM DMG。
 - README 明确：**Platform: macOS only. The published DMG is Apple Silicon / ARM64 only.**
 
 ### 2.2 必须按 OS 重写的表面
@@ -86,7 +88,7 @@ macOS 行为、Accessibility、IME、`.app` / DMG **全程不得回退**。每�
 | shell hook | zsh/bash/fish rc 注入（`fig_integrations`） | `ec init` 在桌面 app 未运行时整段站起，Linux 无桌面时要想清楚 |
 | `fig_integrations::desktop_entry` | XDG desktop / autostart | 可用，但安装路径仍假设旧 Fig 布局 |
 
-### 2.4 编不过的残留（实测 + 读码）
+### 2.4 编不过的残留（2026-08-20 实测；后续 PR 已关，见 §8）
 
 本机 `cargo check --target aarch64-unknown-linux-gnu`：
 
@@ -417,7 +419,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 - [x] PR-B1（`fig_ipc` Linux 目标 `cargo check` 过；`figterm` scrollback 钉死为 1、tokio 2 worker 未改；socket 路径测试 + Linux CI 扩到 `fig_ipc`/`figterm`）
 - [x] PR-B2（无桌面 `ec init` 与 macOS 同策略；zsh hook 在临时 HOME 可装可卸；IME 不进入 Linux `integrations install all`）
 - [x] PR-C1（`ec_gpui` 的 AppKit 模块 `cfg(macos)`；非 Mac 走 `platform_stub`，`overlay_screens` 为空所以无 caret 则无法摆放；本机交叉编译卡在缺 linux gcc，Ubuntu 原生 gpui 仍待 CI）
-- [x] PR-C2（`fig_desktop` 非 macOS 走 `platform/stub.rs`：`accessibility_is_enabled → None`、`get_cursor_position → None`、无 caret 则 park；考古 `linux/` 与 `windows.rs` **已删除，勿恢复**；GNOME/IBus 安装路径切断；Linux CI 扩到 `ec_gpui`/`fig_desktop` clippy，系统依赖是 GTK/X11/Vulkan **不含 WebKit**。Ubuntu 原生 gpui 首次绿灯仍待推送后验证）
+- [x] PR-C2（`fig_desktop` 活路是 macos / `linux_caret` / `windows_caret`；`platform/stub.rs` 只给其它 OS。无 caret 则 park；考古 `linux/` 与 `windows.rs` **已删除，勿恢复**；GNOME/IBus 安装路径切断；Linux CI 扩到 `ec_gpui`/`fig_desktop` clippy，系统依赖是 GTK/X11/Vulkan **不含 WebKit**。Ubuntu 原生 gpui 首次绿灯仍待推送后验证）
 - [x] PR-D1（新建 `platform/linux_caret/`：X11 焦点跟踪 + zbus IBus；几何换算在 `platform/caret.rs` 单测钉死；无 caret 不摆放；旧 `platform/linux/` **已删除，勿恢复**）
 - [x] PR-D2（GPUI 0.2.2 无 layer-shell，浮层仍走 X11/XWayland。GNOME Wayland 终端 caret 走 AT-SPI `GetCharacterExtents(SCREEN)`，不用 Shell 扩展；窗口 `GetExtents` 只给 IBus relative 当原点，不当列表位置。无 a11y 总线或非终端 focus 则隐藏）
 - [x] PR-D3（`ec_gpui/src/linux.rs`：按标题找 overlay，`unmap` park、`configure`+`map` 显示；启动时若有 `DISPLAY` 则清掉 `WAYLAND_DISPLAY` 让 GPUI 走 X11，`EC_GPUI_BACKEND=wayland` 可退出；无屏幕列表则 park，不用窗口矩形当 edges。`linux_overlay` 钉死 NOTIFICATION + ABOVE、不发 `_NET_ACTIVE_WINDOW`；map 后再 ClientMessage。本机 xfwm4 手测浮层不是 `_NET_ACTIVE_WINDOW`。）

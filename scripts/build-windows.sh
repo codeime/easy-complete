@@ -34,7 +34,8 @@ ARCH=$(uname -m)
 CARGO_PROFILE="${CARGO_PROFILE:-release}"
 
 cd "$REPO_DIR"
-cargo build --profile "$CARGO_PROFILE" -p fig_desktop -p figterm -p ec_cli
+# --locked matches rust-windows CI and scripts/build-linux.sh.
+cargo build --locked --profile "$CARGO_PROFILE" -p fig_desktop -p figterm -p ec_cli
 
 if [ "$CARGO_PROFILE" = "dev" ]; then
   TARGET_DIR="${CARGO_TARGET_DIR:-target}/debug"
