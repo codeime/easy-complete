@@ -353,9 +353,10 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 
 ## 8. 当前执行指针
 
-- 分支：`fix/cross-platform-audit-1` @ `208b85a0`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
+- 分支：`fix/cross-platform-audit-1` @ `b1c36593`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
 - **发运：** 仍只有 macOS Apple Silicon DMG。Linux / Windows 是 WIP，不是产品（无 Linux 包、无 Windows 安装器）。
 - 本文件就是 M0 的文档交付物
+- 2026-08-24 三链深审（`b1c36593`）：发运 `dist` 去掉 `panic = "abort"`，引擎 attempt 线程 `catch_unwind` 在 DMG 上仍能隔离 generator panic（原注释「没有 catch_unwind」是假的）。`scripts/build-windows.sh` 加 `--locked`。PLAN §2.1 改为 rust-linux/windows 存在、dist 仍只在 macos-15；§2 标明 2.4 是 2026-08-20 快照。钉：`leftover_crates` 扩 dist unwind + Windows `--locked`、`rust_linux_and_windows_ci` 扩 job 名。**未改 framing / 无 scan-`\x1b@`。** 补全 / caret / `TERM_SCROLLBACK_LINES == 1` / 考古后端 / tokio 列表未动。本机 Linux `cargo clippy --locked --offline -p fig_desktop -p ec_engine -p fig_install -p ec_cli -- -D warnings` 绿；`cargo test --locked --offline -p fig_desktop` 172；`ec engine complete --buffer "git ch"` 含 `checkout`（debug 二进制 8 次 wall min 50 / median ~66 / max 89 ms，新进程，不拿它当 overlay 按键数字）；`cargo fmt --all -- --check` 绿。未测 macOS AX/IME/DMG/Sparkle，未假装 Windows live GetGUIThreadInfo / ConPTY I/O / HWND / named-pipe accept。未 push。无单独 STATUS.md，本 §8 即状态。全文：`/workspace/easy-complete-THREE-CHAIN-REVIEW.md`。
 - 2026-08-23 审计：本机 Linux（x86_64）已验证无头 crate + `ec_gpui`/`fig_desktop` `clippy -D warnings`；修了 `fig_util` HRTB、`ec_gpui` X11 API；README 标明跨平台未发运
 - 2026-08-23：`rust-toolchain.toml` 去掉额外 `targets`（避免 Linux/Windows CI 拉 Darwin std）；`rust-linux` **不**装 `shellcheck`（与 macOS job 不同），测试在二进制缺失时 skip；F2 `taskkill /T` + `~user`、F3 `TerminateProcess` BOOL、F4 Win32 caret 换算可在 Linux 单测；`setup.sh` 不再装 WebKit / 不再 `rustup default stable`
 - 2026-08-23 续：F5 `SetWindowPos` 策略（不抢焦点、NOSIZE、park=HIDE+NOMOVE、place 顶左取整、缺 HWND / 空虚拟屏则不摆）在 `ec_gpui::windows_overlay` 钉死，`windows.rs` 仍 `cfg(windows)`。named-pipe retry/bind 策略在 `fig_ipc::windows_pipe_policy` 钉死；accept/connect 仍是 `cfg(windows)`。F3 续：ConPTY `HRESULT` 成功是 0，与 `TerminateProcess` BOOL 相反。`rust-windows` 与 `rust-linux` **同一 crate 列表**，是 MSVC 下 ConPTY / named pipe / GPUI HWND 的**编译**，不是桌面会话——GetGUIThreadInfo、对真实 HWND 的 `SetWindowPos`、ConPTY I/O 都没有测。两 job 都在 YAML 里，**第一次 GitHub 原生 run 仍待 push**。
