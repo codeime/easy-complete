@@ -267,8 +267,23 @@ pub async fn spawn_remote_ipc(
                     }
                     info!("Handshake succeeded");
 
-                    // send outgoing messages
+                    // Whatever we were intercepting belonged to an overlay this
+                    // desktop process is not showing, so start unlocked. Without
+                    // this a desktop restart while the list was up leaves the tab
+                    // swallowing Enter and Tab. `reset` clears the intercept
+                    // flags and `window_visible`; leftover key bindings stay
+                    // loaded but cannot fire while intercept is off.
+                    if let Err(err) = main_loop_sender.send(MainLoopEvent::UnlockInterception) {
+                        error!(%err, "Sender error");
+                    }
+                    // Drop frames queued while nothing was connected: they
+                    // describe a buffer this desktop process never saw. The main
+                    // loop has to forget them too, or its duplicate check will
+                    // suppress the resend.
                     outgoing_rx.drain();
+                    if let Err(err) = main_loop_sender.send(MainLoopEvent::ResetSentEditBuffer) {
+                        error!(%err, "Sender error");
+                    }
                     let outgoing_rx = outgoing_rx.clone();
                     let main_loop_sender = main_loop_sender.clone();
                     let outgoing_task = tokio::spawn(async move {
@@ -369,6 +384,36 @@ mod tests {
             body.contains("send_remote_unlock"),
             "flush/send failures must go through send_remote_unlock"
         );
+    }
+
+    #[test]
+    fn a_successful_handshake_clears_carried_over_state() {
+        // figterm outlives the desktop process. Both the key interceptor and the
+        // "already sent" edit buffer describe a desktop that is gone, and the
+        // queued frames are dropped here, so all three have to be reset in the
+        // same place.
+        let src = include_str!("ipc.rs");
+        let wait = src.find("Awaiting handshake response").expect("await response");
+        let wait_body = &src[wait..src.find("info!(\"Handshake succeeded\")").expect("handshake succeeded")];
+        assert!(
+            wait_body.contains("HandshakeResponse") && wait_body.contains("break"),
+            "the handshake loop must only accept HandshakeResponse; other frames are dropped"
+        );
+        let start = src.find("info!(\"Handshake succeeded\")").expect("handshake succeeded");
+        let rest = &src[start..];
+        let end = rest.find("let outgoing_task").expect("outgoing_task");
+        let body = &rest[..end];
+        assert!(
+            body.contains("MainLoopEvent::UnlockInterception"),
+            "a reconnect must unlock interception; the new desktop shows no overlay yet"
+        );
+        assert!(
+            body.contains("outgoing_rx.drain()") && body.contains("MainLoopEvent::ResetSentEditBuffer"),
+            "draining queued frames must also clear the duplicate-suppression state"
+        );
+        let drain = body.find("outgoing_rx.drain()").expect("drain");
+        let reset = body.find("MainLoopEvent::ResetSentEditBuffer").expect("reset");
+        assert!(drain < reset, "reset the sent-buffer marker after dropping the queue");
     }
 
     #[test]

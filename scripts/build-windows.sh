@@ -43,6 +43,21 @@ else
   TARGET_DIR="${CARGO_TARGET_DIR:-target}/${CARGO_PROFILE}"
 fi
 
+if [ ! -f "${REPO_DIR}/bundle/specs/index.json" ]; then
+  echo "Bundled specs are missing; syncing them now..."
+  node "${REPO_DIR}/scripts/sync-bundled-specs.mjs"
+fi
+echo "Compiling spec IR..."
+node "${REPO_DIR}/scripts/compile-spec-ir.mjs"
+if [ ! -f "${REPO_DIR}/bundle/specs-ir/index.json" ]; then
+  echo "error: spec IR compile did not write index.json" >&2
+  exit 1
+fi
+if ! find "${REPO_DIR}/bundle/specs-ir/hooks" -name '*.js' -print -quit | grep -q .; then
+  echo "error: spec IR hooks directory is missing or empty" >&2
+  exit 1
+fi
+
 DEST="${REPO_DIR}/dist/windows/easy-complete"
 rm -rf "$DEST"
 mkdir -p "$DEST" "$DEST/specs-ir"

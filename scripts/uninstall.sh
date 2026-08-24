@@ -52,7 +52,13 @@ fi
 
 info "Uninstalling shell integration..."
 if command -v ec &>/dev/null; then
-  ec integrations uninstall shell 2>/dev/null || true
+  # `dotfiles`, not `shell`: there is no `shell` subcommand, so the old spelling
+  # failed and `|| true` hid it, leaving the rc snippets in place. Keep going
+  # after a real failure — step 7 still strips leftover markers — but do not
+  # hide the error.
+  if ! ec integrations uninstall dotfiles; then
+    echo "warning: 'ec integrations uninstall dotfiles' failed; leftover rc snippets will be stripped below if they match the known markers" >&2
+  fi
 fi
 
 # ── 2. Kill running processes ─────────────────────────────────────────────────
@@ -118,7 +124,7 @@ rm -f "${LOCAL_BIN}/ec"
 rm -f "${LOCAL_BIN}/ecterm"
 
 # ── 7. Fallback shell integration cleanup (in case ec was already removed) ────
-# ec integrations uninstall shell was already called in step 1.
+# `ec integrations uninstall dotfiles` was already called in step 1.
 # This fallback removes any remaining lines using targeted patterns only.
 info "Verifying shell integration removal..."
 

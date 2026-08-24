@@ -170,10 +170,14 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
 
 #[cfg(test)]
 mod tests {
+    // `muda::Menu` is main-thread-only on macOS and the test harness runs on a
+    // worker, so this pins the source instead of building a live menu.
     #[test]
     fn menu_bar_append_does_not_unwrap() {
-        let _menu = super::menu_bar();
-        let src = include_str!("menu.rs");
+        let src = include_str!("menu.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production");
         let macos = src.find("pub fn menu_bar()").expect("menu_bar");
         let rest = &src[macos..];
         let end = rest.find("#[cfg(not(target_os = \"macos\"))]").unwrap_or(rest.len());

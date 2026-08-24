@@ -128,6 +128,9 @@ pub enum MainLoopEvent {
         execute: bool,
     },
     UnlockInterception,
+    /// The desktop connection was (re)established and any queued frames were
+    /// dropped. Forget what we think it already has.
+    ResetSentEditBuffer,
     SetImmediateMode(bool),
     PromptSSH {
         uuid: String,
@@ -196,6 +199,16 @@ fn pending_shell_context_epoch() -> Option<u64> {
 
 fn mark_shell_context_sent(epoch: u64) {
     LAST_SENT_SHELL_CONTEXT_EPOCH.store(epoch, Ordering::Relaxed);
+}
+
+/// Back to the startup value, i.e. "this desktop process has been told nothing".
+///
+/// The frame that carried env/alias can be marked sent and then dropped by the
+/// handshake drain. Leaving the epoch marked would keep every later frame
+/// env-less, so a `custom` hook would see an empty environment for the rest of
+/// the command line.
+fn reset_shell_context_sent() {
+    LAST_SENT_SHELL_CONTEXT_EPOCH.store(u64::MAX, Ordering::Relaxed);
 }
 
 fn cwd_string(shell_state: &ShellState) -> Option<String> {
@@ -758,6 +771,16 @@ fn figterm_main(command: Option<&[String]>) -> Result<()> {
                                 MainLoopEvent::UnlockInterception => {
                                     key_interceptor.reset();
                                 },
+                                MainLoopEvent::ResetSentEditBuffer => {
+                                    // A new desktop process starts with an empty
+                                    // edit buffer, and the frame we counted as
+                                    // sent was drained unsent. Without this the
+                                    // duplicate check suppresses every redraw
+                                    // and the user has to type another character
+                                    // to get completions back.
+                                    last_sent_edit_buffer = None;
+                                    reset_shell_context_sent();
+                                },
                                 MainLoopEvent::SetImmediateMode(mode) => {
                                     if let Err(err) = terminal.set_immediate_mode(mode) {
                                         error!(%err, "Failed to set immediate mode");
@@ -1245,6 +1268,24 @@ mod tests {
         assert_ne!(next, epoch);
         mark_shell_context_sent(next);
         assert_eq!(pending_shell_context_epoch(), None);
+    }
+
+    #[test]
+    fn a_reconnect_makes_the_next_frame_carry_env_again() {
+        // The env-carrying frame can be marked sent and then dropped by the
+        // handshake drain. If the epoch stayed marked, every later frame in this
+        // command line would omit env and a `custom` hook would see none.
+        note_shell_context_updated();
+        let epoch = pending_shell_context_epoch().expect("pending after update");
+        mark_shell_context_sent(epoch);
+        assert_eq!(pending_shell_context_epoch(), None);
+
+        reset_shell_context_sent();
+        assert_eq!(
+            pending_shell_context_epoch(),
+            Some(epoch),
+            "after a reconnect the same epoch is pending again"
+        );
     }
 
     #[test]

@@ -39,10 +39,10 @@ for the full list of what is and isn't collected.
 </p>
 
 > **Platform:** The published product is macOS only (Apple Silicon / ARM64 DMG).
-> Linux and Windows are work-in-progress on `fix/cross-platform-audit-1` (see
-> [`CROSS_PLATFORM_PLAN.md`](./CROSS_PLATFORM_PLAN.md)). They are not released:
-> no Linux package, no Windows installer. CI jobs on that branch are compile/test
-> gates, not a ship.
+> Linux and Windows are work-in-progress — see
+> [`CROSS_PLATFORM_PLAN.md`](./CROSS_PLATFORM_PLAN.md). They are not released:
+> no Linux package, no Windows installer. Their CI jobs are compile/test gates,
+> not a ship.
 
 ## Contents
 

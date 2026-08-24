@@ -1,6 +1,6 @@
 # Easy Complete 跨平台改造计划
 
-**分支:** `feat/cross-platform`（执行指针：`fix/cross-platform-audit-1`，见 §8）
+**分支:** `feat/cross-platform`
 **日期:** 2026-08-20
 **状态:** 已评估、已修订。macOS 产品面保持唯一发运目标，直到本计划对应里程碑合入并有 CI 绿灯。
 **依据:** 仓库现状 + 交叉编译实测 + 深度调研报告（Partial）。本文件取代口头推断。
@@ -353,7 +353,7 @@ macOS 回归是否决项。跨平台进度慢可以接受，把 Otty caret / 外
 
 ## 8. 当前执行指针
 
-- 分支：`fix/cross-platform-audit-1` @ `c04044ca`（从 `feat/cross-platform` 切出；`feat/cross-platform` 来自 `main` @ `55b043ff`）
+- 分支：`feat/cross-platform`（`fix/cross-platform-audit-1` 只出现在下方历史日志里，不是当前指针）
 - **发运：** 仍只有 macOS Apple Silicon DMG。Linux / Windows 是 WIP，不是产品（无 Linux 包、无 Windows 安装器）。
 - 本文件就是 M0 的文档交付物
 - 2026-08-24 续 53（`c04044ca`）：审 `999d7954` 发现 `--cli` 对 Fig `cache.cacheKey` listing 漏清（键是 `script:,oxlint-rules` 这类，不是 CLI 名）。`c04044ca` 给 suggestion 缓存键加 `tokens[0]` 前缀；`cache_key()` 本身未改。intercept 热加载 / SharedString / WindowPosition 仍是 `999d7954`。钉：`clear_caches_for_cli_drops_listings_whose_cache_key_is_not_the_cli`。**未改 framing / 无 scan-`\x1b@`。** 补全 / caret / `TERM_SCROLLBACK_LINES == 1` / 考古后端 / tokio 列表未动。本机 Linux `cargo clippy --locked --offline -p fig_desktop -p ec_engine -p ec_gpui -p ec_cli -- -D warnings` 绿；`cargo test --locked --offline`：fig_desktop 172、ec_engine 258、ec_gpui 106；`ec engine complete --buffer "git ch"` 含 `checkout`；`cargo fmt --all -- --check` 绿。未测 macOS AX/IME/DMG/Sparkle，未假装 Windows live GetGUIThreadInfo / ConPTY I/O / HWND / named-pipe accept。未 push。无单独 STATUS.md，本 §8 即状态。审阅：`/workspace/easy-complete-BUILD-REVIEW-999d7954.md`。

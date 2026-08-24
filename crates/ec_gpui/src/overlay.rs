@@ -225,6 +225,16 @@ impl OverlayState {
         self.common_prefix = Arc::from(crate::list::common_prefix_for(self.selected, &self.items));
     }
 
+    /// Move the selection and recompute the cached common prefix.
+    ///
+    /// Assigning `selected` directly leaves the prefix underline drawn for the
+    /// previously selected row's kind, since paint reads the cache instead of
+    /// recomputing per frame.
+    pub fn set_selected(&mut self, index: usize) {
+        self.selected = index;
+        self.refresh_common_prefix();
+    }
+
     pub fn hide(&mut self) {
         self.visible = false;
         self.loading = false;
@@ -470,6 +480,34 @@ mod tests {
         assert_eq!(&*overlay.common_prefix, "--h");
         overlay.dismiss();
         assert_eq!(&*overlay.common_prefix, "");
+    }
+
+    #[test]
+    fn jumping_straight_to_a_row_refreshes_the_cached_common_prefix() {
+        // `selectSuggestion<N>` and a row click assign the index directly. Paint
+        // reads the cache, so without a refresh the prefix underline keeps
+        // describing the previously selected row's kind.
+        let mut overlay = OverlayState::new();
+        overlay.set_suggestions(
+            vec![
+                subcommand("checkout"),
+                subcommand("cherry-pick"),
+                SuggestionItem {
+                    name: "--hard".into(),
+                    kind: "option".into(),
+                    ..SuggestionItem::default()
+                },
+            ],
+            "ch".into(),
+        );
+        assert_eq!(&*overlay.common_prefix, "che");
+        overlay.set_selected(2);
+        assert_eq!(
+            &*overlay.common_prefix, "",
+            "a lone option row shares no prefix with the subcommands"
+        );
+        overlay.set_selected(0);
+        assert_eq!(&*overlay.common_prefix, "che");
     }
 
     #[test]

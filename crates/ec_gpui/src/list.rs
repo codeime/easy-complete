@@ -975,7 +975,7 @@ fn suggestion_row(
         // the user presses and drags out of it before releasing.
         .on_click(move |_event, _window, cx| {
             let payload = state.update(cx, |overlay, cx| {
-                overlay.selected = ix;
+                overlay.set_selected(ix);
                 overlay.has_changed_index = true;
                 cx.notify();
                 overlay

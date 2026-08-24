@@ -73,6 +73,16 @@ jobs:
         with:
           key: ci
 
+      # bundle/specs-ir is generated, not committed. Tests read the real hook
+      # modules out of it and skip when it is absent, so compile it before
+      # testing or those assertions never run. Node builtins only, no install.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+
+      - name: Compile spec IR
+        run: node scripts/compile-spec-ir.mjs
+
       - name: Check formatting
         run: cargo fmt --check
 
@@ -81,6 +91,14 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      # A zero exit code proves nothing on its own: the engine tolerates a
+      # missing specs dir and prints an empty suggestion list. Assert that the
+      # bundled git spec actually resolved. Same gate as rust-linux / rust-windows.
+      - name: Headless engine complete
+        run: |
+          cargo run --locked -p ec_cli -- engine complete --buffer "git ch" | tee engine-complete.json
+          grep -q '"name": "checkout"' engine-complete.json
 
       # Smoke-build the shipped binaries with the distribution profile so that
       # profile-specific breakage (panic = "abort", LTO, strip) is caught in CI
@@ -124,14 +142,27 @@ jobs:
         with:
           key: ci-linux
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+
+      - name: Compile spec IR
+        run: node scripts/compile-spec-ir.mjs
+
       - name: Clippy (headless crates)
         run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method --color always -- -D warnings
 
       - name: Test (headless crates)
         run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method
 
+      # A zero exit code proves nothing on its own: the engine tolerates a
+      # missing specs dir and prints an empty suggestion list. Assert that the
+      # bundled git spec actually resolved.
       - name: Headless engine complete
-        run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"
+        shell: bash
+        run: |
+          cargo run --locked -p ec_cli -- engine complete --buffer "git ch" | tee engine-complete.json
+          grep -q '"name": "checkout"' engine-complete.json
 
       - name: Clippy (desktop host)
         run: cargo clippy --locked -p ec_gpui -p fig_desktop --color always -- -D warnings
@@ -173,14 +204,27 @@ jobs:
         with:
           key: ci-windows
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+
+      - name: Compile spec IR
+        run: node scripts/compile-spec-ir.mjs
+
       - name: Clippy (headless crates)
         run: cargo clippy --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method --color always -- -D warnings
 
       - name: Test (headless crates)
         run: cargo test --locked -p fig_os_shim -p fig_util -p fig_proto -p fig_settings -p fig_log -p ec_engine -p fig_integrations -p fig_install -p ec_cli -p fig_ipc -p figterm -p ec_hitoolbox -p fig_input_method
 
+      # A zero exit code proves nothing on its own: the engine tolerates a
+      # missing specs dir and prints an empty suggestion list. Assert that the
+      # bundled git spec actually resolved.
       - name: Headless engine complete
-        run: cargo run --locked -p ec_cli -- engine complete --buffer "git ch"
+        shell: bash
+        run: |
+          cargo run --locked -p ec_cli -- engine complete --buffer "git ch" | tee engine-complete.json
+          grep -q '"name": "checkout"' engine-complete.json
 
       - name: Clippy (desktop host)
         run: cargo clippy --locked -p ec_gpui -p fig_desktop --color always -- -D warnings

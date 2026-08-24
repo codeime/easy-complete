@@ -774,9 +774,16 @@ fn apply_generate_spec(current: &mut Arc<Spec>, tokens: &[String]) {
         return;
     };
     let timeout = Duration::from_millis(u64::try_from(crate::generate::DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000));
-    let cache_key = host.generate_spec_cache_key(hook_id, current.generate_spec_cache_key.as_deref(), cwd, tokens);
+    let explicit_key = current.generate_spec_cache_key.as_deref();
+    let cache_key = host.generate_spec_cache_key(hook_id, explicit_key, cwd, tokens);
+    // A declared `generateSpecCacheKey` is the author opting into caching, so it
+    // lives for the session. Without one, expire quickly — see
+    // `KEYLESS_GENERATE_SPEC_TTL`.
+    let ttl = explicit_key
+        .is_none()
+        .then_some(crate::js_host::KEYLESS_GENERATE_SPEC_TTL);
     let wrapper = Arc::clone(current);
-    let Some(merged) = crate::js_host::cached_spec(host, &cache_key, || {
+    let Some(merged) = crate::js_host::cached_spec(host, &cache_key, ttl, || {
         host.generate_spec(hook_id, tokens, cwd, timeout)
             .map(|generated| crate::js_host::merge_generated_spec(wrapper.as_ref(), generated))
     }) else {
@@ -842,16 +849,44 @@ fn dynamic_spec_name(arg: &ArgSpec, token: &str) -> Option<String> {
 }
 
 fn command_lookup_name(token: &str, is_script: bool) -> String {
-    let pathish = token.starts_with('/') || token.starts_with("./") || token.starts_with("~/");
-    if is_script || pathish {
+    if is_script || token_is_command_path(token) {
+        // Platform separators, so a unix file whose name contains a backslash
+        // still looks up its own spec rather than a truncated tail.
         token
-            .rsplit(['/', '\\'])
+            .rsplit(crate::filegen::PATH_SEPS)
             .next()
             .filter(|name| !name.is_empty())
             .unwrap_or(token)
             .to_string()
     } else {
         token.to_string()
+    }
+}
+
+/// Whether this token is a filesystem path we should take a basename from.
+///
+/// A backslash is a legal unix filename character, so `.\` / `~\` / `C:\` /
+/// UNC are path prefixes only off unix. `foo/bar` without a prefix stays the
+/// spec name on every platform — same as the historical `/` / `./` / `~/` gate.
+fn token_is_command_path(token: &str) -> bool {
+    if token.starts_with('/') || token.starts_with("./") || token.starts_with("~/") {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        if token.starts_with(".\\") || token.starts_with("~\\") || token.starts_with("\\\\") || token.starts_with('\\')
+        {
+            return true;
+        }
+        let bytes = token.as_bytes();
+        bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/')
     }
 }
 
@@ -1671,9 +1706,13 @@ fn select_named_candidate<'a>(
     prefer_long_name: bool,
 ) -> Option<&'a String> {
     if prefer_long_name {
+        // `>=` so equal-length aliases resolve to the last one, the same way the
+        // `max_by_key` fallback below does. The two must not disagree: `-h` and
+        // `-?` on one option would otherwise display differently depending on
+        // which branch ran.
         let mut best: Option<&String> = None;
         for candidate in item_names {
-            if matches_query(candidate, query, fuzzy) && best.is_none_or(|current| candidate.len() > current.len()) {
+            if matches_query(candidate, query, fuzzy) && best.is_none_or(|current| candidate.len() >= current.len()) {
                 best = Some(candidate);
             }
         }
@@ -2371,6 +2410,90 @@ mod tests {
             !body.contains("} else {\n        host.generate_spec"),
             "missing generateSpecCacheKey must not skip the in-process spec cache"
         );
+        assert!(
+            body.contains("KEYLESS_GENERATE_SPEC_TTL") && body.contains("explicit_key"),
+            "a keyless generateSpec must expire; only a declared cache key lives for the session"
+        );
+    }
+
+    #[test]
+    fn a_keyless_generate_spec_result_expires() {
+        // Nothing in `bundle/specs-ir` declares `generateSpecCacheKey`, so this
+        // is the path every bundled generateSpec takes. Caching it forever hides
+        // a newly installed subcommand until the desktop app restarts.
+        let host = crate::js_host::JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
+        let ttl = Some(std::time::Duration::from_millis(0));
+        let first = crate::js_host::cached_spec(&host, "k", ttl, || {
+            Some(Spec {
+                names: vec!["first".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("miss");
+        assert_eq!(first.names, vec!["first".to_string()]);
+
+        let second = crate::js_host::cached_spec(&host, "k", ttl, || {
+            Some(Spec {
+                names: vec!["second".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("expired, so the hook runs again");
+        assert_eq!(second.names, vec!["second".to_string()], "TTL must expire the entry");
+
+        let pinned = crate::js_host::cached_spec(&host, "explicit", None, || {
+            Some(Spec {
+                names: vec!["pinned".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("miss");
+        let pinned_hit = crate::js_host::cached_spec(&host, "explicit", None, || {
+            panic!("a declared generateSpecCacheKey must not re-run within the session")
+        })
+        .expect("hit");
+        assert!(Arc::ptr_eq(&pinned, &pinned_hit));
+    }
+
+    #[test]
+    fn a_keyless_generate_spec_is_reused_inside_its_ttl() {
+        // The whole point of keeping a keyless cache at all: one hook run per
+        // typing burst instead of one per keystroke.
+        let host = crate::js_host::JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
+        let ttl = Some(std::time::Duration::from_secs(30));
+        let first = crate::js_host::cached_spec(&host, "burst", ttl, || {
+            Some(Spec {
+                names: vec!["first".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("miss");
+        let hit = crate::js_host::cached_spec(&host, "burst", ttl, || {
+            panic!("a keyless generateSpec must not re-run inside its TTL")
+        })
+        .expect("hit");
+        assert!(Arc::ptr_eq(&first, &hit));
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_serving_the_expired_generate_spec() {
+        // A hook that times out or throws must not blank the generated subtree
+        // for that one keystroke.
+        let host = crate::js_host::JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
+        let ttl = Some(std::time::Duration::from_millis(0));
+        let first = crate::js_host::cached_spec(&host, "flaky", ttl, || {
+            Some(Spec {
+                names: vec!["cached".into()],
+                ..Spec::default()
+            })
+        })
+        .expect("miss");
+        let stale = crate::js_host::cached_spec(&host, "flaky", ttl, || None).expect("stale entry is served");
+        assert!(Arc::ptr_eq(&first, &stale));
+        assert_eq!(stale.names, vec!["cached".to_string()]);
+
+        // With nothing cached at all, a failed run is still a miss.
+        assert!(crate::js_host::cached_spec(&host, "never-ran", ttl, || None).is_none());
     }
 
     #[test]
@@ -3618,6 +3741,23 @@ mod tests {
     }
 
     #[test]
+    fn equal_length_aliases_resolve_the_same_way_on_both_verbose_paths() {
+        // `-h` / `-?` tie on length. The matching-name loop and the display-name
+        // fallback have to agree, or the row's label depends on which branch ran.
+        let names: Vec<String> = vec!["-h".into(), "-?".into()];
+        assert_eq!(
+            select_named_candidate(&names, None, "-", false, true).map(String::as_str),
+            Some("-?"),
+            "the matching loop keeps the last of equal-length aliases"
+        );
+        assert_eq!(
+            select_named_candidate(&names, Some("Help"), "Hel", false, true).map(String::as_str),
+            Some("-?"),
+            "the display-name fallback must break the tie the same way"
+        );
+    }
+
+    #[test]
     fn hidden_names_are_revealed_only_by_an_exact_alias() {
         let names = vec!["secret".into(), "hidden-alias".into()];
         assert!(!hidden_item_is_visible(true, &names, "sec"));
@@ -4004,5 +4144,32 @@ mod tests {
         assert_eq!(command_lookup_name("./bin/git", false), "git");
         assert_eq!(command_lookup_name("/usr/bin/git", false), "git");
         assert_eq!(command_lookup_name("~/bin/git", true), "git");
+        // A backslash is a legal unix filename. The tokenizer hands us the
+        // unescaped form, so this must stay the spec name, not `git`.
+        assert_eq!(command_lookup_name(r"foo\bar\git", false), r"foo\bar\git");
+        #[cfg(unix)]
+        assert_eq!(command_lookup_name(r".\bin\git", false), r".\bin\git");
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn command_lookup_name_uses_basename_for_windows_paths() {
+        assert_eq!(command_lookup_name(r".\bin\git", false), "git");
+        assert_eq!(command_lookup_name(r"~\bin\git", false), "git");
+        assert_eq!(
+            command_lookup_name(r"C:\Program Files\Git\cmd\git.exe", false),
+            "git.exe"
+        );
+        assert_eq!(
+            command_lookup_name("C:/Program Files/Git/cmd/git.exe", false),
+            "git.exe"
+        );
+        assert_eq!(command_lookup_name(r"\\server\share\git.exe", false), "git.exe");
+        assert_eq!(command_lookup_name(r"\Program Files\Git\cmd\git.exe", false), "git.exe");
+        assert_eq!(
+            command_lookup_name(r"foo\bar\git", false),
+            r"foo\bar\git",
+            "a relative name without a path prefix is still the spec name"
+        );
     }
 }

@@ -108,13 +108,6 @@ fn wait_child_output_unix(mut child: Child, timeout: Duration) -> Result<Command
         if !stderr_eof {
             stderr_eof = drain_stdout(&mut stderr, &mut tmp, &mut err_buf);
         }
-        if out_buf.len() >= MAX_STDOUT || err_buf.len() >= MAX_STDOUT {
-            kill_and_reap(&mut child, pid);
-            out_buf.truncate(MAX_STDOUT);
-            err_buf.truncate(MAX_STDOUT);
-            return Ok(command_output(-1, out_buf, err_buf));
-        }
-
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !stdout_eof {
@@ -128,8 +121,6 @@ fn wait_child_output_unix(mut child: Child, timeout: Duration) -> Result<Command
                 if !stdout_eof || !stderr_eof {
                     kill_process_group(pid);
                 }
-                out_buf.truncate(MAX_STDOUT);
-                err_buf.truncate(MAX_STDOUT);
                 return Ok(command_output(status.code().unwrap_or(-1), out_buf, err_buf));
             },
             Ok(None) => {},
@@ -195,24 +186,27 @@ fn command_output(status: i32, stdout: Vec<u8>, stderr: Vec<u8>) -> CommandOutpu
 
 /// Cap stdout/stderr as they are read. `wait_with_output` buffers the whole
 /// pipe first, so a noisy generator could OOM the engine worker before the
-/// 256 KiB truncate. Unix polls both pipes on the attempt thread; Windows
-/// still uses a waiter (no live PeekNamedPipe here) but the readers stop at
-/// [`MAX_STDOUT`].
-#[cfg(not(unix))]
+/// 256 KiB cap. Unix polls both pipes on the attempt thread; Windows still
+/// uses a waiter (no live PeekNamedPipe here).
+///
+/// Compiled in tests on every OS so Linux CI can pin that we *discard* past
+/// the cap instead of stopping. Stopping leaves the pipe full, the child
+/// blocked, and `child.wait()` hanging until the timeout — the same lost
+/// exit status the unix `drain_stdout` path used to have.
+#[cfg(any(test, not(unix)))]
 fn read_capped(mut reader: impl std::io::Read) -> Vec<u8> {
     use std::io::ErrorKind;
 
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     loop {
-        if buf.len() >= MAX_STDOUT {
-            break;
-        }
         match reader.read(&mut tmp) {
             Ok(0) => break,
             Ok(n) => {
-                let room = MAX_STDOUT - buf.len();
-                buf.extend_from_slice(&tmp[..n.min(room)]);
+                let room = MAX_STDOUT.saturating_sub(buf.len());
+                if room > 0 {
+                    buf.extend_from_slice(&tmp[..n.min(room)]);
+                }
             },
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
@@ -365,14 +359,16 @@ fn wait_child_unix(mut child: Child, timeout: Duration, require_success: bool) -
 
     loop {
         if !stdout_eof {
-            if drain_stdout(&mut stdout, &mut tmp, &mut buf) {
-                stdout_eof = true;
-            }
-            if buf.len() >= MAX_STDOUT {
-                kill_and_reap(&mut child, pid);
-                buf.truncate(MAX_STDOUT);
-                return RunResult::Output(String::from_utf8_lossy(&buf).into_owned());
-            }
+            stdout_eof = drain_stdout(&mut stdout, &mut tmp, &mut buf);
+        }
+        // Unlike `execute_full`, `RunResult::Output` carries no exit status, so
+        // there is nothing to preserve by waiting for the child to finish. Once
+        // the cap is full we already have everything we will keep: return it
+        // now rather than let a long-running noisy script burn its whole budget
+        // and time out into an empty result.
+        if !require_success && buf.len() >= MAX_STDOUT {
+            kill_and_reap(&mut child, pid);
+            return RunResult::Output(String::from_utf8_lossy(&buf).into_owned());
         }
 
         match child.try_wait() {
@@ -438,22 +434,37 @@ fn wait_child_unix(mut child: Child, timeout: Duration, require_success: bool) -
     }
 }
 
+/// Reads per call before handing control back so the caller can re-check its
+/// deadline. A generator that writes without pause must not pin this loop.
+#[cfg(unix)]
+const DRAIN_READS_PER_CALL: usize = 64;
+
+/// Read what is available, keeping at most [`MAX_STDOUT`] bytes and *discarding*
+/// the rest. Returns `true` at EOF.
+///
+/// Draining past the cap instead of stopping is deliberate: an unread pipe fills
+/// up and blocks the child, which would leave killing it as the only way out and
+/// lose its real exit status. Sixteen bundled hooks branch on that status, so a
+/// capped-but-usable listing must not look like a crash.
 #[cfg(unix)]
 fn drain_stdout(stdout: &mut impl std::io::Read, tmp: &mut [u8], buf: &mut Vec<u8>) -> bool {
     use std::io::ErrorKind;
-    loop {
-        if buf.len() >= MAX_STDOUT {
-            return false;
-        }
+    for _ in 0..DRAIN_READS_PER_CALL {
         match stdout.read(tmp) {
             Ok(0) => return true,
-            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Ok(n) => {
+                let room = MAX_STDOUT.saturating_sub(buf.len());
+                if room > 0 {
+                    buf.extend_from_slice(&tmp[..n.min(room)]);
+                }
+            },
             Err(err) if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::Interrupted => {
                 return false;
             },
             Err(_) => return true,
         }
     }
+    false
 }
 
 #[cfg(not(unix))]
@@ -585,9 +596,46 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn execute_full_caps_stdout_without_waiting_for_eof() {
-        let started = std::time::Instant::now();
+    fn execute_full_caps_stdout_and_keeps_the_real_exit_code() {
+        // Sixteen bundled hooks branch on `status`. A command that merely wrote
+        // more than the cap and then failed must still report its own code, and
+        // one that succeeded must not look like a crash.
         let out = execute_full(
+            "sh",
+            &["-c".into(), "yes aaaaaaaa | head -n 40000; exit 3".into()],
+            "/",
+            &[],
+            Duration::from_secs(10),
+        )
+        .expect("capped output is not an error");
+        assert_eq!(out.stdout.len(), MAX_STDOUT, "stdout is held at the cap");
+        assert_eq!(out.status, 3, "the cap must not overwrite the exit code");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_noisy_stderr_does_not_truncate_stdout() {
+        let out = execute_full(
+            "sh",
+            &["-c".into(), "printf ok; yes aaaaaaaa | head -n 40000 >&2".into()],
+            "/",
+            &[],
+            Duration::from_secs(10),
+        )
+        .expect("noisy stderr is not an error");
+        assert_eq!(out.stdout, "ok", "stdout must not be cut short by stderr volume");
+        assert_eq!(out.stderr.len(), MAX_STDOUT);
+        assert_eq!(out.status, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_endless_writer_times_out_instead_of_reporting_a_status() {
+        // Draining past the cap keeps the child unblocked, so a generator that
+        // never stops writing is bounded by its deadline, not by a fake status.
+        // Memory still stops at the cap.
+        let started = std::time::Instant::now();
+        let err = execute_full(
             "sh",
             &[
                 "-c".into(),
@@ -595,15 +643,15 @@ mod tests {
             ],
             "/",
             &[],
-            Duration::from_secs(2),
+            Duration::from_millis(300),
         )
-        .expect("capped output is success");
+        .expect_err("an endless writer has no exit status to report");
+        assert_eq!(err, CommandError::TimedOut);
         assert!(
-            started.elapsed() < Duration::from_millis(800),
+            started.elapsed() < Duration::from_secs(2),
             "waited {:?}",
             started.elapsed()
         );
-        assert_eq!(out.stdout.len(), MAX_STDOUT);
     }
 
     #[test]
@@ -653,6 +701,33 @@ mod tests {
             child[..child_end].contains("read_capped") && !child[..child_end].contains("wait_with_output"),
             "Windows generator execute must cap stdout while reading too"
         );
+        let capped = src.find("fn read_capped").expect("read_capped");
+        let capped_body = &src[capped..];
+        let capped_end = capped_body
+            .find("fn wait_child_output_threaded")
+            .unwrap_or(capped_body.len());
+        let capped_body = &capped_body[..capped_end];
+        assert!(
+            capped_body.contains("saturating_sub") && !capped_body.contains("if buf.len() >= MAX_STDOUT"),
+            "read_capped must drain past the cap; stopping blocks the child and loses its status"
+        );
+    }
+
+    #[test]
+    fn read_capped_drains_past_the_cap_so_the_child_can_exit() {
+        // Same contract as unix `drain_stdout`: keep the last-`MAX_STDOUT` window
+        // in memory, but consume the rest so a blocked writer can finish.
+        let extra = 64 * 1024;
+        let input = vec![b'x'; MAX_STDOUT + extra];
+        let mut cursor = std::io::Cursor::new(input);
+        let out = read_capped(&mut cursor);
+        assert_eq!(out.len(), MAX_STDOUT, "kept bytes stop at the cap");
+        assert_eq!(
+            cursor.position() as usize,
+            MAX_STDOUT + extra,
+            "bytes past the cap must be read and discarded"
+        );
+        assert!(out.iter().all(|&b| b == b'x'));
     }
 
     #[cfg(unix)]

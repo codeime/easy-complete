@@ -268,7 +268,7 @@ impl PlatformStateImpl {
     pub(super) fn handle(
         self: &Arc<Self>,
         event: PlatformBoundEvent,
-        window_target: &EventLoopWindowTarget,
+        _window_target: &EventLoopWindowTarget,
     ) -> anyhow::Result<()> {
         debug!("Handling platform event: {:?}", event);
         match event {
@@ -464,7 +464,7 @@ impl PlatformStateImpl {
                 if *policy_lock != policy {
                     debug!(?policy, "Setting application policy");
                     *policy_lock = policy;
-                    window_target.set_activation_policy_at_runtime(policy);
+                    set_activation_policy(policy);
                 }
                 Ok(())
             },

@@ -427,9 +427,10 @@ mod tests {
         );
     }
 
+    // `muda::Menu` is main-thread-only on macOS; assert on the source, not on a
+    // live menu built from the test harness worker thread.
     #[test]
     fn tray_menu_append_does_not_unwrap() {
-        let _menu = super::get_context_menu();
         let production = include_str!("tray.rs")
             .split("#[cfg(test)]")
             .next()

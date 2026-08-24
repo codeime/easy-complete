@@ -97,6 +97,10 @@ where
                                     initialized = true;
                                     session.writer = Some(clientbound_tx.clone());
                                     session.dead_since = None;
+                                    // Same connection id, new socket. figterm
+                                    // unlocked itself at handshake; the mirror
+                                    // must not claim we already pushed a frame.
+                                    session.intercept_synced = false;
                                     session.on_close_tx = on_close_tx.clone();
                                     debug!(
                                         "Client auth for {} accepted because of secret match ({} = {})",
@@ -138,6 +142,7 @@ where
                                     response_map: HashMap::new(),
                                     nonce_counter: Arc::new(AtomicU64::new(0)),
                                     on_close_tx: on_close_tx.clone(),
+                                    intercept_synced: false,
                                     intercept: InterceptMode::Unlocked,
                                     intercept_global: InterceptMode::Unlocked
                                 });
@@ -146,28 +151,39 @@ where
                                 }))
                             };
 
-                            if matches!(result, Some(clientbound::Packet::HandshakeResponse(HandshakeResponse { success: true }))) {
-                                hook.sessions_changed(&figterm_state).await;
+                            // Queue HandshakeResponse *before* unlock frames.
+                            // figterm's handshake read loop drops every
+                            // Clientbound that is not HandshakeResponse, so an
+                            // InterceptFigJs that wins the outgoing queue is
+                            // discarded and an older ecterm stays locked.
+                            if let Some(response) = result {
+                                let success = matches!(
+                                    &response,
+                                    clientbound::Packet::HandshakeResponse(HandshakeResponse { success: true })
+                                );
+                                let _ = clientbound_tx.send(Clientbound { packet: Some(response) });
+                                if success {
+                                    hook.sessions_changed(&figterm_state).await;
 
-                                if let Some(parent_id) = handshake.parent_id {
-                                    let inner = figterm_state.inner.lock();
-                                    let sessions = inner.linked_sessions.values();
-                                    for session in sessions {
-                                        if let Some(ref writer) = session.writer {
-                                            let notification = clientbound::Packet::NotifyChildSessionStarted(
-                                                clientbound::NotifyChildSessionStarted { parent_id: parent_id.clone() }
-                                            );
-                                            writer.send(
-                                                Clientbound {
-                                                    packet: Some(notification)
-                                                }
-                                            ).ok();
+                                    if let Some(parent_id) = handshake.parent_id {
+                                        let inner = figterm_state.inner.lock();
+                                        let sessions = inner.linked_sessions.values();
+                                        for session in sessions {
+                                            if let Some(ref writer) = session.writer {
+                                                let notification = clientbound::Packet::NotifyChildSessionStarted(
+                                                    clientbound::NotifyChildSessionStarted { parent_id: parent_id.clone() }
+                                                );
+                                                writer.send(
+                                                    Clientbound {
+                                                        packet: Some(notification)
+                                                    }
+                                                ).ok();
+                                            }
                                         }
                                     }
                                 }
                             }
-
-                            result
+                            None
                         },
                         Some(hostbound::Packet::Request(hostbound::Request { request: Some(request), nonce })) => {
                             if matches!(
@@ -466,5 +482,40 @@ async fn send_pings(outgoing: flume::Sender<Clientbound>, mut on_close_rx: tokio
 fn sanitize_fn(context: &mut Option<ShellContext>, session_id: Uuid) {
     if let Some(context) = context {
         context.session_id = Some(session_id.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_successful_handshake_notifies_sessions_changed() {
+        // Desktop `RemoteHook::sessions_changed` unlocks unsynced tabs. If this
+        // call goes missing, that hook never runs for a newly linked figterm.
+        let src = include_str!("remote.rs");
+        let start = src
+            .find("Some(hostbound::Packet::Handshake(handshake))")
+            .expect("handshake arm");
+        let rest = &src[start..];
+        let end = rest.find("Some(hostbound::Packet::Request").expect("next arm");
+        let body = &rest[..end];
+        let queued = body
+            .find("clientbound_tx.send(Clientbound")
+            .expect("queue HandshakeResponse");
+        let changed = body
+            .find("hook.sessions_changed(&figterm_state)")
+            .expect("sessions_changed");
+        let parent = body.find("NotifyChildSessionStarted").expect("child notify");
+        assert!(
+            queued < changed,
+            "HandshakeResponse must be queued before unlock frames; figterm drops anything else during handshake"
+        );
+        assert!(
+            changed < parent,
+            "sessions_changed must run on handshake success, before child-session fanout"
+        );
+        assert!(
+            body.contains("intercept_synced = false"),
+            "a secret-match reconnect must not keep a stale synced mirror"
+        );
     }
 }

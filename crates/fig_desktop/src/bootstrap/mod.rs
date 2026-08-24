@@ -15,7 +15,7 @@ use tracing::{debug, error, warn};
 
 use self::menu::menu_bar;
 pub use self::window_id::{AUTOCOMPLETE_ID, SETTINGS_ID, WindowId};
-use crate::event::{Event, WindowEvent};
+use crate::event::Event;
 use crate::notification_bus::{JsonNotification, NOTIFICATION_BUS};
 use crate::platform::{PlatformBoundEvent, PlatformState};
 use crate::remote_ipc::RemoteHook;
@@ -244,6 +244,7 @@ async fn init_notification_listeners(proxy: EventLoopProxy) {
         use fig_integrations::desktop_entry::should_install_autostart_entry;
         use fig_settings::{Settings, State};
 
+        use crate::event::WindowEvent;
         use crate::notification_bus::JsonNotification;
         watcher!(
             settings,

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 变更：浮层的默认快捷键改为读取内置动作表，不再单独维护一份硬编码表，与产品其余部分重新一致。四处默认键位有变动：`⌃K`、`⌃J` 现在是上下移动（`⌃K` 原先是切换描述浮窗），切换描述浮窗改为 `⌘I`，选择第 N 条建议从 `⌘1`…`⌘0` 改为 `⌃1`…`⌃0`。注意列表可见时 `⌃J` 会被拦截，若你习惯用它换行，请先按 Esc
 - 变更：补全浮层与设置窗口从 WebView 换成 GPUI——补全由 `ec_engine` 在构建期 JSON IR 上运行，QuickJS 只执行 spec hook（`postProcess`、`script`、`custom`、`generateSpec`）
 - 修复：浮层坐标换算改用 `NSScreen.screens[0]` 作为全局原点，不再用 `mainScreen`——外接屏上 `mainScreen` 是焦点所在屏，浮层会落到错误高度
 - 修复：打开 `···` 的那次请求结束时必须关掉标记，即使结果已过期；标记最多显示到 `autocomplete.scriptTimeout`（默认 6 秒），不再等引擎 30 秒监工上限。请求本身继续跑，慢生成器返回后仍会渲染

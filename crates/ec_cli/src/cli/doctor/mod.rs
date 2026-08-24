@@ -1012,7 +1012,7 @@ impl DoctorCheck<DiagnosticsResponse> for CliPathCheck {
         {
             Err(doctor_warning!(
                 "Running debug build in a non-standard location: {}",
-                path.display().bold()
+                path.display().to_string().bold()
             ))
         } else {
             Err(doctor_error!(

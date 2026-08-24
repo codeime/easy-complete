@@ -28,7 +28,10 @@ struct DirListing {
 static DIR_CACHE: LazyLock<Mutex<HashMap<PathBuf, DirListing>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -> Vec<Suggestion> {
-    if prefix == "~" || prefix == "~\\" {
+    // `~\` is only a home reference where a backslash separates paths. On unix
+    // it is a literal filename, and `~\D` already resolves that way, so
+    // redirecting the bare form here would split one prefix family in two.
+    if prefix == "~" || (cfg!(not(unix)) && prefix == "~\\") {
         return complete_path("~/", cwd, folders_only, fuzzy);
     }
     let expanded = expand_home(prefix);
@@ -211,7 +214,7 @@ fn expand_tilde(path: &str) -> String {
 
     // `~` and `~/...` use the current process HOME, preserving the existing
     // behavior when HOME is unavailable.
-    if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
+    if rest.is_empty() || starts_with_path_sep(rest) {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from);
@@ -219,7 +222,7 @@ fn expand_tilde(path: &str) -> String {
         // absolute suffix as a replacement path, whereas shell tilde
         // expansion keeps the user's separators after the home directory
         // (`~//tmp` is still rooted under HOME).
-        let suffix = rest.trim_start_matches(['/', '\\']);
+        let suffix = rest.trim_start_matches(PATH_SEPS);
         return home.map_or_else(
             || path.to_string(),
             |home| {
@@ -235,12 +238,12 @@ fn expand_tilde(path: &str) -> String {
     // Resolve `~user` through the local account database.  This is a
     // read-only lookup and never executes shell code.  Unknown users remain
     // untouched, so a literal path is not accidentally redirected.
-    let username_end = rest.find(['/', '\\']).unwrap_or(rest.len());
+    let username_end = rest.find(PATH_SEPS).unwrap_or(rest.len());
     let username = &rest[..username_end];
     let Some(home) = user_home_dir(username) else {
         return path.to_string();
     };
-    let suffix = rest[username_end..].trim_start_matches(['/', '\\']);
+    let suffix = rest[username_end..].trim_start_matches(PATH_SEPS);
     join_home_prefix(
         &home,
         suffix,
@@ -249,17 +252,17 @@ fn expand_tilde(path: &str) -> String {
 }
 
 fn starts_with_path_sep(s: &str) -> bool {
-    s.starts_with('/') || s.starts_with('\\')
+    s.starts_with(PATH_SEPS)
 }
 
 fn join_home_prefix(home: &Path, suffix: &str, append_slash: bool) -> String {
     let mut path = home.to_path_buf();
-    for part in suffix.split(['/', '\\']).filter(|part| !part.is_empty()) {
+    for part in suffix.split(PATH_SEPS).filter(|part| !part.is_empty()) {
         path.push(part);
     }
     let mut expanded = path.display().to_string();
-    if append_slash && !expanded.ends_with('/') && !expanded.ends_with('\\') {
-        expanded.push('/');
+    if append_slash && !ends_with_path_sep(&expanded) {
+        expanded.push(std::path::MAIN_SEPARATOR);
     }
     expanded
 }
@@ -415,12 +418,22 @@ fn user_home_dir(username: &str) -> Option<PathBuf> {
     )
 }
 
+/// Path separators for the current platform.
+///
+/// A backslash is an ordinary, legal character in a Unix filename, and the
+/// tokenizer hands us the unescaped form — so treating it as a separator here
+/// would split `a\b` into the directory `a\` and lose the file entirely.
+#[cfg(unix)]
+pub(crate) const PATH_SEPS: &[char] = &['/'];
+#[cfg(not(unix))]
+pub(crate) const PATH_SEPS: &[char] = &['/', '\\'];
+
 fn last_path_sep(s: &str) -> Option<usize> {
-    s.rfind(['/', '\\'])
+    s.rfind(PATH_SEPS)
 }
 
 fn ends_with_path_sep(s: &str) -> bool {
-    s.ends_with('/') || s.ends_with('\\')
+    s.ends_with(PATH_SEPS)
 }
 
 fn dir_prefix(prefix: &str) -> String {
@@ -622,7 +635,6 @@ mod tests {
     #[test]
     fn preserves_tilde_prefix() {
         assert_eq!(dir_prefix("~/Des"), "~/");
-        assert_eq!(dir_prefix(r"~\Des"), r"~\");
         assert_eq!(dir_prefix("~"), "");
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
@@ -635,6 +647,15 @@ mod tests {
         let home_dir = expand_home("~");
         assert!(home_dir.ends_with('/'), "{home_dir}");
         assert_eq!(expand_home("~/"), home_dir);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn treats_backslash_as_a_separator_off_unix() {
+        assert_eq!(dir_prefix(r"~\Des"), r"~\");
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| "/Users/test".into());
         let expanded_win = expand_home(r"~\Documents");
         assert!(
             expanded_win.starts_with(&home) && expanded_win.ends_with("Documents"),
@@ -644,6 +665,28 @@ mod tests {
         assert_eq!(query, "Desktop");
         let (_, empty) = split_prefix(r"C:\Users\me\", ".");
         assert!(empty.is_empty(), "{empty}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_literal_backslash_is_part_of_a_unix_filename() {
+        // The tokenizer unescapes before we see it, so `'a\b'` arrives as the
+        // single token `a\b`. Splitting on the backslash would look for a
+        // directory named `a\` and return nothing at all.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(r"we\ird"), "x").unwrap();
+        let cwd = dir.path().display().to_string();
+
+        let (base, query) = split_prefix(r"we\ir", &cwd);
+        assert_eq!(base, dir.path(), "no directory component to split off");
+        assert_eq!(query, r"we\ir");
+        assert_eq!(dir_prefix(r"we\ir"), "");
+
+        let names: Vec<_> = complete_path(r"we\ir", &cwd, false, false)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(names.iter().any(|name| name == r"we\ird"), "{names:?}");
     }
 
     #[test]

@@ -16,7 +16,13 @@ fn macos_production() -> String {
 }
 
 fn imk_production() -> String {
+    // Strip the test module first, like `macos_production`. Otherwise a positive
+    // assertion can be satisfied by `imk.rs`'s own `mod tests`, and deleting the
+    // production guard it is meant to pin would not fail anything.
     include_str!("imk.rs")
+        .split("#[cfg(test)]")
+        .next()
+        .expect("production source")
         .lines()
         .filter(|line| !line.trim_start().starts_with("//"))
         .collect::<Vec<_>>()

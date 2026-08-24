@@ -68,7 +68,7 @@ pub struct JsHost {
     /// beside the source so `git ch` / `git che` do not re-scan hook JS.
     hook_ignores_tokens: Mutex<HashMap<String, bool>>,
     suggestion_cache: Mutex<HashMap<String, CacheEntry<Arc<Vec<Suggestion>>>>>,
-    spec_cache: Mutex<HashMap<String, Arc<Spec>>>,
+    spec_cache: Mutex<HashMap<String, CacheEntry<Arc<Spec>>>>,
 }
 
 struct Inner {
@@ -548,17 +548,39 @@ fn evict_at_cap<T>(cache: &mut HashMap<String, T>, key: &str) {
     }
 }
 
-pub fn cached_spec(host: &JsHost, cache_key: &str, run: impl FnOnce() -> Option<Spec>) -> Option<Arc<Spec>> {
-    {
-        let cache = host.spec_cache.lock().unwrap_or_else(|err| err.into_inner());
-        if let Some(spec) = cache.get(cache_key) {
-            return Some(Arc::clone(spec));
-        }
+/// How long a generateSpec result survives when the spec did not declare a
+/// `generateSpecCacheKey`.
+///
+/// Fig re-runs a keyless generateSpec on every keystroke, and none of the
+/// bundled specs declare a key — so caching one for the life of the process
+/// would pin `git help -a` / `node_modules/.bin` listings until the desktop app
+/// restarts, and a newly installed subcommand would never appear. This keeps the
+/// win that matters (one hook run per typing burst, not per keystroke) and
+/// matches the 1s auto-cache default the suggestion cache already uses.
+pub(crate) const KEYLESS_GENERATE_SPEC_TTL: Duration = Duration::from_millis(1_000);
+
+/// Memoize a generateSpec result.
+///
+/// `ttl` is `None` only when the spec declared a `generateSpecCacheKey`, i.e.
+/// the author opted into caching the way Fig means it.
+pub fn cached_spec(
+    host: &JsHost,
+    cache_key: &str,
+    ttl: Option<Duration>,
+    run: impl FnOnce() -> Option<Spec>,
+) -> Option<Arc<Spec>> {
+    let lookup = CachePolicy { ttl, swr: false };
+    if let Some(hit) = cache_get(&host.spec_cache, cache_key, lookup) {
+        return Some(hit);
     }
-    let value = Arc::new(run()?);
-    let mut cache = host.spec_cache.lock().unwrap_or_else(|err| err.into_inner());
-    evict_at_cap(&mut cache, cache_key);
-    cache.insert(cache_key.to_string(), Arc::clone(&value));
+    let Some(fresh) = run() else {
+        // The refresh failed (hook timeout, JS throw, unparsable result). Serve
+        // the expired entry instead of nothing: dropping it would make the whole
+        // generated subtree vanish for one keystroke and come back on the next.
+        return cache_get(&host.spec_cache, cache_key, CachePolicy { ttl: None, swr: true });
+    };
+    let value = Arc::new(fresh);
+    cache_put(&host.spec_cache, cache_key.to_string(), Arc::clone(&value));
     Some(value)
 }
 
@@ -1542,18 +1564,32 @@ mod tests {
         assert!(!hook_source_ignores_first_param(
             "export default async generateSpec(e){let n=e.filter(a=>a.trim()!==\"\"&&!a.startsWith(\"-\")).length>2;return {name:\"install\"};}"
         ));
-        assert!(hook_source_ignores_first_param(include_str!(
-            "../../../bundle/specs-ir/hooks/git_generateSpec_0.js"
-        )));
-        assert!(hook_source_ignores_first_param(include_str!(
-            "../../../bundle/specs-ir/hooks/hub_generateSpec_0.js"
-        )));
-        assert!(!hook_source_ignores_first_param(include_str!(
-            "../../../bundle/specs-ir/hooks/mask_generateSpec_0.js"
-        )));
-        assert!(!hook_source_ignores_first_param(include_str!(
-            "../../../bundle/specs-ir/hooks/pnpm_generateSpec_2.js"
-        )));
+        // `bundle/specs-ir` is generated, not committed, so read the real hooks
+        // at run time. `include_str!` here would make the whole crate fail to
+        // compile on a checkout that has not run `compile-spec-ir.mjs` yet.
+        for (hook, ignores_first_param) in [
+            ("git_generateSpec_0.js", true),
+            ("hub_generateSpec_0.js", true),
+            ("mask_generateSpec_0.js", false),
+            ("pnpm_generateSpec_2.js", false),
+        ] {
+            let source = bundled_hook_source(hook)
+                .unwrap_or_else(|| panic!("missing bundle/specs-ir/hooks/{hook}; run scripts/compile-spec-ir.mjs"));
+            assert_eq!(
+                hook_source_ignores_first_param(&source),
+                ignores_first_param,
+                "{hook} first-param usage changed"
+            );
+        }
+    }
+
+    /// A hook module out of the generated IR tree, or `None` when it has not
+    /// been compiled yet.
+    fn bundled_hook_source(name: &str) -> Option<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bundle/specs-ir/hooks")
+            .join(name);
+        fs::read_to_string(path).ok()
     }
 
     #[test]
@@ -1633,14 +1669,14 @@ mod tests {
     #[test]
     fn cached_spec_returns_the_same_arc_on_hit() {
         let host = JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
-        let first = cached_spec(&host, "k", || {
+        let first = cached_spec(&host, "k", None, || {
             Some(Spec {
                 names: vec!["demo".into()],
                 ..Spec::default()
             })
         })
         .expect("miss");
-        let second = cached_spec(&host, "k", || panic!("cache hit must not re-run generateSpec")).expect("hit");
+        let second = cached_spec(&host, "k", None, || panic!("cache hit must not re-run generateSpec")).expect("hit");
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first.names, vec!["demo".to_string()]);
     }
@@ -1683,14 +1719,14 @@ mod tests {
     #[test]
     fn clear_caches_for_one_cli_keeps_the_other() {
         let host = JsHost::new(std::path::PathBuf::from("/tmp/ec-missing-hooks"));
-        let git = cached_spec(&host, "git#generateSpec#0\x1f/tmp", || {
+        let git = cached_spec(&host, "git#generateSpec#0\x1f/tmp", None, || {
             Some(Spec {
                 names: vec!["git".into()],
                 ..Spec::default()
             })
         })
         .expect("git miss");
-        let demo = cached_spec(&host, "demo#generateSpec#0\x1f/tmp", || {
+        let demo = cached_spec(&host, "demo#generateSpec#0\x1f/tmp", None, || {
             Some(Spec {
                 names: vec!["demo".into()],
                 ..Spec::default()
@@ -1713,10 +1749,10 @@ mod tests {
         });
         host.clear_caches_for(&[String::from("git")]);
         assert!(
-            cached_spec(&host, "git#generateSpec#0\x1f/tmp", || None).is_none(),
+            cached_spec(&host, "git#generateSpec#0\x1f/tmp", None, || None).is_none(),
             "git generateSpec must be dropped"
         );
-        let demo_hit = cached_spec(&host, "demo#generateSpec#0\x1f/tmp", || {
+        let demo_hit = cached_spec(&host, "demo#generateSpec#0\x1f/tmp", None, || {
             panic!("demo generateSpec must remain")
         })
         .expect("demo hit");

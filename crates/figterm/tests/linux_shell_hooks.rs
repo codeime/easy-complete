@@ -6,7 +6,12 @@
 //! bash/zsh/fish that emits the same OSC 697 the post hooks emit, and a mock
 //! desktop `remote.sock`. Completions are printed to the test stdout.
 
-#![cfg(unix)]
+// Linux only, and not merely because of the shells. The child `ecterm` has to
+// resolve the mock `remote.sock`, which means `runtime_dir()` must honour the
+// `XDG_RUNTIME_DIR` this test sets. On macOS `dirs::runtime_dir()` is always
+// `None`, so the child would fall through to the real `_CS_DARWIN_USER_TEMP_DIR`
+// and hand its edit buffer to whatever desktop app is actually running.
+#![cfg(target_os = "linux")]
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -290,9 +295,10 @@ async fn collect_git_ch_buffer(shell: &str) -> String {
 }
 
 async fn assert_checkout(buffer: &str, shell: &str) {
-    let Some(specs) = specs_ir() else {
-        panic!("bundle/specs-ir/index.json is missing; cannot prove engine complete");
-    };
+    // `bundle/specs-ir` is generated, not committed. Without it there is no spec
+    // to complete against, which is a missing prerequisite rather than a failure.
+    let specs =
+        specs_ir().unwrap_or_else(|| panic!("bundle/specs-ir/index.json is missing; run scripts/compile-spec-ir.mjs"));
     let engine = ec_engine::EngineClient::spawn(specs).expect("spawn engine");
     let result = engine
         .complete(ec_engine::CompleteRequest {

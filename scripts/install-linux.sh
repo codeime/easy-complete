@@ -56,6 +56,26 @@ remove_prefix_autostart() {
 }
 
 if [ "$UNINSTALL" = 1 ]; then
+  # Shell rc snippets can only be removed by the binary that wrote them, so run
+  # this before deleting it. Same ordering rule as scripts/uninstall.sh. Only
+  # this prefix's `ec` is used, so a prefix uninstall cannot ask another
+  # install to edit the user's dotfiles.
+  #
+  # The default prefix needs sudo, and sudo's env_reset points HOME at /root, so
+  # running `ec` as-is would edit root's rc files and report nothing. Drop back
+  # to the invoking user; if we cannot tell who that is, say so instead of
+  # silently doing nothing.
+  if [ -x "${PREFIX}/bin/ec" ]; then
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+      if ! sudo -u "${SUDO_USER}" -H "${PREFIX}/bin/ec" integrations uninstall dotfiles; then
+        echo "warning: failed to uninstall shell hooks for ${SUDO_USER}" >&2
+      fi
+    elif [ "$(id -u)" -eq 0 ] && [ -z "${SUDO_USER:-}" ]; then
+      echo "note: running as root with no SUDO_USER; run 'ec integrations uninstall dotfiles' as your own user to remove the shell hooks" >&2
+    elif ! "${PREFIX}/bin/ec" integrations uninstall dotfiles; then
+      echo "warning: failed to uninstall shell hooks" >&2
+    fi
+  fi
   # Autostart may be a symlink into PREFIX; resolve it before the desktop file
   # is deleted so a prefix uninstall cannot leave a dangling login entry.
   remove_prefix_autostart

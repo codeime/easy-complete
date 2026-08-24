@@ -195,6 +195,7 @@ impl KeyInterceptor {
         trace!("Resetting key interceptor");
         self.intercept_global = false;
         self.intercept = false;
+        self.window_visible = false;
     }
 
     pub fn intercept_key(&self, key_event: &KeyEvent) -> Option<String> {
@@ -277,6 +278,16 @@ mod tests {
                 modifiers: Modifiers::NONE
             }),
             Some("navigateDown".into())
+        );
+
+        interceptor.reset();
+        assert_eq!(
+            interceptor.intercept_key(&KeyEvent {
+                key: KeyCode::Tab,
+                modifiers: Modifiers::NONE
+            }),
+            None,
+            "reset must drop intercept flags and window_visible so leftover mappings cannot fire"
         );
     }
 

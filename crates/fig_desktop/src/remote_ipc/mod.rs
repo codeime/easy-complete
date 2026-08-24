@@ -22,7 +22,11 @@ pub struct RemoteHook {
 impl fig_remote_ipc::RemoteHookHandler for RemoteHook {
     type Error = anyhow::Error;
 
-    async fn sessions_changed(&mut self, _figterm_state: &Arc<FigtermState>) {}
+    async fn sessions_changed(&mut self, figterm_state: &Arc<FigtermState>) {
+        // A session that just linked has never been told what this desktop
+        // process thinks it should intercept.
+        crate::overlay::unlock_unsynced_sessions(figterm_state);
+    }
 
     async fn edit_buffer(
         &mut self,
@@ -161,6 +165,40 @@ mod tests {
         assert!(
             !production.contains("WindowEvent::Emit") && !production.contains("BASE64_STANDARD"),
             "WebView protobuf/base64 notification emit is gone"
+        );
+    }
+
+    #[test]
+    fn a_new_session_is_unlocked_from_sessions_changed() {
+        // Idle tabs after a desktop restart never drive a completion, so
+        // `next_intercept_modes(!synced)` never runs for them. The unlock has
+        // to happen here, on the handshake, or an older ecterm keeps swallowing
+        // Enter and Tab until the user types a printable character.
+        let src = include_str!("mod.rs");
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        let start = production.find("async fn sessions_changed").expect("sessions_changed");
+        let body = &production[start..];
+        let end = body.find("\n    async fn edit_buffer").expect("edit_buffer");
+        let body = &body[..end];
+        assert!(
+            body.contains("unlock_unsynced_sessions"),
+            "a newly linked figterm session must be told it is not intercepting"
+        );
+
+        let overlay = include_str!("../overlay.rs");
+        let unlock = overlay
+            .find("pub fn unlock_unsynced_sessions")
+            .expect("unlock_unsynced_sessions");
+        let unlock_body = &overlay[unlock..];
+        let unlock_end = unlock_body
+            .find("fn refresh_intercept_actions")
+            .expect("refresh_intercept_actions");
+        let unlock_body = &unlock_body[..unlock_end];
+        assert!(
+            unlock_body.contains("if session.intercept_synced")
+                && unlock_body.contains("intercept_keystrokes: false")
+                && unlock_body.contains("override_actions: true"),
+            "only unsynced sessions are unlocked; unlock replaces the action list so stale overlay bindings cannot linger"
         );
     }
 

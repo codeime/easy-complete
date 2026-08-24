@@ -274,7 +274,7 @@ impl std::default::Default for InputMethod {
 impl InputMethod {
     pub fn input_method_directory() -> Result<PathBuf, InputMethodError> {
         Ok(home_dir()
-            .map_err(|_| InputMethodError::InvalidDestination)?
+            .map_err(|_err| InputMethodError::InvalidDestination)?
             .join("Library")
             .join("Input Methods"))
     }

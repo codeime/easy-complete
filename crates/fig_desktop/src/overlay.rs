@@ -881,7 +881,7 @@ impl OverlayController {
                 if let Ok(n) = other.trim_start_matches("selectSuggestion").parse::<usize>() {
                     if let Some(index) = select_suggestion_index(n, self.state.read(cx).items.len()) {
                         self.state.update(cx, |overlay, cx| {
-                            overlay.selected = index;
+                            overlay.set_selected(index);
                             overlay.has_changed_index = true;
                             cx.notify();
                         });
@@ -1469,7 +1469,13 @@ fn layout_overlay(
             Ok(()) => true,
             Err(err) => {
                 warn!(%err, "native overlay frame was not applied; retry next layout");
-                let _ = park_overlay_handle(&handle, cx);
+                // Park to hide the stale frame, but if parking fails too the
+                // GPUI window itself is gone: drop the handle so `ensure_window`
+                // builds a new one instead of handing back a dead entity for the
+                // rest of the session.
+                if park_overlay_handle(&handle, cx).is_err() {
+                    clear_overlay_handle_if(window_slot, handle);
+                }
                 ec_gpui::invalidate_cached_overlay_x_window();
                 false
             },
@@ -1874,10 +1880,15 @@ fn set_intercept(figterm_state: &FigtermState, session_id: Uuid, overlay_visible
     set_intercept_flags(figterm_state, session_id, intercept, intercept_global);
 }
 
-/// `None` when figterm already has this intercept pair, so the overlay can
-/// skip two IPC frames (and a settings reload for the action list) on every
-/// keystroke that did not change visibility.
+/// The modes to push, or `None` when this session already has them *and*
+/// this desktop process has already sent one frame (so the overlay can skip
+/// two IPC frames on every keystroke that did not change visibility).
+///
+/// `synced` is false until the first send. A reconnect starts the mirror at
+/// `Unlocked` while figterm may still be locked, so the first frame always
+/// goes out.
 fn next_intercept_modes(
+    synced: bool,
     current_intercept: InterceptMode,
     current_global: InterceptMode,
     enable: bool,
@@ -1885,7 +1896,8 @@ fn next_intercept_modes(
 ) -> Option<(InterceptMode, InterceptMode)> {
     let intercept = InterceptMode::from(enable);
     let intercept_global = InterceptMode::from(enable_global);
-    (current_intercept != intercept || current_global != intercept_global).then_some((intercept, intercept_global))
+    let changed = current_intercept != intercept || current_global != intercept_global;
+    (!synced || changed).then_some((intercept, intercept_global))
 }
 
 fn set_intercept_flags(figterm_state: &FigtermState, session_id: Uuid, intercept: bool, intercept_global: bool) {
@@ -1893,27 +1905,78 @@ fn set_intercept_flags(figterm_state: &FigtermState, session_id: Uuid, intercept
         let for_this = session.id == session_id;
         let enable = intercept && for_this;
         let enable_global = intercept_global && for_this;
-        let Some((next_intercept, next_global)) =
-            next_intercept_modes(session.intercept, session.intercept_global, enable, enable_global)
-        else {
+        let Some((next_intercept, next_global)) = next_intercept_modes(
+            session.intercept_synced,
+            session.intercept,
+            session.intercept_global,
+            enable,
+            enable_global,
+        ) else {
             continue;
         };
-        session.intercept = next_intercept;
-        session.intercept_global = next_global;
         let actions = if enable || enable_global {
             overlay_actions()
         } else {
             vec![]
         };
-        let _ = session.sender.send(FigtermCommand::InterceptFigJs {
-            intercept_keystrokes: enable,
-            intercept_global_keystrokes: enable_global,
-            actions,
-            override_actions: enable || enable_global,
-        });
-        let _ = session
+        // Unlock must replace the action list. Leaving stale overlay bindings
+        // with `override_actions: false` is what an older ecterm would keep
+        // using if the intercept flags themselves were dropped (handshake
+        // discard) or the send failed.
+        let sent_js = session
             .sender
-            .send(FigtermCommand::InterceptFigJSVisible { visible: enable });
+            .send(FigtermCommand::InterceptFigJs {
+                intercept_keystrokes: enable,
+                intercept_global_keystrokes: enable_global,
+                actions,
+                override_actions: true,
+            })
+            .is_ok();
+        let sent_vis = session
+            .sender
+            .send(FigtermCommand::InterceptFigJSVisible { visible: enable })
+            .is_ok();
+        if sent_js && sent_vis {
+            session.intercept = next_intercept;
+            session.intercept_global = next_global;
+            session.intercept_synced = true;
+        }
+    }
+}
+
+/// Tell every session we have not spoken to yet that it is not intercepting.
+///
+/// figterm keeps its key interceptor across a desktop restart. A current
+/// `ecterm` unlocks itself at handshake, but one launched by an older build does
+/// not, and `install.sh` leaves those processes running in every open tab — so
+/// after an upgrade an idle tab would keep swallowing Enter and Tab until the
+/// user typed a printable character and drove a completion.
+///
+/// Sessions we have already spoken to are skipped: one of them may legitimately
+/// be intercepting for a visible overlay.
+pub fn unlock_unsynced_sessions(figterm_state: &FigtermState) {
+    for session in figterm_state.inner.lock().linked_sessions.values_mut() {
+        if session.intercept_synced {
+            continue;
+        }
+        let sent_js = session
+            .sender
+            .send(FigtermCommand::InterceptFigJs {
+                intercept_keystrokes: false,
+                intercept_global_keystrokes: false,
+                actions: vec![],
+                override_actions: true,
+            })
+            .is_ok();
+        let sent_vis = session
+            .sender
+            .send(FigtermCommand::InterceptFigJSVisible { visible: false })
+            .is_ok();
+        if sent_js && sent_vis {
+            session.intercept = InterceptMode::Unlocked;
+            session.intercept_global = InterceptMode::Unlocked;
+            session.intercept_synced = true;
+        }
     }
 }
 
@@ -2440,18 +2503,18 @@ mod tests {
     #[test]
     fn unchanged_intercept_modes_skip_figterm_ipc() {
         use super::InterceptMode::{Locked, Unlocked};
-        assert_eq!(next_intercept_modes(Unlocked, Unlocked, false, false), None);
-        assert_eq!(next_intercept_modes(Locked, Locked, true, true), None);
+        assert_eq!(next_intercept_modes(true, Unlocked, Unlocked, false, false), None);
+        assert_eq!(next_intercept_modes(true, Locked, Locked, true, true), None);
         assert_eq!(
-            next_intercept_modes(Unlocked, Unlocked, true, true),
+            next_intercept_modes(true, Unlocked, Unlocked, true, true),
             Some((Locked, Locked))
         );
         assert_eq!(
-            next_intercept_modes(Locked, Locked, false, true),
+            next_intercept_modes(true, Locked, Locked, false, true),
             Some((Unlocked, Locked))
         );
         assert_eq!(
-            next_intercept_modes(Unlocked, Locked, false, true),
+            next_intercept_modes(true, Unlocked, Locked, false, true),
             None,
             "hide-with-rows keeps global Tab intercept without a second SetFigjsIntercepts"
         );
@@ -2483,6 +2546,44 @@ mod tests {
         assert!(
             reload.contains("refresh_figterm_intercept()"),
             "ReloadSettings must refresh figterm intercept while the overlay is up"
+        );
+        // `session.intercept_synced = true;` alone contains both substrings, so
+        // pin the *read* to the call arguments or a lost first frame would still
+        // pass.
+        let call = body.find("next_intercept_modes(").expect("call");
+        let args_end = body[call..].find(") else").expect("call args");
+        let args = &body[call..call + args_end];
+        assert!(
+            args.contains("session.intercept_synced"),
+            "the synced flag must be an argument to next_intercept_modes, not just assigned"
+        );
+        let set = body.find("session.intercept_synced = true").expect("set");
+        let send = body
+            .find("FigtermCommand::InterceptFigJs")
+            .expect("send InterceptFigJs");
+        assert!(set > call, "the flag is set after the decision, not before it");
+        assert!(
+            send < set,
+            "do not mark the session synced if the intercept frames never left the channel"
+        );
+    }
+
+    #[test]
+    fn a_reconnected_session_always_gets_one_intercept_frame() {
+        use super::InterceptMode::Unlocked;
+
+        // figterm keeps its key interceptor across a desktop restart, but a
+        // reconnect gives us a fresh mirror at Unlocked. Skipping here would
+        // leave the tab eating Enter and Tab for good.
+        assert_eq!(
+            next_intercept_modes(false, Unlocked, Unlocked, false, false),
+            Some((Unlocked, Unlocked)),
+            "an unsynced session must be told its state even when the mirror already agrees"
+        );
+        assert_eq!(
+            next_intercept_modes(true, Unlocked, Unlocked, false, false),
+            None,
+            "once synced, an unchanged pair still skips the per-keystroke send"
         );
     }
 

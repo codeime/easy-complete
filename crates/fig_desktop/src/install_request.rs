@@ -29,10 +29,14 @@ pub type RequestResult = Result<Box<ServerOriginatedSubMessage>, InstallError>;
 #[derive(Debug)]
 pub enum InstallError {
     Custom(Cow<'static, str>),
+    /// Only the Linux AppImage and autostart arms wrap a foreign error; every
+    /// other platform reports install failures as [`InstallError::Custom`].
+    #[cfg(target_os = "linux")]
     Wrapped {
         context: Option<Cow<'static, str>>,
         source: Box<InstallError>,
     },
+    #[cfg(target_os = "linux")]
     Std(Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -40,10 +44,13 @@ impl std::fmt::Display for InstallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InstallError::Custom(v) => f.write_str(v),
+            #[cfg(target_os = "linux")]
             InstallError::Wrapped {
                 context: Some(context), ..
             } => f.write_str(context),
+            #[cfg(target_os = "linux")]
             InstallError::Wrapped { source, .. } => source.fmt(f),
+            #[cfg(target_os = "linux")]
             InstallError::Std(v) => v.fmt(f),
         }
     }
@@ -51,6 +58,7 @@ impl std::fmt::Display for InstallError {
 
 impl std::error::Error for InstallError {}
 
+#[cfg(target_os = "linux")]
 impl InstallError {
     pub fn from_std(error: impl std::error::Error + Send + Sync + 'static) -> Self {
         InstallError::Wrapped {

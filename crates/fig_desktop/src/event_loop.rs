@@ -44,18 +44,11 @@ impl EventLoopProxy {
     }
 }
 
-/// Stand-in for the old window-target. Settings windows are GPUI; this type
-/// only carries activation-policy changes onto `NSApplication`.
+/// Stand-in for the old window-target, threaded through every
+/// `PlatformState::handle` so the backends keep one signature. Settings windows
+/// are GPUI, so no backend carries state on it any more.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EventLoopWindowTarget;
-
-impl EventLoopWindowTarget {
-    /// Apply an `NSApplicationActivationPolicy` at runtime.
-    #[cfg(target_os = "macos")]
-    pub fn set_activation_policy_at_runtime(&self, policy: crate::platform::caret::MacosActivationPolicy) {
-        crate::platform::set_activation_policy(policy);
-    }
-}
 
 pub(crate) fn channel() -> (EventLoopProxy, flume::Receiver<Event>) {
     let (tx, rx) = flume::unbounded();

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- change: the overlay now takes its default key bindings from the bundled action list instead of a separate hardcoded table, so they match the rest of the product again. Four defaults move: `⌃K` and `⌃J` now navigate up and down (`⌃K` used to toggle the description popout), `⌘I` toggles the description popout, and selecting the Nth suggestion is `⌃1`…`⌃0` instead of `⌘1`…`⌘0`. Note that `⌃J` is intercepted while the list is visible; press Esc first if you use it as a newline
 - change: replace the autocomplete WebView and dashboard WebView with GPUI — the overlay and settings window are native views; completions run in `ec_engine` from build-time JSON IR, with QuickJS only for spec hooks (`postProcess`, `script`, `custom`, `generateSpec`)
 - fix: place the overlay using `NSScreen.screens[0]` as the global-coordinate origin, not `mainScreen` — on an external display `mainScreen` is the focused screen and the popup landed at the wrong height
 - fix: clear the `···` loading marker when the request that turned it on finishes, even if that result is stale, and retire it after `autocomplete.scriptTimeout` (default 6s) instead of the 30s engine watchdog — the request keeps running, so a slow generator still gets rendered when it answers

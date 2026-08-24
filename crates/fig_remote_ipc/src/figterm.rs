@@ -194,6 +194,16 @@ pub struct FigtermSession {
     pub on_close_tx: broadcast::Sender<()>,
     pub intercept: InterceptMode,
     pub intercept_global: InterceptMode,
+    /// Whether this desktop process has ever pushed an intercept frame to the
+    /// session.
+    ///
+    /// `intercept` / `intercept_global` are only a mirror, and a session that
+    /// reconnects starts this mirror at `Unlocked` while figterm may still have
+    /// its key interceptor locked — it does not reset on desktop exit. Without
+    /// this flag the "modes unchanged, skip the send" shortcut would agree with
+    /// the stale mirror and never send the frame that unlocks the tab.
+    #[serde(skip)]
+    pub intercept_synced: bool,
 }
 
 #[derive(Debug)]
@@ -381,6 +391,7 @@ mod tests {
             response_map: HashMap::new(),
             nonce_counter: Arc::new(AtomicU64::new(0)),
             on_close_tx,
+            intercept_synced: false,
             intercept: InterceptMode::Unlocked,
             intercept_global: InterceptMode::Unlocked,
         }

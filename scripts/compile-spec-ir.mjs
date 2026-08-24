@@ -1009,5 +1009,14 @@ const isMain =
 if (isMain) {
   const srcDir = process.env.EC_SPECS_SRC || join(repoDir, "bundle", "specs");
   const outDir = process.env.EC_SPECS_IR || join(repoDir, "bundle", "specs-ir");
-  await compileSpecsIr({ srcDir, outDir });
+  const result = await compileSpecsIr({ srcDir, outDir });
+  // Individual specs may fail to import (legacy / broken sources) and are
+  // counted in `failed`. An empty tree is not that: it means the compiler
+  // itself produced nothing the engine can complete against.
+  if (!result.compiled || !result.hooks || !result.names) {
+    process.stderr.write(
+      `error: spec IR compile produced an empty tree (${JSON.stringify(result)})\n`,
+    );
+    process.exit(1);
+  }
 }

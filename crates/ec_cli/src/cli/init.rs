@@ -261,12 +261,22 @@ mod tests {
 
     use super::*;
 
-    fn run_shell_stdout(shell: &Shell, text: &str) -> String {
-        let mut child = Command::new(shell.as_str())
+    /// `None` when the shell is not installed, matching the skip in
+    /// `tests/init.rs`. `rust-windows` has none of these and the Linux job
+    /// deliberately installs only some.
+    fn run_shell_stdout(shell: &Shell, text: &str) -> Option<String> {
+        let spawned = Command::new(shell.as_str())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skipping: {} is not installed", shell.as_str());
+                return None;
+            },
+            Err(err) => panic!("failed to spawn {}: {err}", shell.as_str()),
+        };
 
         let stdin = child.stdin.as_mut().unwrap();
         // Since these are all guarded we run the code twice to double check
@@ -275,7 +285,7 @@ mod tests {
         stdin.flush().unwrap();
 
         let output = child.wait_with_output().unwrap();
-        String::from_utf8(output.stdout).unwrap()
+        Some(String::from_utf8(output.stdout).unwrap())
     }
 
     #[test]
@@ -302,10 +312,16 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_prompts() {
+        let mut ran = 0usize;
         for shell in Shell::all_test() {
-            let shell_integrations_disabled_output = run_shell_stdout(&shell, &shell_integrations_disabled_code(shell));
+            let Some(shell_integrations_disabled_output) =
+                run_shell_stdout(&shell, &shell_integrations_disabled_code(shell))
+            else {
+                continue;
+            };
 
             println!("=== shell_integrations_disabled_code {shell:?} ===");
             println!("{shell_integrations_disabled_output}");
@@ -320,7 +336,11 @@ mod tests {
             );
 
             let terminal = Terminal::Iterm;
-            let input_method_prompt_output = run_shell_stdout(&shell, &input_method_prompt_code(shell, &terminal));
+            let Some(input_method_prompt_output) =
+                run_shell_stdout(&shell, &input_method_prompt_code(shell, &terminal))
+            else {
+                continue;
+            };
 
             println!("=== input_method_prompt {shell:?} ===");
             println!("{input_method_prompt_output}");
@@ -333,6 +353,11 @@ mod tests {
                     format!("{CLI_BINARY_NAME} integrations install input-method").magenta()
                 )
             );
+            ran += 1;
         }
+        assert!(
+            ran > 0,
+            "no test shell is installed; install bash/zsh/fish or this gate is vacuous"
+        );
     }
 }
