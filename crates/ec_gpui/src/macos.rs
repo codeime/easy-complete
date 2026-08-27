@@ -176,6 +176,16 @@ fn for_each_window_titled(title: Option<&str>, mut f: impl FnMut(id)) {
     }
 }
 
+fn window_titled(title: &str) -> Option<id> {
+    let mut found = None;
+    for_each_window_titled(Some(title), |window| {
+        if found.is_none() {
+            found = Some(window);
+        }
+    });
+    found
+}
+
 fn set_layer_square(view: id) {
     if view == nil {
         return;
@@ -311,12 +321,10 @@ fn schedule_overlay_frame(window: id, x: f64, y: f64, width: f64, height: f64) {
             retries: 0,
         };
         let mut queue = overlay_frame_queue().lock().unwrap_or_else(|err| err.into_inner());
-        // `setFrameTopLeftPoint` emits move notifications. GPUI's handler can
-        // call back into `set_overlay_frame_handle` with the same caret frame.
-        // Bumping the epoch for that echo cancels `retry_overlay_frame_after`,
-        // which is the only thing that re-pins the caret edge after GPUI's
-        // deferred resize. Replacing it as a "newer" request also reset
-        // retries and immediately re-queued the drain — a main-queue livelock.
+        // Layout can request the same caret frame again while the AppKit apply
+        // or GPUI size retry is still in flight. Bumping the epoch for that
+        // duplicate would cancel `retry_overlay_frame_after`, which is the
+        // only thing that re-pins the caret edge after GPUI's deferred resize.
         if decide_overlay_frame_schedule(&next, queue.pending.as_ref(), queue.applied.as_ref())
             == OverlayFrameSchedule::IgnoreEcho
         {
@@ -370,9 +378,8 @@ fn drain_overlay_frame() {
             request.epoch,
             request.retries,
         );
-        // A move notification during apply can write the same geometry
-        // back into `pending`. Drop it so we do not treat it as a new
-        // user request and spin the main queue.
+        // A layout pass during apply can write the same geometry back into
+        // `pending`. Drop it instead of treating it as a new caret request.
         let mut queue = overlay_frame_queue().lock().unwrap_or_else(|err| err.into_inner());
         queue.pending = retain_pending_after_apply(request, queue.pending.take());
     }
@@ -388,8 +395,8 @@ fn drain_overlay_frame() {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     {
-        // Yield a frame. Immediate re-dispatch from inside the drain is what
-        // livelocked NSApplication when apply kept seeing a "newer" request.
+        // Coalesce a burst of newer layout requests long enough for GPUI's
+        // deferred content resize to land before applying the next frame.
         queue_overlay_frame_drain_later();
     }
 }
@@ -419,8 +426,8 @@ fn frame_size_close(frame: NSRect, width: f64, height: f64) -> bool {
 
 /// Only the caret edge needs an AppKit write. Size mismatch is GPUI's deferred
 /// `setContentSize` and is waited out by [`overlay_frame_should_retry`]. Writing
-/// `setFrameTopLeftPoint` for a size-only mismatch was the livelock trigger:
-/// the move notification asked us to place the same frame again.
+/// `setFrameTopLeftPoint` for a size-only mismatch emits an unnecessary move
+/// notification and can cancel the resize retry with another layout pass.
 fn overlay_frame_needs_reposition(top_left_matches: bool) -> bool {
     !top_left_matches
 }
@@ -522,24 +529,22 @@ pub fn set_overlay_visible_handle(window: &gpui::Window, visible: bool) {
 }
 
 pub fn set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f64, height: f64) {
-    if let Some(ns_window) = ns_window_from_gpui(window) {
+    let _ = try_set_overlay_frame_handle(window, x, y, width, height);
+}
+
+pub(crate) fn try_set_overlay_frame_handle(window: &gpui::Window, x: f64, y: f64, width: f64, height: f64) -> bool {
+    if let Some(ns_window) = ns_window_from_gpui(window).or_else(|| window_titled(OVERLAY_WINDOW_TITLE)) {
         // Epoch is assigned only if this geometry is actually enqueued.
-        // Echoes of the live frame must not bump it or in-flight size
+        // Duplicates of the live frame must not bump it or in-flight size
         // retries (`retry_overlay_frame_after`) fail the equality check.
         schedule_overlay_frame(ns_window, x, y, width, height);
+        true
     } else {
-        let epoch = begin_overlay_frame_request();
-        let title = OVERLAY_WINDOW_TITLE.to_string();
-        #[cfg(target_os = "macos")]
-        dispatch::Queue::main().exec_async(move || {
-            if overlay_frame_request_is_current(epoch) {
-                apply_overlay_frame_titled(&title, x, y, width, height, epoch);
-            }
-        });
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = (title, x, y, width, height, epoch);
-        }
+        // Do not turn a missing native window into an asynchronous no-op while
+        // the GPUI caller records the frame as positioned. Keeping the request
+        // uncommitted lets the same geometry retry on the next layout pass and
+        // keeps terminal interception disabled until a window is available.
+        false
     }
 }
 
@@ -801,7 +806,7 @@ mod tests {
     #[test]
     fn size_only_mismatch_does_not_write_the_appkit_frame() {
         // GPUI's deferred resize is waited out. Touching AppKit for a size-only
-        // mismatch is what fed the main-queue livelock.
+        // mismatch adds a move notification without correcting the caret edge.
         assert!(!overlay_frame_needs_reposition(true));
         assert!(overlay_frame_needs_reposition(false));
     }
@@ -836,6 +841,20 @@ mod tests {
             (1, 10.0, 20.0, 320.0, 140.0),
             (1, 40.0, 20.0, 320.0, 140.0)
         ));
+    }
+
+    #[test]
+    fn identical_geometry_on_a_recreated_window_is_enqueued() {
+        let applied = sample_request(10.0, 20.0);
+        let replacement = OverlayFrameRequest {
+            window: 2,
+            epoch: 0,
+            ..applied
+        };
+        assert_eq!(
+            decide_overlay_frame_schedule(&replacement, None, Some(&applied)),
+            OverlayFrameSchedule::Enqueue
+        );
     }
 
     #[test]

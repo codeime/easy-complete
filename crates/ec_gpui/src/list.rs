@@ -605,11 +605,6 @@ pub struct SuggestionList {
     /// Last size handed to GPUI's native window. Repeating the same resize on
     /// every caret/frame update feeds back into AppKit's resize callbacks.
     pub(crate) last_requested_size: Option<(f32, f32)>,
-    /// Last frame handed to AppKit. Position updates are frequent while the
-    /// terminal caret moves, so avoid enqueueing an identical native frame.
-    /// This is reset when the window is parked so the next show still issues a
-    /// fresh request (and can order the hidden window to the front).
-    pub(crate) last_requested_frame: Option<(f32, f32, f32, f32)>,
 }
 
 impl SuggestionList {
@@ -619,7 +614,6 @@ impl SuggestionList {
             scroll_handle: UniformListScrollHandle::new(),
             scroll_snapshot: None,
             last_requested_size: None,
-            last_requested_frame: None,
         }
     }
 }

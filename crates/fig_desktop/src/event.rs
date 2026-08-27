@@ -60,6 +60,13 @@ pub enum Event {
         session_id: uuid::Uuid,
         cwd: String,
     },
+    /// A visible overlay failed to reach its native window. Retry on a later
+    /// event-loop turn without waiting for another terminal input event.
+    GpuiOverlayRelayoutRetry {
+        generation: u64,
+        token: u64,
+        attempt: u8,
+    },
     /// Figterm intercepted a key bound to an autocomplete action.
     AutocompleteAction {
         action: String,

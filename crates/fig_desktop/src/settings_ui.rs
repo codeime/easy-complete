@@ -28,6 +28,18 @@ pub fn is_open() -> bool {
 }
 
 const SIDEBAR_W: f32 = 226.0;
+const SETTINGS_TITLEBAR_H: f32 = 44.0;
+const SETTINGS_TRAFFIC_LIGHT_X: f32 = 12.0;
+const SETTINGS_TRAFFIC_LIGHT_Y: f32 = 18.0;
+// `traffic_light_position` is the close button's left edge. Reserve the full
+// close/minimize/zoom cluster, then leave a visible gap before the title.
+const SETTINGS_TRAFFIC_LIGHT_CLUSTER_W: f32 = 54.0;
+const SETTINGS_TITLE_GAP: f32 = 16.0;
+const SETTINGS_TITLE_LEFT: f32 = SETTINGS_TRAFFIC_LIGHT_X + SETTINGS_TRAFFIC_LIGHT_CLUSTER_W + SETTINGS_TITLE_GAP;
+// GPUI's traffic-light Y is the 14px button's top edge, so its center is at
+// 25px. The 44px title row centers at 22px; shift only the text down 3px so
+// both share the same horizontal centerline without moving the navigation.
+const SETTINGS_TITLE_Y_OFFSET: f32 = 3.0;
 const WIN_W: f32 = 820.0;
 const WIN_H: f32 = 640.0;
 
@@ -358,14 +370,22 @@ fn sidebar(section: Section, zh: bool, chrome: Chrome, entity: Entity<SettingsWi
         .bg(rgb(chrome.sidebar))
         .border_r_1()
         .border_color(rgb(chrome.sidebar_border))
-        .pt(px(44.))
         .child(
             div()
-                .px(px(16.))
-                .pb(px(8.))
+                .h(px(SETTINGS_TITLEBAR_H))
+                .flex_none()
+                .flex()
+                .items_center()
+                .pl(px(SETTINGS_TITLE_LEFT))
+                .pr(px(16.))
                 .text_size(px(11.))
                 .text_color(rgb(chrome.muted))
-                .child(if zh { "设置" } else { "Settings" }.to_string()),
+                .child(
+                    div()
+                        .relative()
+                        .top(px(SETTINGS_TITLE_Y_OFFSET))
+                        .child(if zh { "设置" } else { "Settings" }.to_string()),
+                ),
         )
         .child(nav)
 }
@@ -1831,7 +1851,7 @@ pub fn open_settings_window(cx: &mut App, proxy: EventLoopProxy) -> anyhow::Resu
             titlebar: Some(TitlebarOptions {
                 title: Some(SETTINGS_WINDOW_TITLE.into()),
                 appears_transparent: true,
-                traffic_light_position: Some(point(px(12.), px(18.))),
+                traffic_light_position: Some(point(px(SETTINGS_TRAFFIC_LIGHT_X), px(SETTINGS_TRAFFIC_LIGHT_Y))),
             }),
             focus: true,
             show: true,

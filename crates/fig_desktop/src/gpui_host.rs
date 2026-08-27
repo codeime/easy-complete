@@ -150,6 +150,13 @@ impl DesktopHost {
             } => {
                 self.overlay.apply_completion(generation, result, session_id, &cwd, cx);
             },
+            Event::GpuiOverlayRelayoutRetry {
+                generation,
+                token,
+                attempt,
+            } => {
+                self.overlay.retry_layout(generation, token, attempt, cx);
+            },
             Event::AutocompleteAction { action, session_id } => {
                 self.overlay.handle_action(&action, session_id, &self.figterm_state, cx);
             },

@@ -9,7 +9,7 @@ use gpui::{
 use crate::list::{DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_ROW_HEIGHT, DEFAULT_WIDTH, SuggestionList};
 
 use crate::macos::{
-    OVERLAY_WINDOW_TITLE, harden_overlay_window_handle, park_overlay_window_handle, set_overlay_frame_handle,
+    OVERLAY_WINDOW_TITLE, harden_overlay_window_handle, park_overlay_window_handle, try_set_overlay_frame_handle,
 };
 
 /// Shared overlay entity: visibility, selection, and the suggestion rows.
@@ -671,25 +671,13 @@ pub fn open_overlay_window_with_visibility(
 pub fn park_overlay_handle(handle: &OverlayHandle, cx: &mut App) -> anyhow::Result<()> {
     handle
         .update(cx, |list, window, _cx| {
-            // A hidden window may be shown again at the same bounds. Do not
-            // let the previous frame/size cache suppress that first request:
-            // the native window is currently ordered out and needs a fresh
-            // orderFront path.
+            // A hidden window may be shown again at the same size. Make GPUI
+            // re-validate its viewport before the native frame request orders
+            // the window back to the front.
             list.last_requested_size = None;
-            list.last_requested_frame = None;
             park_overlay_window_handle(window);
         })
         .map(|_| ())
-}
-
-fn requested_frames_close(previous: Option<(f32, f32, f32, f32)>, next: (f32, f32, f32, f32)) -> bool {
-    const EPS: f32 = 0.5;
-    previous.is_some_and(|previous| {
-        (previous.0 - next.0).abs() < EPS
-            && (previous.1 - next.1).abs() < EPS
-            && (previous.2 - next.2).abs() < EPS
-            && (previous.3 - next.3).abs() < EPS
-    })
 }
 
 pub fn position_overlay(
@@ -697,34 +685,32 @@ pub fn position_overlay(
     size: Size<Pixels>,
     handle: &OverlayHandle,
     cx: &mut App,
-) -> anyhow::Result<()> {
-    handle
-        .update(cx, |list, window, _cx| {
-            // Let GPUI resize its own render surface. Its macOS backend already defers
-            // `setContentSize` onto the foreground executor, so the resize callback can
-            // update `viewport_size` without re-borrowing `App` from inside our dispatch.
-            // Only the position/show part still needs the AppKit bridge below.
-            let requested = (f32::from(size.width), f32::from(size.height));
-            // A native resize callback can be rejected while GPUI's AppCell is
-            // already borrowed. Do not let our request cache turn that one
-            // missed callback into a permanently stale renderer: an unchanged
-            // requested size is retried whenever the live viewport disagrees.
-            if list.last_requested_size != Some(requested) || window.viewport_size() != size {
-                window.resize(size);
-            }
-            list.last_requested_size = Some(requested);
-            let frame = (
-                f32::from(origin.x),
-                f32::from(origin.y),
-                f32::from(size.width),
-                f32::from(size.height),
-            );
-            if !requested_frames_close(list.last_requested_frame, frame) {
-                // Size is included so a shorter list still re-pins the caret
-                // edge after GPUI's deferred AppKit resize.
-                set_overlay_frame_handle(window, frame.0 as f64, frame.1 as f64, frame.2 as f64, frame.3 as f64);
-                list.last_requested_frame = Some(frame);
-            }
-        })
-        .map(|_| ())
+) -> anyhow::Result<bool> {
+    handle.update(cx, |list, window, _cx| {
+        // Let GPUI resize its own render surface. Its macOS backend already defers
+        // `setContentSize` onto the foreground executor, so the resize callback can
+        // update `viewport_size` without re-borrowing `App` from inside our dispatch.
+        // Only the position/show part still needs the AppKit bridge below.
+        let requested = (f32::from(size.width), f32::from(size.height));
+        // A native resize callback can be rejected while GPUI's AppCell is
+        // already borrowed. Do not let our request cache turn that one
+        // missed callback into a permanently stale renderer: an unchanged
+        // requested size is retried whenever the live viewport disagrees.
+        if list.last_requested_size != Some(requested) || window.viewport_size() != size {
+            window.resize(size);
+        }
+        list.last_requested_size = Some(requested);
+        // Resolve the native window on every layout, even when the geometry is
+        // unchanged. A stale GPUI handle may be recreated around this same
+        // entity, so an entity-level frame cache can falsely report success for
+        // a missing or replacement NSWindow. The AppKit queue deduplicates by
+        // both window identity and geometry.
+        try_set_overlay_frame_handle(
+            window,
+            f64::from(origin.x),
+            f64::from(origin.y),
+            f64::from(size.width),
+            f64::from(size.height),
+        )
+    })
 }

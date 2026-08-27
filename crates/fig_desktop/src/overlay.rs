@@ -27,6 +27,8 @@ use crate::event::{Event, WindowPosition};
 use crate::event_loop::EventLoopProxy;
 use crate::platform::PlatformState;
 
+const LAYOUT_RETRY_DELAYS_MS: [u64; 4] = [16, 32, 64, 128];
+
 /// Overlay is always on. `EC_GPUI_OVERLAY=0` remains an emergency kill switch.
 pub fn gpui_overlay_enabled() -> bool {
     if let Ok(val) = std::env::var("EC_GPUI_OVERLAY") {
@@ -50,6 +52,9 @@ pub struct OverlayController {
     engine: EngineClient,
     session_id: Arc<Mutex<Option<Uuid>>>,
     generation: Arc<AtomicU64>,
+    /// Invalidates an older native-window retry chain when a newer layout,
+    /// completion generation, park, or successful placement supersedes it.
+    layout_retry_token: AtomicU64,
     /// Generation that turned the `···` marker on, or `NO_LOADING_OWNER`.
     ///
     /// The legacy WebView derived its loading flag from the set of in-flight
@@ -119,6 +124,7 @@ impl OverlayController {
             engine,
             session_id,
             generation,
+            layout_retry_token: AtomicU64::new(0),
             loading_owner: Arc::new(AtomicU64::new(NO_LOADING_OWNER)),
             enabled: gpui_overlay_enabled()
                 && !fig_settings::settings::get_bool_or("autocomplete.disable", false)
@@ -137,7 +143,12 @@ impl OverlayController {
     }
 
     fn park_window(&self, cx: &mut App) {
+        self.cancel_layout_retry();
         let _ = park_overlay_slot(&self.handle, cx);
+    }
+
+    fn cancel_layout_retry(&self) {
+        self.layout_retry_token.fetch_add(1, Ordering::Relaxed);
     }
 
     fn bump_generation(&self) -> u64 {
@@ -272,8 +283,7 @@ impl OverlayController {
     }
 
     pub fn show(&mut self, cx: &mut App) {
-        let figterm = self.figterm_state.clone();
-        self.show_kept_items(&figterm, cx);
+        self.show_kept_items(cx);
     }
 
     pub fn apply_position(&mut self, position: WindowPosition, platform_state: &PlatformState, cx: &mut App) {
@@ -285,18 +295,18 @@ impl OverlayController {
         if !needs_window {
             return;
         }
-        let Some(handle) = self.ensure_window(cx) else {
-            return;
-        };
-        let positioned = layout_overlay(
-            &self.state,
-            &self.handle,
-            handle,
-            &self.last_position,
-            platform_state,
-            cx,
-        );
+        let positioned = self.ensure_window(cx).is_some_and(|handle| {
+            layout_overlay(
+                &self.state,
+                &self.handle,
+                handle,
+                &self.last_position,
+                platform_state,
+                cx,
+            )
+        });
         self.sync_own_intercept_for_layout(positioned, cx);
+        self.update_layout_retry(positioned, cx);
     }
 
     fn relayout(&mut self, cx: &mut App) -> bool {
@@ -318,6 +328,88 @@ impl OverlayController {
             &self.platform_state,
             cx,
         )
+    }
+
+    fn relayout_and_sync(&mut self, cx: &mut App) -> bool {
+        let positioned = self.relayout(cx);
+        self.sync_own_intercept_for_layout(positioned, cx);
+        self.update_layout_retry(positioned, cx);
+        positioned
+    }
+
+    fn layout_retry_needed(&self, positioned: bool, cx: &App) -> bool {
+        let overlay = self.state.read(cx);
+        let has_content = overlay.loading || !overlay.items.is_empty() || overlay.has_current_arg();
+        should_retry_layout(LayoutRetryInputs {
+            overlay_visible: overlay.visible,
+            has_content,
+            has_position: self
+                .last_position
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .is_some(),
+            positioned,
+        })
+    }
+
+    fn update_layout_retry(&mut self, positioned: bool, cx: &mut App) {
+        let token = self.layout_retry_token.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.layout_retry_needed(positioned, cx) {
+            self.schedule_layout_retry(self.generation.load(Ordering::Relaxed), token, 0, cx);
+        }
+    }
+
+    fn schedule_layout_retry(&self, generation: u64, token: u64, attempt: u8, cx: &mut App) {
+        let Some(delay) = layout_retry_delay(attempt) else {
+            return;
+        };
+        let proxy = self.proxy.clone();
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |_cx| {
+            executor.timer(delay).await;
+            let _ = proxy.send_event(Event::GpuiOverlayRelayoutRetry {
+                generation,
+                token,
+                attempt,
+            });
+        })
+        .detach();
+    }
+
+    pub fn retry_layout(&mut self, generation: u64, token: u64, attempt: u8, cx: &mut App) {
+        if !layout_retry_is_current(
+            generation,
+            self.generation.load(Ordering::Relaxed),
+            token,
+            self.layout_retry_token.load(Ordering::Relaxed),
+        ) {
+            return;
+        }
+        // Hides and parks invalidate the token, but also check the live state
+        // before touching the GPUI window. This keeps a delayed event from
+        // reopening or recreating a window that no longer needs placement.
+        if !self.layout_retry_needed(false, cx) {
+            self.cancel_layout_retry();
+            return;
+        }
+
+        let positioned = self.relayout(cx);
+        self.sync_own_intercept_for_layout(positioned, cx);
+        if positioned || !self.layout_retry_needed(positioned, cx) {
+            self.cancel_layout_retry();
+            return;
+        }
+
+        let next_attempt = attempt.saturating_add(1);
+        if layout_retry_delay(next_attempt).is_some() {
+            self.schedule_layout_retry(generation, token, next_attempt, cx);
+        } else {
+            self.cancel_layout_retry();
+            warn!(
+                attempts = LAYOUT_RETRY_DELAYS_MS.len(),
+                "overlay native window remained unavailable after bounded relayout retries"
+            );
+        }
     }
 
     fn sync_own_intercept(&self, cx: &App) {
@@ -366,7 +458,7 @@ impl OverlayController {
         );
     }
 
-    fn show_kept_items(&mut self, figterm_state: &FigtermState, cx: &mut App) {
+    fn show_kept_items(&mut self, cx: &mut App) {
         let can_show = {
             let overlay = self.state.read(cx);
             !overlay.items.is_empty() || overlay.loading || overlay.has_current_arg()
@@ -374,31 +466,12 @@ impl OverlayController {
         if !can_show {
             return;
         }
-        if self.ensure_window(cx).is_none() {
-            return;
-        }
         self.state.update(cx, |overlay, cx| {
             overlay.suppress_until_shown = false;
             overlay.visible = true;
             cx.notify();
         });
-        let positioned = self.relayout(cx);
-        let Some(session_id) = self.current_session() else {
-            return;
-        };
-        let overlay = self.state.read(cx);
-        let has_items = !overlay.loading && !overlay.items.is_empty();
-        let (visible_intercept, global_intercept) = positioned_intercept_flags(InterceptInputs {
-            overlay_visible: overlay.visible,
-            has_items,
-            positioned,
-            has_last_position: self
-                .last_position
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .is_some(),
-        });
-        set_intercept_flags(figterm_state, session_id, visible_intercept, global_intercept);
+        self.relayout_and_sync(cx);
     }
 
     pub fn complete_buffer(
@@ -630,6 +703,7 @@ impl OverlayController {
             )
         });
         self.sync_own_intercept_for_layout(positioned, cx);
+        self.update_layout_retry(positioned, cx);
     }
 
     pub fn apply_completion(
@@ -664,7 +738,7 @@ impl OverlayController {
             // reopen the storm the guard exists to stop.
             self.forget_last_input();
         }
-        apply_complete_result(
+        let positioned = apply_complete_result(
             self.state.clone(),
             &self.handle,
             result,
@@ -675,6 +749,7 @@ impl OverlayController {
             &self.platform_state,
             cx,
         );
+        self.update_layout_retry(positioned, cx);
     }
 
     /// Re-run the current buffer even when its text is unchanged. Settings
@@ -724,12 +799,12 @@ impl OverlayController {
             // `showAutocomplete` is an explicit show action.  It must only
             // reveal the kept rows; accepting the sole row is reserved for
             // the hidden-overlay Tab shortcut below.
-            "showAutocomplete" => self.show_kept_items(figterm_state, cx),
+            "showAutocomplete" => self.show_kept_items(cx),
             "showAutocompleteFromTab" => {
                 if self.state.read(cx).items.len() == 1 {
                     self.insert_selected(false, figterm_state, cx);
                 } else {
-                    self.show_kept_items(figterm_state, cx);
+                    self.show_kept_items(cx);
                 }
             },
             "toggleAutocomplete" => {
@@ -738,11 +813,11 @@ impl OverlayController {
                     self.hide_until_shown(cx);
                     self.sync_intercept(figterm_state, cx);
                 } else {
-                    self.show_kept_items(figterm_state, cx);
+                    self.show_kept_items(cx);
                 }
             },
             "relayoutOverlay" => {
-                self.relayout(cx);
+                self.relayout_and_sync(cx);
             },
             "insertSelected" => self.insert_selected(false, figterm_state, cx),
             "insertCommonPrefixOrInsertSelected" => {
@@ -773,7 +848,7 @@ impl OverlayController {
                         }
                         cx.notify();
                     });
-                    self.relayout(cx);
+                    self.relayout_and_sync(cx);
                 }
             },
             "showDescription" => {
@@ -781,7 +856,7 @@ impl OverlayController {
                     overlay.description_popout = true;
                     cx.notify();
                 });
-                self.relayout(cx);
+                self.relayout_and_sync(cx);
             },
             "hideDescription" => {
                 self.state.update(cx, |overlay, cx| {
@@ -789,7 +864,7 @@ impl OverlayController {
                     overlay.is_above_cursor = false;
                     cx.notify();
                 });
-                self.relayout(cx);
+                self.relayout_and_sync(cx);
             },
             "toggleHistoryMode" => {
                 self.state.update(cx, |overlay, cx| {
@@ -813,14 +888,14 @@ impl OverlayController {
                     overlay.change_size(true);
                     cx.notify();
                 });
-                self.relayout(cx);
+                self.relayout_and_sync(cx);
             },
             "decreaseSize" => {
                 self.state.update(cx, |overlay, cx| {
                     overlay.change_size(false);
                     cx.notify();
                 });
-                self.relayout(cx);
+                self.relayout_and_sync(cx);
             },
             other if other.starts_with("selectSuggestion") => {
                 if let Ok(n) = other.trim_start_matches("selectSuggestion").parse::<usize>() {
@@ -1236,7 +1311,7 @@ fn apply_complete_result(
     last_position: &Mutex<Option<WindowPosition>>,
     platform_state: &PlatformState,
     cx: &mut App,
-) {
+) -> bool {
     match result {
         Ok(result) => {
             let mut uncached_icons = 0;
@@ -1306,6 +1381,7 @@ fn apply_complete_result(
             if visible && positioned && has_items {
                 fig_telemetry::count("autocomplete_shown");
             }
+            positioned
         },
         Err(err) => {
             warn!(%err, "completion engine failed");
@@ -1315,8 +1391,38 @@ fn apply_complete_result(
             });
             let _ = park_overlay_slot(window_slot, cx);
             set_intercept(figterm_state, session_id, false, false);
+            false
         },
     }
+}
+
+fn layout_retry_delay(attempt: u8) -> Option<Duration> {
+    LAYOUT_RETRY_DELAYS_MS
+        .get(usize::from(attempt))
+        .copied()
+        .map(Duration::from_millis)
+}
+
+#[derive(Clone, Copy)]
+struct LayoutRetryInputs {
+    overlay_visible: bool,
+    has_content: bool,
+    has_position: bool,
+    positioned: bool,
+}
+
+fn should_retry_layout(inputs: LayoutRetryInputs) -> bool {
+    let LayoutRetryInputs {
+        overlay_visible,
+        has_content,
+        has_position,
+        positioned,
+    } = inputs;
+    overlay_visible && has_content && has_position && !positioned
+}
+
+fn layout_retry_is_current(generation: u64, current_generation: u64, token: u64, current_token: u64) -> bool {
+    generation == current_generation && token == current_token
 }
 
 fn ensure_overlay_window(
@@ -1394,7 +1500,7 @@ fn layout_overlay(
             }
         });
         match position_overlay(origin, size, &handle, cx) {
-            Ok(()) => true,
+            Ok(positioned) => positioned,
             Err(err) => {
                 warn!(%err, "overlay window update failed while positioning; clearing stale handle");
                 clear_overlay_handle_if(window_slot, handle);
@@ -2386,6 +2492,49 @@ mod tests {
         assert_eq!(positioned_intercept_flags(inputs(false, false, false)), (false, false));
         assert_eq!(positioned_intercept_flags(inputs(false, false, true)), (false, true));
         assert_eq!(positioned_intercept_flags(inputs(true, true, true)), (true, true));
+    }
+
+    #[test]
+    fn a_visible_fast_completion_retries_a_failed_native_layout() {
+        let retryable = LayoutRetryInputs {
+            overlay_visible: true,
+            has_content: true,
+            has_position: true,
+            positioned: false,
+        };
+        assert!(should_retry_layout(retryable));
+        assert!(!should_retry_layout(LayoutRetryInputs {
+            positioned: true,
+            ..retryable
+        }));
+        assert!(!should_retry_layout(LayoutRetryInputs {
+            overlay_visible: false,
+            ..retryable
+        }));
+        assert!(!should_retry_layout(LayoutRetryInputs {
+            has_content: false,
+            ..retryable
+        }));
+        assert!(!should_retry_layout(LayoutRetryInputs {
+            has_position: false,
+            ..retryable
+        }));
+    }
+
+    #[test]
+    fn native_layout_retries_are_short_and_bounded() {
+        assert_eq!(layout_retry_delay(0), Some(Duration::from_millis(16)));
+        assert_eq!(layout_retry_delay(1), Some(Duration::from_millis(32)));
+        assert_eq!(layout_retry_delay(2), Some(Duration::from_millis(64)));
+        assert_eq!(layout_retry_delay(3), Some(Duration::from_millis(128)));
+        assert_eq!(layout_retry_delay(4), None);
+    }
+
+    #[test]
+    fn a_new_completion_or_layout_cancels_an_old_retry_chain() {
+        assert!(layout_retry_is_current(7, 7, 12, 12));
+        assert!(!layout_retry_is_current(6, 7, 12, 12));
+        assert!(!layout_retry_is_current(7, 7, 11, 12));
     }
 
     #[test]
