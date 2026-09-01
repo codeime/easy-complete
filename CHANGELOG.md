@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- fix: schedule the overlay frame drain with a one-frame delay instead of `exec_async` — GCD keeps servicing blocks queued from within the running main-queue drain, so one duplicate frame request that slipped past the geometry dedupe re-entered the drain in the same turn and livelocked NSApplication: the desktop process sat at 100% CPU for days and the overlay froze on the `···` marker. A source pin now keeps every frame dispatch on `exec_after`, which this fix had already regressed through once
 - change: replace the autocomplete WebView and dashboard WebView with GPUI — the overlay and settings window are native views; completions run in `ec_engine` from build-time JSON IR, with QuickJS only for spec hooks (`postProcess`, `script`, `custom`, `generateSpec`)
 - fix: place the overlay using `NSScreen.screens[0]` as the global-coordinate origin, not `mainScreen` — on an external display `mainScreen` is the focused screen and the popup landed at the wrong height
 - fix: clear the `···` loading marker when the request that turned it on finishes, even if that result is stale, and retire it after `autocomplete.scriptTimeout` (default 6s) instead of the 30s engine watchdog — the request keeps running, so a slow generator still gets rendered when it answers

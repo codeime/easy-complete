@@ -334,7 +334,7 @@ fn schedule_overlay_frame(window: id, x: f64, y: f64, width: f64, height: f64) {
         queue.pending = Some(OverlayFrameRequest { epoch, ..next });
         drop(queue);
         if !OVERLAY_FRAME_DRAIN_SCHEDULED.swap(true, Ordering::AcqRel) {
-            queue_overlay_frame_drain();
+            queue_overlay_frame_drain_later();
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -343,11 +343,11 @@ fn schedule_overlay_frame(window: id, x: f64, y: f64, width: f64, height: f64) {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn queue_overlay_frame_drain() {
-    dispatch::Queue::main().exec_async(drain_overlay_frame);
-}
-
+/// Never `exec_async` this onto the main queue. GCD keeps popping blocks that
+/// were queued from a block already running on `_dispatch_main_queue_drain`, so
+/// a duplicate request that `decide_overlay_frame_schedule` does not recognise
+/// re-enters the drain inside the same turn and starves NSApplication — the
+/// overlay then holds whatever it last painted, which is the `···` marker.
 #[cfg(target_os = "macos")]
 fn queue_overlay_frame_drain_later() {
     dispatch::Queue::main().exec_after(OVERLAY_FRAME_RETRY_DELAY, drain_overlay_frame);
@@ -396,7 +396,8 @@ fn drain_overlay_frame() {
             .is_ok()
     {
         // Coalesce a burst of newer layout requests long enough for GPUI's
-        // deferred content resize to land before applying the next frame.
+        // deferred content resize to land before applying the next frame, and
+        // yield the main queue so the drain cannot feed itself.
         queue_overlay_frame_drain_later();
     }
 }
@@ -657,7 +658,7 @@ pub fn set_overlay_frame_titled(title: &str, x: f64, y: f64, width: f64, height:
     let epoch = begin_overlay_frame_request();
     let title = title.to_string();
     #[cfg(target_os = "macos")]
-    dispatch::Queue::main().exec_async(move || {
+    dispatch::Queue::main().exec_after(OVERLAY_FRAME_RETRY_DELAY, move || {
         if overlay_frame_request_is_current(epoch) {
             apply_overlay_frame_titled(&title, x, y, width, height, epoch);
         }
@@ -925,6 +926,42 @@ mod tests {
             retain_pending_after_apply(applied, Some(newer)).map(|r| r.y),
             Some(80.0)
         );
+    }
+
+    #[test]
+    fn the_frame_drain_never_reenters_the_main_queue_in_the_same_turn() {
+        // GCD's `_dispatch_main_queue_drain` keeps popping blocks queued from a
+        // block already running on that drain. Scheduling `drain_overlay_frame`
+        // with `exec_async` therefore livelocks NSApplication as soon as one
+        // duplicate request slips past `decide_overlay_frame_schedule`, and the
+        // overlay freezes on whatever it last painted — usually the `···`
+        // marker. Twice regressed; keep this assertion with the code.
+        let src = include_str!("macos.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production half of the file");
+        assert!(
+            !src.contains("exec_async(drain_overlay_frame)"),
+            "drain_overlay_frame must be exec_after'd, never exec_async'd onto the main queue"
+        );
+        for site in [
+            "fn schedule_overlay_frame",
+            "fn drain_overlay_frame",
+            "fn set_overlay_frame_titled",
+        ] {
+            let start = src.find(site).unwrap_or_else(|| panic!("{site} is gone"));
+            let body = &src[start..];
+            let end = body[1..].find("\nfn ").map_or(body.len(), |i| i + 1);
+            // Prose is allowed to name the banned call; only real dispatches count.
+            let code = body[..end]
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<String>();
+            assert!(
+                !code.contains("exec_async("),
+                "{site} must yield the main queue: every frame dispatch goes through exec_after"
+            );
+        }
     }
 
     #[test]
