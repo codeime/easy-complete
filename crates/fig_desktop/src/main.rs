@@ -44,21 +44,52 @@ pub use webview::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID};
 
 pub use event_loop::{EventLoopClosed, EventLoopProxy, EventLoopWindowTarget};
 
+/// What the async prelude hands back so GPUI can be started from plain `main`.
+struct Launch {
+    setup: gpui_host::Setup,
+    /// Flushes the log file on drop, so it has to outlive `NSApplication::run`.
+    _log_guard: fig_log::LogGuard,
+}
+
 fn main() -> ExitCode {
     // The desktop process is I/O bound: GPUI owns the UI thread, and the
     // completion engine has its own worker. A worker per core just parks
     // stacks — the same waste ecterm already stopped.
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(8)
         .thread_name("ec-tokio")
         .enable_all()
         .build()
-        .expect("tokio runtime")
-        .block_on(async_main())
+        .expect("tokio runtime");
+
+    let Launch { setup, _log_guard } = match runtime.block_on(async_main()) {
+        Ok(launch) => launch,
+        Err(exit_code) => return exit_code,
+    };
+
+    // Stay *entered* in the runtime so `Handle::current()` and `tokio::spawn`
+    // keep working from AppKit callbacks, but do not run the UI loop inside
+    // `block_on`. `block_on` hands the future it polls a fixed cooperative
+    // budget — 128 units — that is only refilled when that poll returns, and
+    // `NSApplication::run` never returned from it. Every tokio channel that
+    // resolved on this thread spent a unit; once they were gone each further
+    // poll reported Pending, woke itself, and GPUI's executor re-queued it
+    // onto the main queue it was already draining. That livelock pinned the
+    // desktop process at 100% CPU with the overlay frozen on `···`.
+    let _runtime = runtime.enter();
+    match gpui_host::start_application(setup) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            error!(%err, "GPUI host failed");
+            ExitCode::FAILURE
+        },
+    }
 }
 
-async fn async_main() -> ExitCode {
+/// Everything that has to happen before the UI loop starts. `Err` carries the
+/// exit code for the paths that stop short of launching.
+async fn async_main() -> Result<Launch, ExitCode> {
     #[cfg(target_os = "macos")]
     gpui_host::ensure_gpui_ns_application();
 
@@ -66,16 +97,16 @@ async fn async_main() -> ExitCode {
 
     #[cfg(target_os = "macos")]
     if cli.unregister_login_item {
-        return match fig_integrations::login_item::set_enabled(false) {
+        return Err(match fig_integrations::login_item::set_enabled(false) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("Failed to unregister launch at login: {err}");
                 ExitCode::FAILURE
             },
-        };
+        });
     }
 
-    let _log_guard = initialize_logging(LogArgs {
+    let log_guard = initialize_logging(LogArgs {
         log_level: None,
         log_to_stdout: true,
         log_file_path: Some(
@@ -145,24 +176,21 @@ async fn async_main() -> ExitCode {
     }
 
     if cli.is_startup && !launch_on_startup {
-        return ExitCode::SUCCESS;
+        return Err(ExitCode::SUCCESS);
     }
 
-    let page = match parse_url_page(cli.url_link.as_deref()) {
-        Ok(page) => page,
-        Err(exit_code) => return exit_code,
-    };
+    let page = parse_url_page(cli.url_link.as_deref())?;
 
     if !cli.allow_multiple {
         #[cfg(target_os = "macos")]
         if let Some(exit_code) = allow_multiple_running_check(std::process::id(), cli.kill_old, page.clone()).await {
-            return exit_code;
+            return Err(exit_code);
         }
         #[cfg(target_os = "linux")]
         match get_current_pid() {
             Ok(current_pid) => {
                 if let Some(exit_code) = allow_multiple_running_check(current_pid, cli.kill_old, page.clone()).await {
-                    return exit_code;
+                    return Err(exit_code);
                 }
             },
             Err(err) => warn!(%err, "Failed to get pid"),
@@ -180,7 +208,7 @@ async fn async_main() -> ExitCode {
                     )
                     .show();
 
-                return ExitCode::FAILURE;
+                return Err(ExitCode::FAILURE);
             }
         }
     }
@@ -243,8 +271,11 @@ async fn async_main() -> ExitCode {
             let _ = update::check_for_update(false, false).await;
         });
     }
-    webview_manager.run().await.unwrap();
-    ExitCode::SUCCESS
+    let setup = webview_manager.prepare().await.expect("desktop services");
+    Ok(Launch {
+        setup,
+        _log_guard: log_guard,
+    })
 }
 
 fn parse_url_page(url: Option<&str>) -> Result<Option<String>, ExitCode> {

@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- 修复：浮层 frame 的 drain 改为延迟一帧调度，不再用 `exec_async`——GCD 会在同一轮主队列 drain 里继续消费期间入队的 block，一个躲过几何去重的重复请求就会让 drain 在同一轮里自我重入，NSApplication 被活锁：桌面进程连续数天占满 CPU，浮层冻在 `···` 标记上。新增源码钉测试保证所有 frame 派发都走 `exec_after`，此修复此前已被回退过一次
+- 修复：桌面进程不再在使用几小时后活锁在 100% CPU、浮层冻在 `···` 上。`NSApplication::run` 原本嵌在一次永不返回的 `tokio::Runtime::block_on` poll 里，而 `block_on` 会给这次 poll 固定一份 tokio 协作预算（128 单位）。每个在主线程上完成的补全回复消耗 1 单位；从第 129 次起，`tokio::sync::oneshot::Receiver::poll` 直接返回 Pending 并立刻自唤醒，GPUI 的 executor 又把任务重新排进正在 drain 的主队列。现在引擎回复通道改为 `futures::channel::oneshot`（无预算记账，由一个在单次 `block_on` poll 内连跑 200 次回复的测试钉住），`main` 在 `block_on` 返回后再启动 GPUI，只保留 `Runtime::enter()` 让 AppKit 回调里的 `Handle::current()` 继续可用
+- 修复：浮层 frame 的 drain 改为延迟一帧调度，不再用 `exec_async`——GCD 会在同一轮主队列 drain 里继续消费期间入队的 block，一个躲过几何去重的重复请求可能让 drain 在同一轮里自我重入。新增源码钉测试保证所有 frame 派发都走 `exec_after`。（此项最初被当作上面 100% CPU 卡死的修复发布；并不是，但隐患本身真实存在）
 - 变更：补全浮层与设置窗口从 WebView 换成 GPUI——补全由 `ec_engine` 在构建期 JSON IR 上运行，QuickJS 只执行 spec hook（`postProcess`、`script`、`custom`、`generateSpec`）
 - 修复：浮层坐标换算改用 `NSScreen.screens[0]` 作为全局原点，不再用 `mainScreen`——外接屏上 `mainScreen` 是焦点所在屏，浮层会落到错误高度
 - 修复：打开 `···` 的那次请求结束时必须关掉标记，即使结果已过期；标记最多显示到 `autocomplete.scriptTimeout`（默认 6 秒），不再等引擎 30 秒监工上限。请求本身继续跑，慢生成器返回后仍会渲染

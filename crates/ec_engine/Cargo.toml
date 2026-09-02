@@ -13,12 +13,15 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 fig_settings = { path = "../fig_settings" }
+futures.workspace = true
 libc.workspace = true
 rquickjs = { version = "0.12.2", default-features = true }
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Only to prove the reply channel stays outside tokio's cooperative budget; see
+# `replies_keep_resolving_after_tokio_exhausts_its_budget_on_the_polling_thread`.
+tokio.workspace = true

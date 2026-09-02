@@ -2346,6 +2346,7 @@ version = "2.2.2"
 dependencies = [
  "anyhow",
  "fig_settings",
+ "futures",
  "libc",
  "rquickjs",
  "serde",

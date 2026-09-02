@@ -4,7 +4,17 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use tokio::sync::oneshot;
+// Not `tokio::sync::oneshot`. The desktop awaits the reply on GPUI's foreground
+// executor, which used to run nested inside one `tokio::Runtime::block_on` poll
+// that hosted `NSApplication::run` and never returned. `block_on` fixes tokio's
+// cooperative budget (128 units) for the life of that poll, and every tokio
+// channel that resolves on that thread spends one. Once they were gone the
+// 129th reply never resolved: `poll_proceed` reported Pending and woke the task
+// at once, GPUI re-queued it onto the same main-queue drain, and the desktop sat
+// at 100% CPU with the overlay frozen. `fig_desktop` now starts the UI loop
+// outside `block_on`; this channel has no budget accounting at all, so the reply
+// path stays correct even if a caller polls it from inside one again.
+use futures::channel::oneshot;
 
 use crate::ir::Registry;
 use crate::rank::AcceptanceIndex;
@@ -157,7 +167,7 @@ impl EngineClient {
                     // behind an in-flight attempt.  Do not initialize an
                     // engine or run a completion for a request nobody is
                     // waiting for anymore.
-                    if reply.is_closed() {
+                    if reply.is_canceled() {
                         continue;
                     }
                     let current_engine = match engine.take() {
@@ -225,7 +235,7 @@ impl EngineClient {
                 kind: JobKind::Complete { request, reply },
             })
             .map_err(|_err| anyhow!("engine thread is gone"))?;
-        rx.blocking_recv().map_err(|_err| anyhow!("engine dropped the reply"))?
+        futures::executor::block_on(rx).map_err(|_err| anyhow!("engine dropped the reply"))?
     }
 
     /// Queue a successful acceptance without participating in completion
@@ -501,13 +511,11 @@ mod tests {
         assert_eq!(request.buffer, "git ");
         assert!(rx.try_recv().is_err());
 
-        let error_a = rx_a
-            .blocking_recv()
+        let error_a = futures::executor::block_on(rx_a)
             .expect("superseded request should receive a reply")
             .expect_err("superseded request should fail explicitly");
         assert_eq!(error_a.to_string(), "completion request superseded by a newer request");
-        let error_b = rx_b
-            .blocking_recv()
+        let error_b = futures::executor::block_on(rx_b)
             .expect("superseded request should receive a reply")
             .expect_err("superseded request should fail explicitly");
         assert_eq!(error_b.to_string(), "completion request superseded by a newer request");
@@ -623,9 +631,58 @@ mod tests {
             unreachable!("job should be a completion")
         };
         assert!(
-            reply.is_closed(),
+            reply.is_canceled(),
             "a cancelled caller must be observable before execution"
         );
+    }
+
+    /// Reproduces the desktop's shape exactly: a tokio `block_on` whose poll
+    /// never returns, and inside it a foreign executor driving `complete()`
+    /// futures to completion by hand. tokio's budget for that poll is 128 and
+    /// is never refilled, so a `tokio::sync::oneshot` reply stops resolving on
+    /// the 129th round and wakes itself forever instead — the livelock that
+    /// pinned the desktop at 100% CPU after a few hours of typing.
+    #[test]
+    fn replies_keep_resolving_after_tokio_exhausts_its_budget_on_the_polling_thread() {
+        use std::task::{Context, Poll, Waker};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("git.json"),
+            r#"{"names":["git"],"subcommands":[{"names":["status"]}]}"#,
+        )
+        .unwrap();
+        let client = EngineClient::spawn(dir.path().to_path_buf()).expect("spawn");
+        let request = CompleteRequest {
+            buffer: "git ".into(),
+            cwd: dir.path().display().to_string(),
+            ..CompleteRequest::default()
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            // Well past tokio's 128-unit budget. Each round polls the reply
+            // future directly, never yielding back to `block_on`.
+            for round in 0..200u32 {
+                let mut future = Box::pin(client.complete(request.clone()));
+                let mut spins = 0u32;
+                let result = loop {
+                    match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                        Poll::Ready(result) => break result,
+                        Poll::Pending => {
+                            spins += 1;
+                            assert!(
+                                spins < 200_000,
+                                "round {round}: the reply future stopped making progress on this thread"
+                            );
+                            thread::yield_now();
+                        },
+                    }
+                };
+                let result = result.expect("completion");
+                assert!(result.suggestions.iter().any(|s| s.name == "status"), "round {round}");
+            }
+        });
     }
 
     #[test]

@@ -90,8 +90,11 @@ impl WebviewManager {
         }
     }
 
+    /// Start the IPC servers, tray and engine, and return the closure that
+    /// builds the GPUI host. Starting GPUI is left to `main`: the async prelude
+    /// runs inside `block_on`, and the UI loop must not (see `main.rs`).
     #[allow(unused_mut)]
-    pub async fn run(mut self) -> anyhow::Result<()> {
+    pub async fn prepare(mut self) -> anyhow::Result<crate::gpui_host::Setup> {
         let window_target = EventLoopWindowTarget;
         self.platform_state
             .handle(
@@ -183,7 +186,7 @@ impl WebviewManager {
         let context = self.context;
         let show_dashboard_after_normal_launch = self.show_dashboard_after_normal_launch;
 
-        crate::gpui_host::start_application(move |cx| {
+        Ok(Box::new(move |cx| {
             let overlay = crate::overlay::OverlayController::start(
                 cx,
                 engine,
@@ -207,9 +210,7 @@ impl WebviewManager {
                 tray,
             });
             Ok((host, event_rx))
-        })
-        .expect("gpui host");
-        Ok(())
+        }))
     }
 }
 

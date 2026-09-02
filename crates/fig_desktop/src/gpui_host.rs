@@ -281,6 +281,10 @@ pub fn ensure_gpui_ns_application() {
     }
 }
 
+/// Builds the host once GPUI's `App` exists. Produced by the async prelude and
+/// consumed by [`start_application`] from `main`, outside `block_on`.
+pub type Setup = Box<dyn FnOnce(&mut App) -> anyhow::Result<(Entity<DesktopHost>, flume::Receiver<Event>)>>;
+
 pub fn start_application(
     setup: impl FnOnce(&mut App) -> anyhow::Result<(Entity<DesktopHost>, flume::Receiver<Event>)> + 'static,
 ) -> anyhow::Result<()> {
