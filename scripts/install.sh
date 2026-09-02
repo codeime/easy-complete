@@ -47,6 +47,39 @@ stop_process() {
   sleep 0.2
 }
 
+# Ask the relaunched desktop process whether its Accessibility grant is in
+# effect, and leave the answer in `accessibility_state`: true, false, or
+# unknown when the app never answered. `ec debug accessibility status` reports
+# the desktop process's own `AXIsProcessTrusted()` over its local socket, so it
+# speaks for the binary that was just installed, not for this shell. The socket
+# takes a moment to come up after `open`, and a `false` only counts once it has
+# been repeated, so a TCC lookup that is still settling cannot trigger a reset.
+probe_accessibility() {
+  accessibility_state=unknown
+  local answer="" false_count=0 tries=0
+  while [ "${tries}" -lt 15 ]; do
+    answer="$(ec debug accessibility status 2>/dev/null | awk '/^Accessibility Enabled: /{print $3}' || true)"
+    case "${answer}" in
+      true)
+        accessibility_state=true
+        return 0
+        ;;
+      false)
+        false_count=$((false_count + 1))
+        if [ "${false_count}" -ge 3 ]; then
+          accessibility_state=false
+          return 0
+        fi
+        ;;
+    esac
+    sleep 1
+    tries=$((tries + 1))
+  done
+  # Under `set -e` the caller must see success either way; the answer is in
+  # `accessibility_state`, not the return code.
+  return 0
+}
+
 # ── 1. Build & assemble the .app ──────────────────────────────────────────────
 # Shared with CI (see .github/workflows/release.yml) so the bundle is assembled
 # identically whether installed locally or packaged into a release DMG.
@@ -105,15 +138,6 @@ else
 fi
 ditto "${STAGING_BUNDLE}" "${APP_BUNDLE}"
 
-# A new desktop binary carries a new ad-hoc signature, which invalidates the
-# previous Accessibility grant. Same binary → leave the grant alone.
-accessibility_reset=0
-if [ "${desktop_changed}" -eq 1 ]; then
-  info "Resetting stale Accessibility permission..."
-  tccutil reset Accessibility "${BUNDLE_ID}" 2>/dev/null || true
-  accessibility_reset=1
-fi
-
 # ── 4. Symlink CLI binaries to ~/.local/bin ───────────────────────────────────
 info "Linking binaries to ${LOCAL_BIN}..."
 mkdir -p "${LOCAL_BIN}"
@@ -138,21 +162,44 @@ ec integrations install --silent input-method 2>/dev/null || {
 
 # ── 8. Accessibility permission ─────────────────────────────────────────────────
 open "${APP_BUNDLE}"
-if [ "${accessibility_reset}" -eq 1 ]; then
-  info "Requesting Accessibility permission..."
-  # `ec debug prompt-accessibility` talks to the running desktop process over
-  # its local socket, so retry briefly while it finishes coming up.
-  prompted=false
-  for _ in 1 2 3 4 5; do
-    if ec debug prompt-accessibility 2>/dev/null; then prompted=true; break; fi
-    sleep 1
-  done
-  if [ "${prompted}" = true ]; then
-    warn "Grant '${APP_DISPLAY}' in System Settings → Privacy & Security → Accessibility."
-  else
-    warn "Could not reach the desktop app to prompt for Accessibility. Once it is running, run:"
-    warn "  ec debug prompt-accessibility"
-  fi
+
+# A new desktop binary carries a new ad-hoc signature, and TCC pins the
+# Accessibility grant to a cdhash — but whether that costs the grant depends on
+# the OS. macOS 26 re-pins the stored requirement to the new binary on its own
+# (TCC.db ends up holding the fresh cdhash with auth_reason "System Set") and
+# the app comes up trusted; older releases keep the stale requirement, leave the
+# checkbox in System Settings ticked, and fail every AX call. So ask the new
+# process instead of assuming. Resetting first would throw away a grant that
+# carried over and send the user back to System Settings on every install.
+# Same binary → same signature → nothing to check.
+accessibility_reset=0
+if [ "${desktop_changed}" -eq 1 ]; then
+  info "Checking whether the Accessibility grant survived the new binary..."
+  probe_accessibility
+  case "${accessibility_state}" in
+    true)
+      info "Accessibility grant carried over."
+      ;;
+    false)
+      info "Accessibility grant did not survive; resetting it..."
+      tccutil reset Accessibility "${BUNDLE_ID}" 2>/dev/null || true
+      accessibility_reset=1
+      info "Requesting Accessibility permission..."
+      # The probe just reached the desktop process over its local socket, so a
+      # single attempt is enough here.
+      if ec debug prompt-accessibility 2>/dev/null; then
+        warn "Grant '${APP_DISPLAY}' in System Settings → Privacy & Security → Accessibility."
+      else
+        warn "Could not reach the desktop app to prompt for Accessibility. Once it is running, run:"
+        warn "  ec debug prompt-accessibility"
+      fi
+      ;;
+    *)
+      warn "Could not reach the desktop app to check its Accessibility grant. Once it is running, run:"
+      warn "  ec debug accessibility status"
+      warn "and, if that reports false, 'ec debug accessibility refresh' to reset and re-prompt."
+      ;;
+  esac
 fi
 
 # ── Done ───────────────────────────────────────────────────────────────────────
