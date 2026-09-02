@@ -5,15 +5,23 @@ use std::pin::Pin;
 use accessibility::util::ax_call;
 use accessibility_sys::{
     AXError, AXObserverAddNotification, AXObserverCallback, AXObserverCreate, AXObserverGetRunLoopSource,
-    AXObserverRef, AXUIElementRef, kAXErrorSuccess, pid_t,
+    AXObserverRef, kAXErrorSuccess, pid_t,
 };
-use core_foundation::base::TCFType;
-use core_foundation::runloop::{CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRemoveSource, kCFRunLoopDefaultMode};
+use core_foundation::base::{CFRelease, TCFType};
+use core_foundation::runloop::{CFRunLoop, CFRunLoopAddSource, CFRunLoopRemoveSource, kCFRunLoopDefaultMode};
 use core_foundation::string::{CFString, CFStringRef};
+
+use super::UIElement;
 
 pub struct AXObserver<T> {
     inner: AXObserverRef,
-    ax_ref: AXUIElementRef,
+    /// The application element the notifications are registered on. Owned here so it lives
+    /// exactly as long as the subscriptions that name it.
+    element: UIElement,
+    /// The run loop the observer's source was scheduled on. Kept so `drop` removes the source
+    /// from *that* loop even when it runs on another thread; removing from the current loop
+    /// would leave the source live on the original one and the released observer with it.
+    run_loop: CFRunLoop,
     callback_data: Pin<Box<T>>,
 }
 
@@ -24,21 +32,23 @@ unsafe impl<T> Sync for AXObserver<T> {}
 impl<T> AXObserver<T> {
     pub unsafe fn create(
         pid: pid_t,
-        ax_ref: AXUIElementRef,
+        element: UIElement,
         data: T,
         callback: AXObserverCallback,
     ) -> Result<Self, AXError> {
         let observer = ax_call(|x: *mut AXObserverRef| AXObserverCreate(pid, callback, x))?;
 
+        let run_loop = CFRunLoop::get_current();
         CFRunLoopAddSource(
-            CFRunLoopGetCurrent(),
+            run_loop.as_concrete_TypeRef(),
             AXObserverGetRunLoopSource(observer),
             kCFRunLoopDefaultMode,
         );
 
         Ok(Self {
             inner: observer,
-            ax_ref,
+            element,
+            run_loop,
             callback_data: Box::pin(data),
         })
     }
@@ -52,7 +62,7 @@ impl<T> AXObserver<T> {
         let callback_data: *const T = &*self.callback_data;
         let err = AXObserverAddNotification(
             self.inner,
-            self.ax_ref,
+            self.element.get_ref(),
             CFString::from(ax_event).as_CFTypeRef() as CFStringRef,
             callback_data as *const _ as *mut c_void,
         );
@@ -65,10 +75,14 @@ impl<T> Drop for AXObserver<T> {
     fn drop(&mut self) {
         unsafe {
             CFRunLoopRemoveSource(
-                CFRunLoopGetCurrent(),
+                self.run_loop.as_concrete_TypeRef(),
                 AXObserverGetRunLoopSource(self.inner),
                 kCFRunLoopDefaultMode,
             );
+            // `AXObserverCreate` follows the create rule. Every app activation re-registers
+            // its observer, so without this release each switch between apps leaked an
+            // observer and the mach port behind it.
+            CFRelease(self.inner.cast());
         }
     }
 }

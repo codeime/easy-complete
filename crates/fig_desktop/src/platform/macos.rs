@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use accessibility_sys::{
-    AXError, AXIsProcessTrusted, AXUIElementCreateSystemWide, AXUIElementSetMessagingTimeout, pid_t,
+    AXError, AXIsProcessTrusted, AXUIElement, AXUIElementCreateSystemWide, AXUIElementSetMessagingTimeout, pid_t,
 };
 use anyhow::Context;
 use cocoa::base::{YES, id};
+use core_foundation::base::TCFType;
 use core_graphics::display::CGRect;
 use core_graphics::window::CGWindowID;
 use fig_integrations::input_method::InputMethod;
@@ -114,6 +115,15 @@ pub fn launched_as_login_item() -> bool {
 struct Unmanaged {
     event_sender: RwLock<Option<EventLoopProxy>>,
     window_server: RwLock<Option<Arc<Mutex<WindowServer>>>>,
+}
+
+/// Caps every AX request at 250 ms so a hung tracked application cannot hang us with it.
+/// The system-wide element is created under the create rule and released on return.
+fn set_global_ax_messaging_timeout() {
+    unsafe {
+        let system_wide = AXUIElement::wrap_under_create_rule(AXUIElementCreateSystemWide());
+        AXUIElementSetMessagingTimeout(system_wide.as_concrete_TypeRef(), 0.25);
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -289,12 +299,8 @@ impl PlatformStateImpl {
         debug!("Handling platform event: {:?}", event);
         match event {
             PlatformBoundEvent::Initialize => {
-                unsafe {
-                    if AXIsProcessTrusted() {
-                        // This prevents Fig from becoming unresponsive if one of the applications
-                        // we are tracking becomes unresponsive.
-                        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25);
-                    }
+                if unsafe { AXIsProcessTrusted() } {
+                    set_global_ax_messaging_timeout();
                 }
 
                 UNMANAGED.event_sender.write().unwrap().replace(self.proxy.clone());
@@ -510,11 +516,7 @@ impl PlatformStateImpl {
                         }))
                         .ok();
                     if enabled {
-                        unsafe {
-                            // This prevents Fig from becoming unresponsive if one of the applications
-                            // we are tracking becomes unresponsive.
-                            AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25);
-                        }
+                        set_global_ax_messaging_timeout();
                     }
                 });
 

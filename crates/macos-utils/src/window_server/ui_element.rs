@@ -4,11 +4,11 @@ use std::fmt;
 use accessibility::util::ax_call;
 use accessibility_sys::{
     _AXUIElementGetWindow, AXError, AXUIElement, AXUIElementCopyAttributeNames, AXUIElementCopyAttributeValue,
-    AXUIElementRef, AXUIElementSetAttributeValue, AXValue, kAXApplicationRole, kAXBrowserRole, kAXChildrenAttribute,
-    kAXDOMClassListAttribute, kAXEnhancedUserInterfaceAttribute, kAXErrorAttributeUnsupported, kAXFocusedAttribute,
-    kAXFocusedWindowAttribute, kAXFrameAttribute, kAXFullScreenAttribute, kAXGroupRole,
-    kAXManualAccessibilityAttribute, kAXParentAttribute, kAXRoleAttribute, kAXScrollAreaRole, kAXSubroleAttribute,
-    kAXTextFieldRole, kAXWebAreaRole,
+    AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetAttributeValue, AXValue, kAXApplicationRole,
+    kAXBrowserRole, kAXChildrenAttribute, kAXDOMClassListAttribute, kAXEnhancedUserInterfaceAttribute,
+    kAXErrorAttributeUnsupported, kAXFocusedAttribute, kAXFocusedWindowAttribute, kAXFrameAttribute,
+    kAXFullScreenAttribute, kAXGroupRole, kAXManualAccessibilityAttribute, kAXParentAttribute, kAXRoleAttribute,
+    kAXScrollAreaRole, kAXSubroleAttribute, kAXTextFieldRole, kAXWebAreaRole, pid_t,
 };
 use core_foundation::ConcreteCFType;
 use core_foundation::array::{CFArray, CFArrayRef};
@@ -25,7 +25,7 @@ use core_graphics::window::{
 };
 use tracing::warn;
 
-use crate::util::{NSArrayRef, NSStringRef};
+use crate::util::NSStringRef;
 
 pub struct UIElement(AXUIElement);
 
@@ -71,6 +71,12 @@ impl From<AXUIElement> for UIElement {
     }
 }
 
+/// Borrows a reference somebody else owns (an observer callback argument, an entry of a
+/// `kAXChildren` array): retains it so the wrapper's release on drop balances out.
+///
+/// Do **not** feed this the result of `AXUIElementCreate*` or any `Copy*` call: those hand
+/// over a +1 the caller must release, and the extra retain here would pin the element
+/// forever. Wrap those with [`UIElement::application`] / [`AXUIElement::wrap_under_create_rule`].
 impl From<AXUIElementRef> for UIElement {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn from(ax_ref: AXUIElementRef) -> Self {
@@ -98,6 +104,11 @@ pub struct CGWindowInfo {
 }
 
 impl UIElement {
+    /// The application element for `pid`, owned by the wrapper.
+    pub fn application(pid: pid_t) -> Self {
+        UIElement(unsafe { AXUIElement::wrap_under_create_rule(AXUIElementCreateApplication(pid)) })
+    }
+
     pub fn get_ref(&self) -> AXUIElementRef {
         self.0.as_concrete_TypeRef()
     }
@@ -115,7 +126,12 @@ impl UIElement {
                 let attr_ref = attr.as_concrete_TypeRef();
                 AXUIElementCopyAttributeValue(self.get_ref(), attr_ref, value_ref)
             })?;
-            Ok(CFType::wrap_under_get_rule(cf_ref))
+            // `Copy` rule: the value arrives at +1 and is ours to release. Wrapping it under
+            // the *get* rule retained it again, so every attribute read pinned its value for
+            // the life of the process. Reading a `kAXChildren` array pins every child with
+            // it, and the xterm caret walk reads one per element per keystroke: a Cursor
+            // session held 211k `AXUIElement`s (~70 MB) after a few minutes of typing.
+            Ok(CFType::wrap_under_create_rule(cf_ref))
         }
     }
 
@@ -189,14 +205,12 @@ impl UIElement {
     }
 
     fn attribute_list(&self) -> Result<Vec<String>> {
-        let attrs: NSArrayRef<NSStringRef> =
-            unsafe { ax_call(|names: *mut CFArrayRef| AXUIElementCopyAttributeNames(self.get_ref(), names))?.into() };
-        let filtered: Vec<_> = attrs
-            .iter()
-            .filter_map(|attr| unsafe { NSStringRef::new(*attr).as_str().map(|s| s.to_owned()) })
-            .collect();
-
-        Ok(filtered)
+        let attrs: CFArray<CFString> = unsafe {
+            CFArray::wrap_under_create_rule(ax_call(|names: *mut CFArrayRef| {
+                AXUIElementCopyAttributeNames(self.get_ref(), names)
+            })?)
+        };
+        Ok(attrs.iter().map(|attr| attr.to_string()).collect())
     }
 
     #[allow(dead_code)]
@@ -320,4 +334,85 @@ fn get_num(dict: &CFDictionary, key: CFStringRef) -> Option<i64> {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     pub fn CGWindowLevelForKey(key: i32) -> i32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `AXUIElementCreateApplication` needs no Accessibility grant, so the two constructors
+    /// can be checked against real retain counts: the owning one takes the +1 as is, the
+    /// borrowing one adds and later removes its own.
+    #[test]
+    fn owned_and_borrowed_constructors_balance_their_retains() {
+        let owned = UIElement::application(std::process::id() as pid_t);
+        assert_eq!(owned.0.retain_count(), 1, "create-rule wrapper must not retain again");
+
+        let borrowed = UIElement::from(owned.get_ref());
+        assert_eq!(owned.0.retain_count(), 2, "borrowing wrapper must retain");
+        drop(borrowed);
+        assert_eq!(owned.0.retain_count(), 1, "borrowing wrapper must release on drop");
+
+        let cloned = owned.clone();
+        assert_eq!(owned.0.retain_count(), 2);
+        drop(cloned);
+        assert_eq!(owned.0.retain_count(), 1);
+    }
+
+    fn body_of(source: &str, signature: &str) -> String {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("`{signature}` not found"));
+        let rest = &source[start..];
+        let end = rest.find("\n    }\n").expect("function end");
+        rest[..end].to_string()
+    }
+
+    /// Reading an attribute needs a trusted process and a live AX tree, which a test binary
+    /// never has, so the ownership of `AXUIElementCopyAttributeValue`'s result is pinned at
+    /// the source. It is a `Copy` call: the value is already +1, and re-retaining it leaked
+    /// every child element the xterm caret walk touched — 211k of them in one session.
+    #[test]
+    fn attribute_reads_take_the_copied_value_as_owned() {
+        for (source, signature) in [
+            (include_str!("ui_element.rs"), "fn get_attr_ref("),
+            (include_str!("ui_element.rs"), "fn attribute_list("),
+        ] {
+            let body = body_of(source, signature);
+            let code: Vec<&str> = body
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect();
+            assert!(
+                code.iter().any(|line| line.contains("wrap_under_create_rule")),
+                "{signature} must take ownership of the copied value"
+            );
+            assert!(
+                !code.iter().any(|line| line.contains("wrap_under_get_rule")),
+                "{signature} must not retain a value that is already +1"
+            );
+        }
+    }
+
+    /// Same rule for the caret query: both the range it builds (`AXValueCreate`) and the
+    /// bounds it copies back are +1 and must be wrapped so the frame releases them.
+    #[test]
+    fn caret_query_releases_the_values_it_creates_and_copies() {
+        let source = include_str!("../caret_position.rs");
+        let code: Vec<&str> = source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect();
+        assert!(
+            !code.iter().any(|line| line.contains("as_void_ptr()")),
+            "a created AXValue must not be passed on as a raw pointer with no owner"
+        );
+        assert!(
+            code.iter()
+                .filter(|line| line.contains("wrap_under_create_rule"))
+                .count()
+                >= 2,
+            "both the created range and the copied bounds must be owned"
+        );
+    }
 }
