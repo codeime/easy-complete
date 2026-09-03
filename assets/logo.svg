@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="background" x1="146" y1="94" x2="854" y2="930" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343637"/>
+      <stop offset="0.48" stop-color="#242627"/>
+      <stop offset="1" stop-color="#171819"/>
+    </linearGradient>
+    <radialGradient id="surface-light" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(326 250) rotate(47.5) scale(758 765)">
+      <stop stop-color="#FFFFFF" stop-opacity="0.055"/>
+      <stop offset="0.62" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="terminal-green" x1="190" y1="275" x2="401" y2="584" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#39DB68"/>
+      <stop offset="1" stop-color="#22C956"/>
+    </linearGradient>
+    <linearGradient id="selected-green" x1="396" y1="449" x2="811" y2="540" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#32D762"/>
+      <stop offset="1" stop-color="#18C84B"/>
+    </linearGradient>
+    <linearGradient id="input-line" x1="402" y1="402" x2="600" y2="402" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FAFAFA"/>
+      <stop offset="1" stop-color="#E8E9EA"/>
+    </linearGradient>
+    <filter id="panel-shadow" x="360" y="423" width="487" height="374" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="18"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.34 0"/>
+      <feBlend in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#background)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#surface-light)"/>
+  <rect x="1" y="1" width="1022" height="1022" rx="223" stroke="#FFFFFF" stroke-opacity="0.035" stroke-width="2"/>
+
+  <path d="M244 286L342 379L244 472" stroke="url(#terminal-green)" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M410 402H592" stroke="url(#input-line)" stroke-width="32" stroke-linecap="round"/>
+
+  <g filter="url(#panel-shadow)">
+    <rect x="396" y="449" width="415" height="91" rx="23" fill="url(#selected-green)"/>
+    <circle cx="445" cy="495" r="21" fill="#91F2A7" fill-opacity="0.78"/>
+
+    <rect x="396" y="543" width="415" height="95" rx="22" fill="#343639"/>
+    <rect x="396.75" y="543.75" width="413.5" height="93.5" rx="21.25" stroke="#FFFFFF" stroke-opacity="0.025" stroke-width="1.5"/>
+    <circle cx="445" cy="591" r="21" fill="#A4A7AA"/>
+    <rect x="490" y="576" width="242" height="26" rx="13" fill="#8F9295"/>
+
+    <rect x="396" y="642" width="415" height="95" rx="22" fill="#2F3134"/>
+    <rect x="396.75" y="642.75" width="413.5" height="93.5" rx="21.25" stroke="#FFFFFF" stroke-opacity="0.025" stroke-width="1.5"/>
+    <circle cx="445" cy="689" r="21" fill="#929599"/>
+    <rect x="490" y="675" width="242" height="26" rx="13" fill="#7F8285"/>
+  </g>
+</svg>
