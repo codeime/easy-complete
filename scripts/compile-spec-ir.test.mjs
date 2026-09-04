@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { compileSpecsIr } from "./compile-spec-ir.mjs";
+import {
+  createFilepathsBinder,
+  parseFilepathsCalls,
+} from "./filepaths-helper.mjs";
 
 test("compiler keeps static suggestion type metadata and string query terms", async () => {
   const srcDir = await mkdtemp(join(tmpdir(), "easy-complete-specs-"));
@@ -98,6 +102,10 @@ test("compiler keeps static suggestion type metadata and string query terms", as
     assert.equal(ir.args[0].suggestions[0].getQueryTerm, "/");
     assert.equal(ir.args[0].suggestions[0].argsHint, "<required> [optional]");
     assert.equal("getQueryTerm" in ir.args[0].suggestions[1], false);
+    assert.equal(typeof ir.args[0].suggestions[1].jsGetQueryTerm, "string");
+    assert.deepEqual(ir.args[0].templates, ["filepaths"]);
+    assert.equal(ir.args[0].generators[0].getQueryTerm, "/");
+    assert.deepEqual(ir.args[0].generators[0].templates, ["filepaths"]);
     assert.deepEqual(ir.args[1].script, ["printf", "ok\n"]);
     assert.equal(ir.args[1].suggestCurrentToken, true);
     assert.equal(ir.args[1].filterStrategy, "prefix");
@@ -489,6 +497,223 @@ test("compiler keeps isCommand, isScript, and isModule", async () => {
     assert.equal(ir.args[2].isModule, "python/");
     assert.equal("isCommand" in ir.args[3], false);
     assert.equal("isModule" in ir.args[3], false);
+  } finally {
+    await Promise.all([
+      rm(srcDir, { recursive: true, force: true }),
+      rm(outDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("compiler rewrites filepaths() helpers into native templates", async () => {
+  const srcDir = await mkdtemp(join(tmpdir(), "easy-complete-specs-fp-"));
+  const outDir = await mkdtemp(join(tmpdir(), "easy-complete-ir-fp-"));
+  try {
+    await writeFile(
+      join(srcDir, "paths.js"),
+      `function filepaths(opts = {}) {
+        const {
+          extensions = [],
+          equals = [],
+          matches,
+          showFolders = "always",
+          filterFolders = false,
+          editFileSuggestions,
+          editFolderSuggestions,
+          rootDirectory,
+        } = opts;
+        const ext = new Set(extensions);
+        // Fig builds new Set(equals) even when equals is a string, which
+        // turns "Cargo.toml" into a set of characters. Keep that bug here
+        // so IR must come from the source literal, not the live probe.
+        const eq = new Set(equals);
+        return {
+          trigger: (a, b) => a.lastIndexOf("/") !== b.lastIndexOf("/"),
+          getQueryTerm: (term) => term.slice(term.lastIndexOf("/") + 1),
+          custom: async (_tokens, exec, ctx) => {
+            const skip = [".DS_Store"];
+            const { stdout } = await exec({
+              command: "ls",
+              args: ["-1ApL"],
+              cwd: rootDirectory ?? ctx.currentWorkingDirectory,
+            });
+            const names = stdout.split("\\n").filter(Boolean).concat("../");
+            const filtered = names.filter((name) => {
+              if (skip.includes(name)) return false;
+              const isFolder = name.endsWith("/");
+              if (isFolder) {
+                if (showFolders === "never") return false;
+                if (!filterFolders) return true;
+              } else if (showFolders === "only") {
+                return false;
+              }
+              if (!extensions.length && !equals.length && !matches) return true;
+              if (eq.has(name)) return true;
+              if (matches && matches.test(name)) return true;
+              const parts = name.split(".");
+              if (parts.length < 2) return false;
+              let suffix = parts[parts.length - 1];
+              for (let i = parts.length - 1; i >= 1; i -= 1) {
+                if (ext.has(suffix)) return true;
+                if (i > 1) suffix = parts[i - 1] + "." + suffix;
+              }
+              return false;
+            });
+            return filtered.map((name) => {
+              const isFolder = name.endsWith("/");
+              const extra = (isFolder ? editFolderSuggestions : editFileSuggestions) || {};
+              return { type: isFolder ? "folder" : "file", name, ...extra };
+            });
+          },
+        };
+      }
+      function folders(opts = {}) {
+        return filepaths(Object.assign({ showFolders: "only" }, opts));
+      }
+      export default {
+        name: "paths",
+        args: [
+          { name: "dir", generators: folders() },
+          { name: "py", generators: filepaths({ extensions: ["py"], editFileSuggestions: { priority: 76 } }) },
+          { name: "java", generators: filepaths({ extensions: ["java", "class"] }) },
+          { name: "manifest", generators: filepaths({ equals: "Cargo.toml" }) },
+          { name: "env", generators: filepaths({ matches: /^\\.env.*$/ }) },
+          { name: "rare", generators: filepaths({ extensions: ["not-in-probe"] }) },
+          { name: "filtered", generators: filepaths({ extensions: ["py"], filterFolders: true }) },
+          { name: "any", generators: filepaths() },
+        ],
+      };\n`,
+    );
+    const result = await compileSpecsIr({ srcDir, outDir });
+    assert.equal(result.compiled, 1);
+    const ir = JSON.parse(await readFile(join(outDir, "paths.json"), "utf8"));
+    assert.deepEqual(ir.args[0].templates, ["folders"]);
+    assert.equal(ir.args[0].getQueryTerm, "/");
+    assert.equal("jsCustom" in ir.args[0], false);
+    assert.equal("jsCustom" in ir.args[0].generators[0], false);
+    assert.equal(ir.args[0].generators[0].getQueryTerm, "/");
+    assert.deepEqual(ir.args[1].templates, ["filepaths"]);
+    assert.deepEqual(ir.args[1].generators[0].extensions, ["py"]);
+    assert.equal(ir.args[1].generators[0].filePriority, 76);
+    assert.deepEqual(ir.args[2].templates, ["filepaths"]);
+    assert.deepEqual(ir.args[2].generators[0].extensions, ["class", "java"]);
+    assert.deepEqual(ir.args[3].templates, ["filepaths"]);
+    assert.deepEqual(ir.args[3].generators[0].equals, ["Cargo.toml"]);
+    assert.equal("extensions" in ir.args[3].generators[0], false);
+    assert.deepEqual(ir.args[4].templates, ["filepaths"]);
+    assert.equal(ir.args[4].generators[0].matches, "^\\.env.*$");
+    assert.equal("equals" in ir.args[4].generators[0], false);
+    assert.deepEqual(ir.args[5].templates, ["filepaths"]);
+    assert.deepEqual(ir.args[5].generators[0].extensions, ["not-in-probe"]);
+    assert.deepEqual(ir.args[6].templates, ["filepaths"]);
+    assert.deepEqual(ir.args[6].generators[0].extensions, ["py"]);
+    assert.equal(ir.args[6].generators[0].filterFolders, true);
+    assert.notEqual(ir.args[6].generators[0].showFolders, "never");
+    assert.deepEqual(ir.args[7].templates, ["filepaths"]);
+    assert.equal("extensions" in ir.args[7].generators[0], false);
+    const hooks = await readdir(join(outDir, "hooks")).catch(() => []);
+    assert.equal(hooks.length, 0);
+  } finally {
+    await Promise.all([
+      rm(srcDir, { recursive: true, force: true }),
+      rm(outDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("compiler does not invent file templates the spec omitted", async () => {
+  const srcDir = await mkdtemp(join(tmpdir(), "easy-complete-specs-no-tmpl-"));
+  const outDir = await mkdtemp(join(tmpdir(), "easy-complete-ir-no-tmpl-"));
+  try {
+    await writeFile(
+      join(srcDir, "cat.js"),
+      `export default { name: "cat", args: { name: "file" } };\n`,
+    );
+    await writeFile(
+      join(srcDir, "cd.js"),
+      `export default { name: "cd" };\n`,
+    );
+    const result = await compileSpecsIr({ srcDir, outDir });
+    assert.equal(result.compiled, 2);
+    const cat = JSON.parse(await readFile(join(outDir, "cat.json"), "utf8"));
+    assert.equal("templates" in cat.args[0], false);
+    const cd = JSON.parse(await readFile(join(outDir, "cd.json"), "utf8"));
+    assert.equal("args" in cd, false);
+  } finally {
+    await Promise.all([
+      rm(srcDir, { recursive: true, force: true }),
+      rm(outDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("filepaths helper parser binds literals by preceding name and keeps equals strings", () => {
+  const source = `
+    {name:"dir",generators:(0,m.folders)()}
+    {name:"manifest",generators:(0,m.filepaths)({equals:"Cargo.toml"})}
+    {name:"env",generators:(0,m.filepaths)({matches:/^\\.env.*$/i})}
+    {name:"--",args:{generators:(0,m.filepaths)({equals:["rustfmt.toml"]})}}
+  `;
+  const calls = parseFilepathsCalls(source);
+  assert.deepEqual(
+    calls.map((call) => call.precedingName),
+    ["dir", "manifest", "env", "--"],
+  );
+  assert.deepEqual(calls[0].literal, { showFolders: "only" });
+  assert.deepEqual(calls[1].literal, { equals: ["Cargo.toml"] });
+  assert.equal(calls[2].literal.matches, "^\\.env.*$");
+  assert.equal(calls[2].literal.matchesFlags, "i");
+  assert.deepEqual(calls[3].literal, { equals: ["rustfmt.toml"] });
+
+  const binder = createFilepathsBinder(source);
+  assert.deepEqual(binder.take(["ENV", "dotenv-vault"]), { matches: "^\\.env.*$", matchesFlags: "i" });
+  assert.deepEqual(binder.take(["env"]), { matches: "^\\.env.*$", matchesFlags: "i" });
+  assert.deepEqual(binder.take(["dir"]), { showFolders: "only" });
+  assert.deepEqual(binder.take(["missing", "manifest"]), { equals: ["Cargo.toml"] });
+  assert.deepEqual(binder.take(["--"]), { equals: ["rustfmt.toml"] });
+  assert.equal(binder.take(["nope"]), null);
+  assert.deepEqual(binder.take([]), { showFolders: "only" });
+});
+
+test("compiler keeps history/help templates, debounce, trigger, and arg aliases", async () => {
+  const srcDir = await mkdtemp(join(tmpdir(), "easy-complete-specs-tmpl-"));
+  const outDir = await mkdtemp(join(tmpdir(), "easy-complete-ir-tmpl-"));
+  try {
+    await writeFile(
+      join(srcDir, "fixture.js"),
+      `export default {
+        name: "fixture",
+        args: [{
+          name: "message",
+          debounce: true,
+          parserDirectives: { alias: "git" },
+          generators: [{
+            template: ["history", "help"],
+            trigger: "/",
+            filterTemplateSuggestions: (rows) => rows,
+          }, {
+            custom: async () => [{ name: "row" }],
+            trigger: { on: "threshold", length: 3 },
+          }],
+        }],
+        subcommands: [{
+          name: "load",
+          loadSpec: async () => ({ name: "loaded" }),
+        }],
+      };\n`,
+    );
+    const result = await compileSpecsIr({ srcDir, outDir });
+    assert.equal(result.compiled, 1);
+    const ir = JSON.parse(await readFile(join(outDir, "fixture.json"), "utf8"));
+    assert.equal(ir.args[0].debounceMs, 200);
+    assert.equal(ir.args[0].parserDirectives.alias, "git");
+    assert.deepEqual(ir.args[0].templates, ["history", "help"]);
+    assert.equal(ir.args[0].generators[0].trigger.on, "string");
+    assert.equal(ir.args[0].generators[0].trigger.string, "/");
+    assert.equal(typeof ir.args[0].generators[0].jsFilterTemplateSuggestions, "string");
+    assert.equal(ir.args[0].generators[1].trigger.on, "threshold");
+    assert.equal(ir.args[0].generators[1].trigger.length, 3);
+    assert.equal(typeof ir.subcommands[0].jsLoadSpec, "string");
   } finally {
     await Promise.all([
       rm(srcDir, { recursive: true, force: true }),

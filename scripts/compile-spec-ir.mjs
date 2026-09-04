@@ -10,43 +10,15 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  createFilepathsBinder,
+  functionSource,
+  isFilepathsHelper,
+  nativeFilepathsFromHelper,
+} from "./filepaths-helper.mjs";
+
 const repoDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const FOLDER_COMMANDS = new Set(["cd", "pushd", "popd", "rmdir"]);
-const FILE_COMMANDS = new Set([
-  "cat",
-  "rm",
-  "mv",
-  "cp",
-  "open",
-  "code",
-  "touch",
-  "head",
-  "tail",
-  "less",
-  "more",
-  "bat",
-  "chmod",
-  "chown",
-  "ln",
-  "source",
-]);
-const GIT_BRANCH_SUBCOMMANDS = new Set([
-  "checkout",
-  "switch",
-  "merge",
-  "rebase",
-  "branch",
-]);
-const GIT_COMMIT_SUBCOMMANDS = new Set([
-  "cherry-pick",
-  "revert",
-  "log",
-  "show",
-  "reset",
-  "diff",
-]);
-const GIT_CHANGED_FILE_SUBCOMMANDS = new Set(["restore"]);
 const GIT_ALIASES_SCRIPT = [
   "git",
   "--no-optional-locks",
@@ -54,19 +26,6 @@ const GIT_ALIASES_SCRIPT = [
   "--get-regexp",
   "^alias.",
 ];
-const NPM_ROOTS = new Set(["npm", "yarn", "pnpm", "bun"]);
-const NPM_RUN_SUBS = new Set(["run", "run-script"]);
-const NPM_DEP_SUBS = new Set([
-  "install",
-  "i",
-  "add",
-  "uninstall",
-  "remove",
-  "rm",
-  "un",
-  "r",
-  "unlink",
-]);
 
 function namesOf(value) {
   if (value == null || value === "") return [];
@@ -90,7 +49,14 @@ function templatesOf(value) {
   const list = Array.isArray(value) ? value : [value];
   const out = [];
   for (const item of list) {
-    if (item === "filepaths" || item === "folders") out.push(item);
+    if (
+      item === "filepaths" ||
+      item === "folders" ||
+      item === "history" ||
+      item === "help"
+    ) {
+      out.push(item);
+    }
   }
   return out;
 }
@@ -116,19 +82,25 @@ function generatorsOf(node) {
 // string reference and resolve it from the bundled JSON at load time, but it
 // must never serialize executable JavaScript.  Inline objects are safe because
 // they are already plain data; functions and other dynamic values are omitted.
-function loadSpecValueOf(raw, ctx) {
-  if (!raw || typeof raw !== "object") return undefined;
+async function applyLoadSpec(raw, ctx, out) {
+  if (!raw || typeof raw !== "object" || !out) return;
   if (typeof raw.loadSpec === "string" && raw.loadSpec.trim()) {
-    return raw.loadSpec.trim();
+    out.loadSpec = raw.loadSpec.trim();
+    return;
+  }
+  if (typeof raw.loadSpec === "function" && ctx?.hooks) {
+    const hookId = extractHook(ctx.hooks, "loadSpec", raw.loadSpec);
+    if (hookId) out.jsLoadSpec = hookId;
+    return;
   }
   if (
     raw.loadSpec &&
     typeof raw.loadSpec === "object" &&
     !Array.isArray(raw.loadSpec)
   ) {
-    return convertNode(raw.loadSpec, ctx);
+    const loaded = await convertNode(raw.loadSpec, ctx);
+    if (loaded) out.loadSpec = loaded;
   }
-  return undefined;
 }
 
 function scriptOf(gen) {
@@ -177,21 +149,14 @@ export function hookFileName(id) {
   return `${String(id).replace(/[^A-Za-z0-9._-]+/g, "_")}.js`;
 }
 
-function functionSource(fn) {
-  if (typeof fn !== "function") return null;
-  let src = Function.prototype.toString.call(fn);
-  if (!src || src.includes("[native code]")) return null;
-  if (
-    !src.startsWith("function") &&
-    !src.startsWith("async function") &&
-    !src.includes("=>")
-  ) {
-    src = src.replace(
-      /^(async\s+)?[A-Za-z_$][\w$]*/,
-      (_, asyncKw) => `${asyncKw || ""}function`,
-    );
-  }
-  return src;
+function passCtx(ctx, extra = {}) {
+  return {
+    rootName: extra.rootName ?? ctx.rootName,
+    nodeNames: extra.nodeNames ?? ctx.nodeNames,
+    hooks: ctx.hooks,
+    source: ctx.source,
+    binder: ctx.binder,
+  };
 }
 
 function extractHook(hooks, kind, fn) {
@@ -216,7 +181,47 @@ function cacheFieldsOf(gen) {
   if (typeof cache.ttl === "number" && Number.isFinite(cache.ttl)) {
     out.cacheTtl = Math.trunc(cache.ttl);
   }
+  if (cache.strategy === "max-age" || cache.strategy === "stale-while-revalidate") {
+    out.cacheStrategy = cache.strategy;
+  }
   return out;
+}
+
+function triggerOf(gen, ctx = {}) {
+  if (!gen || typeof gen !== "object") return undefined;
+  const trigger = gen.trigger;
+  if (trigger == null) return undefined;
+  if (typeof trigger === "string") return { on: "string", string: trigger };
+  if (typeof trigger === "function" && ctx.hooks) {
+    const hookId = extractHook(ctx.hooks, "trigger", trigger);
+    return hookId ? { on: "function", jsTrigger: hookId } : undefined;
+  }
+  if (typeof trigger !== "object") return undefined;
+  if (trigger.on === "threshold") {
+    const length =
+      typeof trigger.length === "number" && Number.isFinite(trigger.length)
+        ? Math.trunc(trigger.length)
+        : 0;
+    return { on: "threshold", length };
+  }
+  if (trigger.on === "match") {
+    const strings = Array.isArray(trigger.string)
+      ? trigger.string.filter((item) => typeof item === "string")
+      : typeof trigger.string === "string"
+        ? [trigger.string]
+        : [];
+    return { on: "match", string: strings };
+  }
+  return { on: "change" };
+}
+
+function debounceMsOf(arg) {
+  if (!arg || typeof arg !== "object") return undefined;
+  if (arg.debounce === true) return 200;
+  if (typeof arg.debounce === "number" && Number.isFinite(arg.debounce) && arg.debounce > 0) {
+    return Math.trunc(arg.debounce);
+  }
+  return undefined;
 }
 
 function scriptTimeoutOf(gen) {
@@ -241,9 +246,8 @@ function normalizeArgName(value) {
 // Map the same argv that the Fig generator used to a native Rust generator.
 // Keeping this based on argv is important: `remote` and `branch` arguments in
 // push/pull/fetch intentionally have different data sources.
-function inferBuiltinFromScript(rootName, nodeNames, argName, script) {
+function inferBuiltinFromScript(rootName, _nodeNames, _argName, script) {
   const root = String(rootName ?? "").toLowerCase();
-  const names = nodeNames.map((name) => name.toLowerCase());
   if (root !== "git" || !Array.isArray(script) || script.length === 0)
     return null;
   const argv = script.map((part) => String(part).toLowerCase());
@@ -262,59 +266,6 @@ function inferBuiltinFromScript(rootName, nodeNames, argName, script) {
   if (argv.includes("stash") && argv.includes("list")) return "git-stashes";
   if (argv.includes("branch")) return "git-branches";
   if (argv.includes("log") || argv.includes("rev-list")) return "git-commits";
-
-  // A few old specs only carry the command context.  Keep these fallbacks
-  // narrow, rather than turning every Git argument into the old git-refs
-  // catch-all.
-  const arg = String(argName ?? "").toLowerCase();
-  if (names.some((name) => GIT_CHANGED_FILE_SUBCOMMANDS.has(name)))
-    return "git-changed-files";
-  if (
-    names.some((name) => GIT_COMMIT_SUBCOMMANDS.has(name)) ||
-    arg.includes("commit")
-  ) {
-    return "git-commits";
-  }
-  if (
-    names.some((name) => GIT_BRANCH_SUBCOMMANDS.has(name)) ||
-    arg.includes("branch")
-  ) {
-    return "git-branches";
-  }
-  return null;
-}
-
-function inferBuiltin(rootName, nodeNames, argName) {
-  const root = String(rootName ?? "").toLowerCase();
-  const names = nodeNames.map((name) => name.toLowerCase());
-  if (root === "git") {
-    const arg = String(argName ?? "").toLowerCase();
-    if (names.some((name) => ["push", "pull", "fetch"].includes(name))) {
-      if (arg.includes("remote")) return "git-remotes";
-      if (arg.includes("branch")) return "git-branches";
-    }
-    if (names.some((name) => GIT_CHANGED_FILE_SUBCOMMANDS.has(name)))
-      return "git-changed-files";
-    if (
-      names.some((name) => GIT_COMMIT_SUBCOMMANDS.has(name)) ||
-      arg.includes("commit")
-    ) {
-      return "git-commits";
-    }
-    if (
-      names.some((name) => GIT_BRANCH_SUBCOMMANDS.has(name)) ||
-      arg.includes("branch")
-    ) {
-      return "git-branches";
-    }
-    if (names.includes("tag") || arg.includes("tag")) return "git-tags";
-  }
-  if (NPM_ROOTS.has(root) && names.some((name) => NPM_RUN_SUBS.has(name))) {
-    return "npm-scripts";
-  }
-  if (NPM_ROOTS.has(root) && names.some((name) => NPM_DEP_SUBS.has(name))) {
-    return "npm-deps";
-  }
   return null;
 }
 
@@ -331,7 +282,7 @@ function inferScriptBuiltin(rootName, script) {
   return null;
 }
 
-function suggestionSeedsOf(value) {
+function suggestionSeedsOf(value, ctx = {}) {
   if (value == null) return [];
   const list = Array.isArray(value) ? value : [value];
   return list
@@ -344,7 +295,7 @@ function suggestionSeedsOf(value) {
       }
       const argsHint = argsHintOf(item && typeof item === "object" ? item.args : undefined);
       if (argsHint) seed.argsHint = argsHint;
-      copySuggestionMetadata(item, seed);
+      copySuggestionMetadata(item, seed, ctx);
       return seed;
     })
     .filter(Boolean);
@@ -374,7 +325,7 @@ function filterStrategyOf(raw) {
 // Keep the metadata that affects acceptance and ordering in the static IR.
 // Runtime generators are intentionally still omitted, but a static suggestion
 // must behave like the same suggestion did in the WebView implementation.
-function copySuggestionMetadata(raw, out) {
+function copySuggestionMetadata(raw, out, ctx = {}) {
   if (!raw || typeof raw !== "object") return;
   if (raw.insertValue != null) out.insertValue = String(raw.insertValue);
   if (raw.displayName != null) out.displayName = String(raw.displayName);
@@ -388,20 +339,32 @@ function copySuggestionMetadata(raw, out) {
   if (typeof raw.originalType === "string" && raw.originalType) {
     out.originalType = raw.originalType;
   }
-  // Only a string getQueryTerm is representable in the static IR.  Fig also
-  // accepts a function here, but serializing function source would be both
-  // unsafe and impossible to execute in the native engine; functions are
-  // intentionally ignored.
   if (typeof raw.getQueryTerm === "string") out.getQueryTerm = raw.getQueryTerm;
+  else if (typeof raw.getQueryTerm === "function" && ctx.hooks) {
+    const hookId = extractHook(ctx.hooks, "getQueryTerm", raw.getQueryTerm);
+    if (hookId) out.jsGetQueryTerm = hookId;
+  }
   if (typeof raw.getQueryTerm !== "string" && raw.getQueryTerm == null) {
     for (const generator of generatorsOf(raw)) {
-      if (
-        generator &&
-        typeof generator === "object" &&
-        typeof generator.getQueryTerm === "string"
-      ) {
+      if (isFilepathsHelper(generator)) {
+        out.getQueryTerm = "/";
+        break;
+      }
+      if (!generator || typeof generator !== "object") continue;
+      if (typeof generator.getQueryTerm === "string") {
         out.getQueryTerm = generator.getQueryTerm;
         break;
+      }
+      if (typeof generator.getQueryTerm === "function" && ctx.hooks) {
+        const hookId = extractHook(
+          ctx.hooks,
+          "getQueryTerm",
+          generator.getQueryTerm,
+        );
+        if (hookId) {
+          out.jsGetQueryTerm = hookId;
+          break;
+        }
       }
     }
   }
@@ -456,7 +419,7 @@ function copyOptionStateMetadata(raw, out) {
   if (raw.isPersistent === true) out.isPersistent = true;
 }
 
-function parserDirectivesOf(raw) {
+function parserDirectivesOf(raw, ctx = {}) {
   const directives = raw?.parserDirectives;
   if (!directives || typeof directives !== "object") return undefined;
   const out = {};
@@ -472,10 +435,16 @@ function parserDirectivesOf(raw) {
     );
     out.optionArgSeparators = separators;
   }
+  if (typeof directives.alias === "string" && directives.alias) {
+    out.alias = directives.alias;
+  } else if (typeof directives.alias === "function" && ctx?.hooks) {
+    const hookId = extractHook(ctx.hooks, "alias", directives.alias);
+    if (hookId) out.jsAlias = hookId;
+  }
   return Object.keys(out).length ? out : undefined;
 }
 
-function convertArg(raw, ctx) {
+async function convertArg(raw, ctx) {
   const arg = raw && typeof raw === "object" ? raw : {};
   let templates = templatesOf(arg.template);
   let script = [];
@@ -486,86 +455,45 @@ function convertArg(raw, ctx) {
   let jsScript;
   let cacheFields = {};
   const nativeBuiltins = [];
+  const generators = [];
   const argName = normalizeArgName(arg.name);
   for (const gen of generatorsOf(arg)) {
-    if (typeof gen?.script === "function") {
-      jsScript = extractHook(ctx.hooks, "script", gen.script) ?? jsScript;
+    const converted = await convertGenerator(gen, ctx, argName);
+    if (converted) generators.push(converted);
+    const fromScript = converted?.script ?? [];
+    const builtin = converted?.builtin;
+    if (builtin) nativeBuiltins.push(builtin);
+    else if (!script.length && fromScript.length) {
+      script = fromScript;
+      if (converted.splitOn !== undefined) splitOn = converted.splitOn;
     }
-    const fromScript = scriptOf(gen);
-    if (fromScript.length) {
-      const builtin = inferBuiltinFromScript(
-        ctx.rootName,
-        ctx.nodeNames ?? [],
-        argName,
-        fromScript,
-      );
-      if (builtin) nativeBuiltins.push(builtin);
-      else if (!script.length) {
-        script = fromScript;
-        splitOn = splitOnOf(gen);
-        if (typeof gen.postProcess === "function") {
-          jsPostProcess = extractHook(ctx.hooks, "postProcess", gen.postProcess);
-        }
-      }
-      if (builtin || script === fromScript) {
-        const generatorTimeout = scriptTimeoutOf(gen);
-        if (generatorTimeout !== undefined) {
-          scriptTimeout =
-            scriptTimeout === undefined
-              ? generatorTimeout
-              : Math.max(scriptTimeout, generatorTimeout);
-        }
-      }
-    } else if (
-      !fromScript.length &&
-      typeof gen?.postProcess === "function" &&
-      !jsPostProcess
-    ) {
-      jsPostProcess = extractHook(ctx.hooks, "postProcess", gen.postProcess);
+    if (converted?.jsPostProcess && !jsPostProcess) {
+      jsPostProcess = converted.jsPostProcess;
     }
-    if (typeof gen?.custom === "function") {
-      jsCustom = extractHook(ctx.hooks, "custom", gen.custom) ?? jsCustom;
+    if (converted?.jsCustom && !jsCustom) jsCustom = converted.jsCustom;
+    if (converted?.jsScript && !jsScript) jsScript = converted.jsScript;
+    if (converted?.scriptTimeout !== undefined) {
+      scriptTimeout =
+        scriptTimeout === undefined
+          ? converted.scriptTimeout
+          : Math.max(scriptTimeout, converted.scriptTimeout);
     }
     const nextCache = cacheFieldsOf(gen);
     if (Object.keys(nextCache).length) cacheFields = { ...cacheFields, ...nextCache };
-    if (gen && typeof gen === "object") {
-      templates = [...new Set([...templates, ...templatesOf(gen.template)])];
+    if (converted?.templates?.length) {
+      templates = [...new Set([...templates, ...converted.templates])];
     }
   }
 
-  const root = String(ctx.rootName ?? "").toLowerCase();
-  const nodeNames = ctx.nodeNames ?? [];
-  if (templates.length === 0) {
-    if (
-      FOLDER_COMMANDS.has(root) ||
-      nodeNames.some((name) => FOLDER_COMMANDS.has(name.toLowerCase()))
-    ) {
-      templates = ["folders"];
-    } else if (FILE_COMMANDS.has(root)) {
-      templates = ["filepaths"];
-    }
-  }
-
-  // Known builtins replace Fig custom/postProcess functions; keep argv scripts
-  // only when we have no better native generator.
-  const fallbackBuiltin = nativeBuiltins.length
-    ? null
-    : templates.length === 0
-      ? inferBuiltin(ctx.rootName, nodeNames, argName)
-      : null;
-  const scriptBuiltin = fallbackBuiltin
-    ? null
-    : inferScriptBuiltin(ctx.rootName, script);
-  if (fallbackBuiltin) nativeBuiltins.push(fallbackBuiltin);
+  const scriptBuiltin = inferScriptBuiltin(ctx.rootName, script);
   if (scriptBuiltin) nativeBuiltins.push(scriptBuiltin);
   const uniqueBuiltins = [...new Set(nativeBuiltins)];
-  if (uniqueBuiltins.length) {
+  // A recognized git/npm argv is replaced by the native builtin that
+  // implements the same script. postProcess/custom stay: they are not the
+  // script. Unrecognized scripts are left as argv + hooks, matching Fig.
+  if (scriptBuiltin) {
     script = [];
     splitOn = undefined;
-    jsPostProcess = undefined;
-    jsScript = undefined;
-    jsCustom = undefined;
-    cacheFields = {};
   }
 
   const out = {};
@@ -574,7 +502,7 @@ function convertArg(raw, ctx) {
     if (name) out.name = String(name);
   }
   if (arg.description) out.description = String(arg.description);
-  copySuggestionMetadata(arg, out);
+  copySuggestionMetadata(arg, out, ctx);
   // Preserve an explicit false separately from an omitted value. The native
   // lookup uses this as an argument-level override of the global setting.
   if (typeof arg.suggestCurrentToken === "boolean") {
@@ -585,8 +513,11 @@ function convertArg(raw, ctx) {
   }
   const filterStrategy = filterStrategyOf(arg);
   if (filterStrategy) out.filterStrategy = filterStrategy;
-  const loadSpec = loadSpecValueOf(arg, ctx);
-  if (loadSpec !== undefined) out.loadSpec = loadSpec;
+  await applyLoadSpec(arg, ctx, out);
+  const argDirectives = parserDirectivesOf(arg, ctx);
+  if (argDirectives) out.parserDirectives = argDirectives;
+  const debounceMs = debounceMsOf(arg);
+  if (debounceMs !== undefined) out.debounceMs = debounceMs;
   if (templates.length) out.templates = templates;
   if (script.length) out.script = script;
   if (splitOn !== undefined) out.splitOn = splitOn;
@@ -599,9 +530,11 @@ function convertArg(raw, ctx) {
     out.cacheByDirectory = cacheFields.cacheByDirectory;
   }
   if (cacheFields.cacheTtl !== undefined) out.cacheTtl = cacheFields.cacheTtl;
+  if (cacheFields.cacheStrategy) out.cacheStrategy = cacheFields.cacheStrategy;
   if (uniqueBuiltins.length === 1) out.builtin = uniqueBuiltins[0];
   else if (uniqueBuiltins.length > 1) out.builtins = uniqueBuiltins;
-  const suggestions = suggestionSeedsOf(arg.suggestions);
+  if (generators.length) out.generators = generators;
+  const suggestions = suggestionSeedsOf(arg.suggestions, ctx);
   if (arg.isOptional) out.isOptional = true;
   if (arg.isVariadic) out.isVariadic = true;
   if (arg.isCommand) out.isCommand = true;
@@ -610,19 +543,77 @@ function convertArg(raw, ctx) {
     out.isModule = arg.isModule;
   }
   if (suggestions.length) out.suggestions = suggestions;
+  if (!out.getQueryTerm) {
+    const queryTerm = generators.find((generator) => generator.getQueryTerm)?.getQueryTerm;
+    if (queryTerm) out.getQueryTerm = queryTerm;
+  }
   return out;
 }
 
-function convertOption(raw, ctx = {}) {
+async function convertGenerator(gen, ctx, argName) {
+  if (!gen || (typeof gen !== "object" && typeof gen !== "function")) return null;
+  if (isFilepathsHelper(gen)) {
+    const hints = [argName, ...(ctx.nodeNames ?? [])];
+    const literal = ctx.binder?.take(hints) ?? null;
+    return nativeFilepathsFromHelper(gen, literal);
+  }
+  if (typeof gen === "function") return null;
+  const out = {};
+  const templates = templatesOf(gen.template);
+  if (templates.length) out.templates = templates;
+  const fromScript = scriptOf(gen);
+  const builtin = inferBuiltinFromScript(
+    ctx.rootName,
+    ctx.nodeNames ?? [],
+    argName,
+    fromScript,
+  );
+  if (builtin) out.builtin = builtin;
+  else if (fromScript.length) out.script = fromScript;
+  const splitOn = splitOnOf(gen);
+  if (splitOn !== undefined && !builtin) out.splitOn = splitOn;
+  const scriptTimeout = scriptTimeoutOf(gen);
+  if (scriptTimeout !== undefined) out.scriptTimeout = scriptTimeout;
+  if (typeof gen.script === "function" && ctx.hooks) {
+    const hookId = extractHook(ctx.hooks, "script", gen.script);
+    if (hookId) out.jsScript = hookId;
+  }
+  if (typeof gen.postProcess === "function" && ctx.hooks) {
+    const hookId = extractHook(ctx.hooks, "postProcess", gen.postProcess);
+    if (hookId) out.jsPostProcess = hookId;
+  }
+  if (typeof gen.custom === "function" && ctx.hooks) {
+    const hookId = extractHook(ctx.hooks, "custom", gen.custom);
+    if (hookId) out.jsCustom = hookId;
+  }
+  if (typeof gen.filterTemplateSuggestions === "function" && ctx.hooks) {
+    const hookId = extractHook(
+      ctx.hooks,
+      "filterTemplateSuggestions",
+      gen.filterTemplateSuggestions,
+    );
+    if (hookId) out.jsFilterTemplateSuggestions = hookId;
+  }
+  if (typeof gen.getQueryTerm === "string") out.getQueryTerm = gen.getQueryTerm;
+  else if (typeof gen.getQueryTerm === "function" && ctx.hooks) {
+    const hookId = extractHook(ctx.hooks, "getQueryTerm", gen.getQueryTerm);
+    if (hookId) out.jsGetQueryTerm = hookId;
+  }
+  Object.assign(out, cacheFieldsOf(gen));
+  const trigger = triggerOf(gen, ctx);
+  if (trigger) out.trigger = trigger;
+  return Object.keys(out).length ? out : null;
+}
+
+async function convertOption(raw, ctx = {}) {
   if (!raw || typeof raw !== "object") return null;
   const names = namesOf(raw.name);
   if (!names.length) return null;
   const out = { names };
   if (raw.description) out.description = String(raw.description);
-  copySuggestionMetadata(raw, out);
+  copySuggestionMetadata(raw, out, ctx);
   copyOptionStateMetadata(raw, out);
-  const loadSpec = loadSpecValueOf(raw, ctx);
-  if (loadSpec !== undefined) out.loadSpec = loadSpec;
+  await applyLoadSpec(raw, ctx, out);
   const separator = separatorToAdd(raw);
   if (separator !== undefined && out.separatorToAdd === undefined) {
     out.separatorToAdd = separator;
@@ -632,36 +623,42 @@ function convertOption(raw, ctx = {}) {
     : raw.args
       ? [raw.args]
       : [];
-  const args = argsRaw
-    .map((arg) =>
-      convertArg(arg, {
+  const args = [];
+  for (const arg of argsRaw) {
+    const converted = await convertArg(
+      arg,
+      passCtx(ctx, {
         rootName: ctx.rootName ?? "",
-        nodeNames: ctx.nodeNames ?? names,
+        nodeNames: names,
       }),
-    )
-    .filter((arg) => Object.keys(arg).length > 0);
+    );
+    if (Object.keys(converted).length > 0) args.push(converted);
+  }
   if (args.length) out.args = args;
   return out;
 }
 
-function convertNode(raw, ctx) {
+async function convertNode(raw, ctx) {
   if (!raw || typeof raw !== "object") return null;
   const names = namesOf(raw.name);
   if (!names.length) return null;
   const rootName = ctx.rootName ?? names[0];
-  const childCtx = { rootName, nodeNames: names, hooks: ctx.hooks };
+  const childCtx = passCtx(ctx, { rootName, nodeNames: names });
   const out = { names };
   if (raw.description) out.description = String(raw.description);
-  copySuggestionMetadata(raw, out);
+  copySuggestionMetadata(raw, out, ctx);
   if (typeof raw.requiresSubcommand === "boolean") {
     out.requiresSubcommand = raw.requiresSubcommand;
   }
   const filterStrategy = filterStrategyOf(raw);
   if (filterStrategy) out.filterStrategy = filterStrategy;
-  const parserDirectives = parserDirectivesOf(raw);
+  const parserDirectives = parserDirectivesOf(raw, ctx);
   if (parserDirectives) out.parserDirectives = parserDirectives;
 
-  const additionalSuggestions = suggestionSeedsOf(raw.additionalSuggestions);
+  const additionalSuggestions = suggestionSeedsOf(
+    raw.additionalSuggestions,
+    ctx,
+  );
   if (additionalSuggestions.length)
     out.additionalSuggestions = additionalSuggestions;
 
@@ -673,14 +670,18 @@ function convertNode(raw, ctx) {
     }
   }
 
-  const subcommands = asArray(raw.subcommands)
-    .map((item) => convertNode(item, { rootName, hooks: ctx.hooks }))
-    .filter(Boolean);
+  const subcommands = [];
+  for (const item of asArray(raw.subcommands)) {
+    const converted = await convertNode(item, passCtx(ctx, { rootName }));
+    if (converted) subcommands.push(converted);
+  }
   if (subcommands.length) out.subcommands = subcommands;
 
-  const options = asArray(raw.options)
-    .map((option) => convertOption(option, childCtx))
-    .filter(Boolean);
+  const options = [];
+  for (const option of asArray(raw.options)) {
+    const converted = await convertOption(option, childCtx);
+    if (converted) options.push(converted);
+  }
   const persistentOptions = options.filter((option) => option.isPersistent === true);
   const regularOptions = options.filter((option) => option.isPersistent !== true);
   if (regularOptions.length) out.options = regularOptions;
@@ -691,22 +692,30 @@ function convertNode(raw, ctx) {
     : raw.args
       ? [raw.args]
       : [];
-  let args = argsRaw
-    .map((arg) => convertArg(arg, childCtx))
-    .filter((arg) => Object.keys(arg).length > 0);
-
-  if (
-    args.length === 0 &&
-    (FOLDER_COMMANDS.has(String(rootName).toLowerCase()) ||
-      names.some((name) => FOLDER_COMMANDS.has(name.toLowerCase())))
-  ) {
-    args = [{ templates: ["folders"] }];
+  let args = [];
+  for (const arg of argsRaw) {
+    const converted = await convertArg(arg, childCtx);
+    if (Object.keys(converted).length > 0) args.push(converted);
   }
 
   // Spec-level generators (not under args) attach to the first argument so
   // the native runner can execute them the same way as arg-level generators.
   if (args.every((arg) => !arg.script && !arg.jsCustom && !arg.jsScript)) {
     for (const gen of generatorsOf(raw)) {
+      if (isFilepathsHelper(gen)) {
+        const converted = await convertGenerator(gen, ctx, "");
+        if (converted) {
+          if (args.length === 0) args = [{}];
+          args[0].templates = [
+            ...new Set([...(args[0].templates ?? []), ...(converted.templates ?? [])]),
+          ];
+          args[0].generators = [...(args[0].generators ?? []), converted];
+          if (converted.getQueryTerm && !args[0].getQueryTerm) {
+            args[0].getQueryTerm = converted.getQueryTerm;
+          }
+        }
+        break;
+      }
       const script = scriptOf(gen);
       const jsScript =
         typeof gen?.script === "function"
@@ -752,11 +761,10 @@ function convertNode(raw, ctx) {
     typeof raw.loadSpec === "object" &&
     !Array.isArray(raw.loadSpec)
   ) {
-    const loaded = convertNode(raw.loadSpec, { rootName, hooks: ctx.hooks });
+    const loaded = await convertNode(raw.loadSpec, passCtx(ctx, { rootName }));
     if (loaded) return replaceNodeWithLoaded(out, loaded);
   } else {
-    const loadSpec = loadSpecValueOf(raw, { rootName });
-    if (typeof loadSpec === "string") out.loadSpec = loadSpec;
+    await applyLoadSpec(raw, passCtx(ctx, { rootName }), out);
   }
   return out;
 }
@@ -852,8 +860,10 @@ export async function compileSpecsIr({
     try {
       const specId = rel.replace(/\.js$/, "").replaceAll("\\", "/");
       const hooks = createHookBag(specId);
+      const source = await readFile(src, "utf8");
+      const binder = createFilepathsBinder(source);
       const mod = await import(pathToFileURL(src).href);
-      const spec = convertNode(mod.default ?? mod, { hooks });
+      const spec = await convertNode(mod.default ?? mod, { hooks, source, binder });
       if (!spec) {
         failed += 1;
         continue;
