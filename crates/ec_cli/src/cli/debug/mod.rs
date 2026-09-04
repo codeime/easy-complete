@@ -1,4 +1,8 @@
+mod drive_overlay;
 mod fix_permissions;
+
+#[cfg(test)]
+pub(crate) use drive_overlay::{DriveOverlayArgs, OverlayDriveScenario};
 
 use std::fmt::Write as _;
 use std::io::{Read, Write as _};
@@ -166,6 +170,8 @@ pub enum DebugSubcommand {
     Shell,
     /// Update the shell config permissions to have the correct owner and access rights
     FixPermissions,
+    /// Inject edit-buffer hooks so the running overlay appears
+    DriveOverlay(drive_overlay::DriveOverlayArgs),
 }
 
 impl DebugSubcommand {
@@ -741,6 +747,9 @@ impl DebugSubcommand {
             },
             DebugSubcommand::FixPermissions => {
                 fix_permissions::fix_permissions(&env)?;
+            },
+            DebugSubcommand::DriveOverlay(args) => {
+                return drive_overlay::execute(args).await;
             },
         }
         Ok(ExitCode::SUCCESS)

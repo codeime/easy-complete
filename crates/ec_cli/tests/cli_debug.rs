@@ -9,6 +9,15 @@ fn debug_root() -> Result<()> {
 }
 
 #[test]
+fn debug_drive_overlay_help() -> Result<()> {
+    cli()
+        .args(["debug", "drive-overlay", "--help"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
 #[cfg(target_os = "macos")]
 fn debug_verify_codesign() -> Result<()> {
     cli()

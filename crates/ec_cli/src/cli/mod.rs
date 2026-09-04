@@ -407,6 +407,24 @@ mod test {
     }
 
     #[test]
+    fn test_debug_drive_overlay() {
+        use debug::{DriveOverlayArgs, OverlayDriveScenario};
+        assert_parse!(
+            ["debug", "drive-overlay", "--buffer", "python ", "--scenario", "backspace"],
+            CliRootCommands::Debug(debug::DebugSubcommand::DriveOverlay(DriveOverlayArgs {
+                buffer: Some("python ".into()),
+                scenario: OverlayDriveScenario::Backspace,
+                cwd: None,
+                delay_ms: 80,
+                hold_ms: 2000,
+                cycles: 1,
+                x: 120.0,
+                y: 700.0,
+            }))
+        );
+    }
+
+    #[test]
     fn help_banner_includes_version_and_project_url() {
         let help = Cli::command().render_help().to_string();
         assert!(help.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
