@@ -1,12 +1,17 @@
 # Release Signing and Sparkle Updates
 
-GitHub tag releases build a Developer ID signed, notarized ARM64 DMG, attach a
-Sparkle appcast, and upload Sparkle delta updates when previous release assets
-are available.
+Pushing a `v*` tag always publishes an ARM64 DMG to the GitHub Release. Developer
+ID signing, notarization, and Sparkle are optional: each is used only when its
+secrets are present. A first release with no previous assets publishes a
+full-update-only appcast (no `.delta` files).
 
-## Required GitHub Secrets
+Without Developer ID secrets the workflow keeps the ad-hoc signature from
+`scripts/build-app.sh` and the Release notes tell users to clear Gatekeeper
+quarantine with `xattr -dr com.apple.quarantine`.
 
-Code signing:
+## Optional GitHub Secrets
+
+Code signing (all three required to sign):
 
 - `APPLE_CERTIFICATE_P12_BASE64`: base64-encoded Developer ID Application `.p12`
 - `APPLE_CERTIFICATE_PASSWORD`: password for the `.p12`

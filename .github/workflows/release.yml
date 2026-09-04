@@ -30,6 +30,65 @@ jobs:
           test "$(uname -m)" = "arm64"
           sw_vers
 
+      - name: Detect release capabilities
+        if: startsWith(github.ref, 'refs/tags/')
+        id: caps
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+
+          signing_missing=()
+          [ -z "$APPLE_CERTIFICATE_P12_BASE64" ] && signing_missing+=("APPLE_CERTIFICATE_P12_BASE64")
+          [ -z "$APPLE_CERTIFICATE_PASSWORD" ] && signing_missing+=("APPLE_CERTIFICATE_PASSWORD")
+          [ -z "$APPLE_SIGNING_IDENTITY" ] && signing_missing+=("APPLE_SIGNING_IDENTITY")
+          if [ "${#signing_missing[@]}" -eq 0 ]; then
+            echo "signing=true" >> "$GITHUB_OUTPUT"
+            echo "Developer ID signing secrets are present."
+          else
+            echo "signing=false" >> "$GITHUB_OUTPUT"
+            echo "No Developer ID secrets; publishing an ad-hoc signed DMG. Missing: ${signing_missing[*]}"
+          fi
+
+          has_notary_api=0
+          if { [ -n "$APPLE_NOTARY_KEY_BASE64" ] || [ -n "$APPLE_NOTARY_KEY" ]; } \
+            && [ -n "$APPLE_NOTARY_KEY_ID" ] && [ -n "$APPLE_NOTARY_ISSUER_ID" ]; then
+            has_notary_api=1
+          fi
+          has_notary_apple_id=0
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            has_notary_apple_id=1
+          fi
+          if [ "${#signing_missing[@]}" -eq 0 ] && { [ "$has_notary_api" -eq 1 ] || [ "$has_notary_apple_id" -eq 1 ]; }; then
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+            echo "Notarization secrets are present."
+          else
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+            if [ "${#signing_missing[@]}" -eq 0 ]; then
+              echo "Developer ID is present, but notarization secrets are not; skipping notarization."
+            else
+              echo "Skipping notarization because Developer ID signing is unavailable."
+            fi
+          fi
+
+          if [ -n "$SPARKLE_PRIVATE_ED_KEY" ]; then
+            echo "sparkle=true" >> "$GITHUB_OUTPUT"
+            echo "Sparkle private key is present."
+          else
+            echo "sparkle=false" >> "$GITHUB_OUTPUT"
+            echo "No SPARKLE_PRIVATE_ED_KEY; skipping appcast and delta generation."
+          fi
+
       - name: Cache Homebrew packages
         uses: actions/cache@v6
         with:
@@ -72,7 +131,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Import Developer ID certificate
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.caps.outputs.signing == 'true'
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -104,7 +163,7 @@ jobs:
         run: ./scripts/build-app.sh
 
       - name: Sign app bundle
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.caps.outputs.signing == 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: ./scripts/sign-macos-app.sh
@@ -124,7 +183,7 @@ jobs:
           test ! -e "$MOUNT_DIR/Licenses"
 
       - name: Notarize DMG
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.caps.outputs.notarize == 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
@@ -136,8 +195,15 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ./scripts/notarize-dmg.sh dist/Easy-Complete-arm64.dmg
 
-      - name: Prepare Sparkle archives
+      - name: Copy versioned DMG
         if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          APP_VERSION="${GITHUB_REF_NAME#v}"
+          cp dist/Easy-Complete-arm64.dmg "dist/Easy-Complete-${APP_VERSION}-arm64.dmg"
+
+      - name: Prepare Sparkle archives
+        if: startsWith(github.ref, 'refs/tags/') && steps.caps.outputs.sparkle == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           CURRENT_TAG: ${{ github.ref_name }}
@@ -153,7 +219,6 @@ jobs:
           rm -rf "$APPCAST_DIR"
           mkdir -p "$APPCAST_DIR"
 
-          cp dist/Easy-Complete-arm64.dmg "$VERSIONED_DMG"
           cp "$VERSIONED_DMG" "$APPCAST_DIR/$VERSIONED_NAME"
 
           RELEASES_JSON="$RUNNER_TEMP/releases.json"
@@ -215,6 +280,8 @@ jobs:
           if [ -z "$NOTES" ]; then
             NOTES="See the [GitHub release](https://github.com/${{ github.repository }}/releases/tag/${VERSION}) for details."
           fi
+          mkdir -p dist
+          printf '%s\n' "$NOTES" > dist/changelog-notes.md
           echo "SPARKLE_RELEASE_NOTES<<EOF" >> "$GITHUB_ENV"
           echo "$NOTES" >> "$GITHUB_ENV"
           echo "EOF" >> "$GITHUB_ENV"
@@ -223,7 +290,7 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Generate Sparkle appcast
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.caps.outputs.sparkle == 'true'
         env:
           SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
           SPARKLE_DOWNLOAD_URL_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/
@@ -235,11 +302,19 @@ jobs:
 
       - name: Verify release assets
         if: startsWith(github.ref, 'refs/tags/')
+        env:
+          SPARKLE_ENABLED: ${{ steps.caps.outputs.sparkle }}
         run: |
           set -euo pipefail
           APP_VERSION="${GITHUB_REF_NAME#v}"
           test -f dist/Easy-Complete-arm64.dmg
           test -f "dist/Easy-Complete-${APP_VERSION}-arm64.dmg"
+
+          if [ "$SPARKLE_ENABLED" != "true" ]; then
+            echo "Sparkle secrets are absent; skipping appcast verification."
+            exit 0
+          fi
+
           test -f dist/sparkle/appcast.xml
           test "$(grep -c '<item>' dist/sparkle/appcast.xml)" -eq 1
           grep -Fq "<sparkle:version>${APP_VERSION}</sparkle:version>" dist/sparkle/appcast.xml
@@ -255,13 +330,18 @@ jobs:
           }
           available = {path.name for path in appcast_dir.glob("*.delta")}
           if not referenced:
-              raise SystemExit("appcast contains no delta enclosures")
-          missing = sorted(referenced - available)
-          if missing:
-              raise SystemExit(f"appcast references missing delta files: {', '.join(missing)}")
-          unexpected = sorted(available - referenced)
-          if unexpected:
-              raise SystemExit(f"delta files are not referenced by appcast: {', '.join(unexpected)}")
+              if available:
+                  raise SystemExit(
+                      f"delta files are not referenced by appcast: {', '.join(sorted(available))}"
+                  )
+              print("No delta enclosures; allowing a full-update-only appcast.")
+          else:
+              missing = sorted(referenced - available)
+              if missing:
+                  raise SystemExit(f"appcast references missing delta files: {', '.join(missing)}")
+              unexpected = sorted(available - referenced)
+              if unexpected:
+                  raise SystemExit(f"delta files are not referenced by appcast: {', '.join(unexpected)}")
           PY
           find dist/sparkle -maxdepth 1 -name '*.delta' -print
 
@@ -276,43 +356,89 @@ jobs:
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Compose GitHub Release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          SIGNING: ${{ steps.caps.outputs.signing }}
+          NOTARIZE: ${{ steps.caps.outputs.notarize }}
+          SPARKLE: ${{ steps.caps.outputs.sparkle }}
+        run: |
+          set -euo pipefail
+          {
+            cat dist/changelog-notes.md
+            printf '\n---\n\n### Install\n\n'
+            printf '%s\n' "1. Download \`Easy-Complete-arm64.dmg\`, open it, and drag **Easy Complete** to Applications."
+            if [ "$SIGNING" = "true" ]; then
+              cat <<'EOF'
+          2. Launch **Easy Complete**. On first launch, the app registers the bundled input
+             method and asks for **Accessibility** permission. Autocomplete will not appear
+             until Accessibility is granted in System Settings -> Privacy & Security ->
+             Accessibility.
+          3. Reload your shell: `exec $SHELL`
+          EOF
+            else
+              cat <<'EOF'
+          2. This build is ad-hoc signed, so macOS Gatekeeper will quarantine it. After
+             copying to Applications, clear the quarantine flag once:
+
+             ```bash
+             xattr -dr com.apple.quarantine "/Applications/Easy Complete.app"
+             ```
+
+          3. Launch **Easy Complete**. On first launch, the app registers the bundled input
+             method and asks for **Accessibility** permission. Autocomplete will not appear
+             until Accessibility is granted in System Settings -> Privacy & Security ->
+             Accessibility.
+          4. Reload your shell: `exec $SHELL`
+          EOF
+            fi
+            printf '\n'
+            if [ "$SIGNING" = "true" ] && [ "$NOTARIZE" = "true" ]; then
+              printf '%s' "This DMG is Developer ID signed and notarized."
+            elif [ "$SIGNING" = "true" ]; then
+              printf '%s' "This DMG is Developer ID signed, but notarization secrets were not configured."
+            else
+              printf '%s' "This DMG is ad-hoc signed and is not notarized. Gatekeeper will block it until the quarantine flag is cleared."
+            fi
+            if [ "$SPARKLE" = "true" ]; then
+              printf '%s\n' " A Sparkle appcast is attached for future updates."
+            else
+              printf '\n'
+            fi
+          } > dist/release-notes.md
+
+      - name: Stage release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          APP_VERSION="${GITHUB_REF_NAME#v}"
+          rm -rf dist/upload
+          mkdir -p dist/upload
+          cp dist/Easy-Complete-arm64.dmg dist/upload/
+          cp "dist/Easy-Complete-${APP_VERSION}-arm64.dmg" dist/upload/
+          if [ -f dist/sparkle/appcast.xml ]; then
+            cp dist/sparkle/appcast.xml dist/upload/
+          fi
+          if compgen -G "dist/sparkle/*.delta" > /dev/null; then
+            cp dist/sparkle/*.delta dist/upload/
+          fi
+
       - name: Upload build artifact
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v7
         with:
           name: Easy-Complete-arm64
-          path: |
-            dist/Easy-Complete-arm64.dmg
-            dist/Easy-Complete-*-arm64.dmg
-            dist/sparkle/appcast.xml
-            dist/sparkle/*.delta
+          path: dist/upload/*
+          if-no-files-found: error
 
       - name: Attach DMG to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          files: |
-            dist/Easy-Complete-arm64.dmg
-            dist/Easy-Complete-*-arm64.dmg
-            dist/sparkle/appcast.xml
-            dist/sparkle/*.delta
-          fail_on_unmatched_files: false
+          files: dist/upload/*
+          fail_on_unmatched_files: true
           prerelease: ${{ steps.release_channel.outputs.is_prerelease == 'true' }}
-          body: |
-            ${{ steps.changelog.outputs.notes }}
-
-            ---
-
-            ### Install
-
-            1. Download `Easy-Complete-arm64.dmg`, open it, and drag **Easy Complete** to Applications.
-            2. Launch **Easy Complete**. On first launch, the app registers the bundled input
-               method and asks for **Accessibility** permission. Autocomplete will not appear
-               until Accessibility is granted in System Settings -> Privacy & Security ->
-               Accessibility.
-            3. Reload your shell: `exec $SHELL`
-
-            This DMG is Developer ID signed, notarized, and published with a Sparkle appcast for future updates.
+          body_path: dist/release-notes.md
 
       - name: Send Telegram notification
         if: always() && env.TELEGRAM_BOT_TOKEN != ''

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v2.3.0
+
+- ci: 没有 Developer ID 或 Sparkle secrets 时仍然把 ad-hoc ARM64 DMG 发到 GitHub Releases，并且首次发版不再要求 Sparkle delta
 - 修复：`scripts/install.sh` 不再在桌面二进制每次变化时清掉辅助功能授权。脚本原本假定新的 ad-hoc 签名一定会让授权失效，于是一上来就 `tccutil reset`；但 macOS 26 会自己把 TCC 记录重新钉到新的 cdhash 上（两次原地替换二进制、没做任何 reset 之后，`TCC.db` 里存的就是新哈希，auth_reason 为 "System Set"，应用启动即处于已信任状态），这个 reset 只是把一份本来还有效的授权删掉，让用户每装一次都得去系统设置重新勾选。脚本现在先启动新应用再向它询问（`ec debug accessibility status`，走本地 socket 拿桌面进程自己的 `AXIsProcessTrusted()`）；只有连续几次都回答 `false`——即仍保留旧 requirement 的老系统会给出的答案——才 reset 并重新弹窗；应用联系不上时只给出提示，不做 reset
 - 修复：桌面进程不再每读一次辅助功能属性就泄漏一个 AX 对象。`UIElement::get_attr_ref` 把 `AXUIElementCopyAttributeValue` 的返回值——`Copy` 规则，调用方已持有 +1——用 *get* 规则包装，于是每个值被 retain 两次、release 一次。读 `kAXChildren` 会连同数组把所有子元素一起钉住，而 xterm 光标遍历（VS Code、Cursor、Windsurf 等）每次找不到光标都要按元素逐个读取：一个 Cursor 会话敲几分钟后持有 21.1 万个 `AXUIElement`、72 MB 堆、131 MB 占用，每键约增长 10 KB。同一规则现在也应用到光标查询里的 `AXValueCreate` 与 `AXBoundsForRange` 结果、激活与元素销毁时创建的 `AXUIElementCreateApplication` 元素，以及从未被释放的 `AXObserver`（每切一次 app 泄漏一个 observer 和一个 mach port）。同一套 800 键回退压测：修复前每键 +57 个元素，修复后 0，占用稳定在约 50 MB。由 `macos-utils` 的 retain 计数测试与源码钉测试保证
 - 修复：桌面进程不再在使用几小时后活锁在 100% CPU、浮层冻在 `···` 上。`NSApplication::run` 原本嵌在一次永不返回的 `tokio::Runtime::block_on` poll 里，而 `block_on` 会给这次 poll 固定一份 tokio 协作预算（128 单位）。每个在主线程上完成的补全回复消耗 1 单位；从第 129 次起，`tokio::sync::oneshot::Receiver::poll` 直接返回 Pending 并立刻自唤醒，GPUI 的 executor 又把任务重新排进正在 drain 的主队列。现在引擎回复通道改为 `futures::channel::oneshot`（无预算记账，由一个在单次 `block_on` poll 内连跑 200 次回复的测试钉住），`main` 在 `block_on` 返回后再启动 GPUI，只保留 `Runtime::enter()` 让 AppKit 回调里的 `Handle::current()` 继续可用
