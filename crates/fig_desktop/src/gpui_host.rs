@@ -150,6 +150,9 @@ impl DesktopHost {
             } => {
                 self.overlay.apply_completion(generation, result, session_id, &cwd, cx);
             },
+            Event::GpuiOverlayDebouncedComplete { generation, waited_ms } => {
+                self.overlay.apply_debounced_complete(generation, waited_ms, cx);
+            },
             Event::GpuiOverlayRelayoutRetry {
                 generation,
                 token,
@@ -183,6 +186,7 @@ impl DesktopHost {
                     }
                 },
                 WindowEvent::Show => self.overlay.show(cx),
+                WindowEvent::Event { event_name, .. } if event_name == "clear-cache" => self.overlay.clear_caches(),
                 other => trace!(?other, "Ignoring settings-only event on GPUI overlay"),
             },
             other => trace!(%other, ?window_event, "Ignoring event for unknown window"),

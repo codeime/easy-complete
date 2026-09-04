@@ -60,6 +60,14 @@ pub enum Event {
         session_id: uuid::Uuid,
         cwd: String,
     },
+    /// Generators were delayed by Fig `debounce`. Re-run the same buffer once
+    /// the delay elapses, unless a newer generation has already replaced it.
+    GpuiOverlayDebouncedComplete {
+        generation: u64,
+        /// The debounce that just elapsed, already spent from the `···`
+        /// threshold.
+        waited_ms: u64,
+    },
     /// A visible overlay failed to reach its native window. Retry on a later
     /// event-loop turn without waiting for another terminal input event.
     GpuiOverlayRelayoutRetry {

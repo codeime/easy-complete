@@ -8,7 +8,9 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use ec_engine::{CompleteRequest, CompleteResult, EngineClient, ranking_root_command, ui_completion_deadline};
+use ec_engine::{
+    CompleteRequest, CompleteResult, EngineClient, ranking_root_command, tokenize, ui_completion_deadline,
+};
 use ec_gpui::{
     ClickInsert, DEFAULT_FONT_SIZE, DEFAULT_MAX_LIST_HEIGHT, DEFAULT_WIDTH, OverlayHandle, OverlayState, OverlayTheme,
     SuggestionItem, TabPrefix, open_overlay_window, overlay_content_size_with_context, park_overlay_handle,
@@ -44,6 +46,35 @@ struct LastInput {
     cwd: String,
     cursor: u32,
     session_id: Uuid,
+}
+
+/// How long a request may run before `···` replaces the list. Fig's
+/// `App.tsx` started this timer as soon as any generator was `loading`.
+const LOADING_THRESHOLD: Duration = Duration::from_millis(200);
+
+#[derive(Debug, Clone, Copy)]
+struct RequestOptions {
+    /// Bypass the duplicate-input guard: settings changes and debounce
+    /// follow-ups re-run a buffer whose text did not change.
+    force: bool,
+    /// Time left before the `···` marker for this request.
+    loading_threshold: Duration,
+}
+
+impl RequestOptions {
+    fn keystroke() -> Self {
+        Self {
+            force: false,
+            loading_threshold: LOADING_THRESHOLD,
+        }
+    }
+
+    fn forced() -> Self {
+        Self {
+            force: true,
+            loading_threshold: LOADING_THRESHOLD,
+        }
+    }
 }
 
 pub struct OverlayController {
@@ -240,6 +271,15 @@ impl OverlayController {
         });
     }
 
+    /// `ec hook clear-autocomplete-cache`. The WebView answered its
+    /// `clear-cache` event by dropping every loaded spec and generator result;
+    /// the engine worker owns those now.
+    pub fn clear_caches(&self) {
+        if let Err(err) = self.engine.clear_caches() {
+            warn!(%err, "failed to clear the completion engine caches");
+        }
+    }
+
     pub fn set_enabled(&mut self, enabled: bool, cx: &mut App) {
         self.enabled = enabled && gpui_overlay_enabled();
         if !self.enabled {
@@ -421,10 +461,10 @@ impl OverlayController {
             return;
         };
         let overlay = self.state.read(cx);
-        // While the card is showing the loading marker, none of the retained
-        // rows is visible. Do not let Enter/Tab accept a stale row from the
-        // preceding result behind that marker.
-        let has_items = !overlay.loading && !overlay.items.is_empty();
+        // Fig kept intercept on whenever suggestions.length > 0, including
+        // during the loading spinner, because the previous rows stayed in the
+        // store. Match that so Tab/Enter still reach the overlay.
+        let has_items = !overlay.items.is_empty();
         let has_last_position = self
             .last_position
             .lock()
@@ -449,7 +489,7 @@ impl OverlayController {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .is_some();
-        let has_items = !overlay.loading && !overlay.items.is_empty();
+        let has_items = !overlay.items.is_empty();
         set_intercept_flags(
             figterm_state,
             session_id,
@@ -483,7 +523,15 @@ impl OverlayController {
         figterm_state: Arc<FigtermState>,
         cx: &mut App,
     ) {
-        self.complete_buffer_inner(buffer, cwd, cursor, session_id, figterm_state, false, cx);
+        self.complete_buffer_inner(
+            buffer,
+            cwd,
+            cursor,
+            session_id,
+            figterm_state,
+            RequestOptions::keystroke(),
+            cx,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -494,9 +542,13 @@ impl OverlayController {
         cursor: u32,
         session_id: Uuid,
         figterm_state: Arc<FigtermState>,
-        force: bool,
+        options: RequestOptions,
         cx: &mut App,
     ) {
+        let RequestOptions {
+            force,
+            loading_threshold,
+        } = options;
         let switched_session = self.set_session(session_id);
         if switched_session {
             // Do not expose rows, one-shot insertion state, or a caret from
@@ -606,16 +658,17 @@ impl OverlayController {
                 overlay.first_token_completion,
             )
         };
-        let (current_shell, current_process, environment_variables) = figterm_state
+        let (current_shell, current_process, environment_variables, alias) = figterm_state
             .with(&session_id, |session| {
                 let context = session.context.as_ref();
                 (
                     context.and_then(|context| context.shell_path.clone()),
                     context.and_then(|context| context.process_name.clone()),
                     session.flattened_env.clone(),
+                    context.and_then(|context| context.alias.clone()),
                 )
             })
-            .unwrap_or_else(|| (None, None, Arc::new(Vec::new())));
+            .unwrap_or_else(|| (None, None, Arc::new(Vec::new()), None));
         let request = CompleteRequest {
             buffer,
             cwd: cwd.clone(),
@@ -627,6 +680,7 @@ impl OverlayController {
             current_shell,
             current_process,
             environment_variables,
+            alias,
         };
         let engine = self.engine.clone();
         let proxy = self.proxy.clone();
@@ -635,7 +689,7 @@ impl OverlayController {
         cx.spawn(async move |_cx| {
             let complete = engine.complete(request);
             futures::pin_mut!(complete);
-            let timed = executor.timer(Duration::from_millis(200));
+            let timed = executor.timer(loading_threshold);
             futures::pin_mut!(timed);
             let result = match futures::future::select(complete, timed).await {
                 futures::future::Either::Left((result, _)) => result,
@@ -738,6 +792,11 @@ impl OverlayController {
             // reopen the storm the guard exists to stop.
             self.forget_last_input();
         }
+        let pending = result.as_ref().ok().and_then(|complete| {
+            complete
+                .pending_generators
+                .then_some(complete.debounce_ms.unwrap_or(200).max(0) as u64)
+        });
         let positioned = apply_complete_result(
             self.state.clone(),
             &self.handle,
@@ -750,12 +809,47 @@ impl OverlayController {
             cx,
         );
         self.update_layout_retry(positioned, cx);
+        if let Some(delay_ms) = pending {
+            let generation = self.generation.load(Ordering::Relaxed);
+            let proxy = self.proxy.clone();
+            let executor = cx.background_executor().clone();
+            cx.spawn(async move |_cx| {
+                executor.timer(Duration::from_millis(delay_ms)).await;
+                let _ = proxy.send_event(Event::GpuiOverlayDebouncedComplete {
+                    generation,
+                    waited_ms: delay_ms,
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// The debounce elapsed: run the generators the last result deferred.
+    /// Fig armed its `···` timer at the keystroke — a debounced generator was
+    /// `loading` through the whole wait — so the follow-up only gets whatever
+    /// is left of the threshold, not a fresh one.
+    pub fn apply_debounced_complete(&mut self, generation: u64, waited_ms: u64, cx: &mut App) {
+        if self.generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        let loading_threshold = LOADING_THRESHOLD.saturating_sub(Duration::from_millis(waited_ms));
+        self.recomplete_with(
+            RequestOptions {
+                force: true,
+                loading_threshold,
+            },
+            cx,
+        );
     }
 
     /// Re-run the current buffer even when its text is unchanged. Settings
     /// changes (notably the auto-execute visibility toggle) must update the
     /// retained rows immediately instead of waiting for another keystroke.
     pub fn recomplete(&mut self, cx: &mut App) {
+        self.recomplete_with(RequestOptions::forced(), cx);
+    }
+
+    fn recomplete_with(&mut self, options: RequestOptions, cx: &mut App) {
         let Some(current_session) = self.current_session() else {
             return;
         };
@@ -771,7 +865,7 @@ impl OverlayController {
             input.cursor,
             input.session_id,
             self.figterm_state.clone(),
-            true,
+            options,
             cx,
         );
     }
@@ -781,11 +875,11 @@ impl OverlayController {
             debug!(%action_session_id, current_session = ?self.current_session(), action, "ignoring stale overlay action");
             return;
         }
-        let (visible, loading) = {
+        let (visible, loading, has_items) = {
             let overlay = self.state.read(cx);
-            (overlay.visible, overlay.loading)
+            (overlay.visible, overlay.loading, !overlay.items.is_empty())
         };
-        if !action_is_allowed(action, visible, loading) {
+        if !action_is_allowed(action, visible, loading, has_items) {
             debug!(action, loading, "ignoring overlay action without an actionable list");
             return;
         }
@@ -1636,7 +1730,7 @@ fn predicted_buffer_after_insert(buffer: &str, cursor: u32, insertion: &str, del
         return None;
     }
     let deletion = usize::try_from(deletion).ok()?;
-    let deletion_start = previous_char_boundary(buffer, cursor, deletion);
+    let deletion_start = previous_utf16_boundary(buffer, cursor, deletion);
     let mut result = String::with_capacity(buffer.len().saturating_sub(cursor - deletion_start) + insertion.len());
     result.push_str(&buffer[..deletion_start]);
 
@@ -1645,7 +1739,7 @@ fn predicted_buffer_after_insert(buffer: &str, cursor: u32, insertion: &str, del
     while offset < insertion.len() {
         let remaining = insertion.get(offset..)?;
         if remaining.starts_with("\x1b[D") {
-            predicted_cursor = previous_char_boundary(&result, predicted_cursor, 1);
+            predicted_cursor = previous_utf16_boundary(&result, predicted_cursor, 1);
             offset += "\x1b[D".len();
             continue;
         }
@@ -1658,15 +1752,18 @@ fn predicted_buffer_after_insert(buffer: &str, cursor: u32, insertion: &str, del
     Some((result, u32::try_from(predicted_cursor).ok()?))
 }
 
-fn previous_char_boundary(text: &str, from: usize, count: usize) -> usize {
-    let mut boundary = from;
-    for _ in 0..count {
-        boundary = text[..boundary]
-            .char_indices()
-            .next_back()
-            .map_or(0, |(index, _)| index);
+fn previous_utf16_boundary(text: &str, from: usize, units: usize) -> usize {
+    let prefix = text.get(..from).unwrap_or(text);
+    let mut remaining = units;
+    let mut boundary = from.min(prefix.len());
+    for (index, ch) in prefix.char_indices().rev() {
+        if remaining == 0 {
+            break;
+        }
+        boundary = index;
+        remaining = remaining.saturating_sub(ch.len_utf16());
     }
-    boundary
+    if remaining > 0 { 0 } else { boundary }
 }
 
 fn opens_new_arg(add_space: bool, should_add_space: bool, separator: Option<&str>) -> bool {
@@ -1678,10 +1775,11 @@ fn should_suppress_after_insert(execute: bool, kind: &str, opens_new_arg: bool, 
 }
 
 fn insertion_for(name: &str, search_term: &str) -> (String, i64) {
+    let query_term = search_term.replacen(' ', r"\ ", 1);
     if let Some(suffix) = name.strip_prefix(search_term) {
         (suffix.to_string(), 0)
     } else {
-        (name.to_string(), search_term.chars().count() as i64)
+        (name.to_string(), query_term.encode_utf16().count() as i64)
     }
 }
 
@@ -1725,8 +1823,8 @@ fn backspaced_to_new_token(previous: &str, current: &str) -> bool {
     if current.len() >= previous.len() {
         return false;
     }
-    let current_tokens: Vec<&str> = current.split_whitespace().collect();
-    let previous_tokens: Vec<&str> = previous.split_whitespace().collect();
+    let (current_tokens, _) = tokenize(current);
+    let (previous_tokens, _) = tokenize(previous);
     if current_tokens.is_empty() || current_tokens.len() >= previous_tokens.len() {
         return false;
     }
@@ -1740,8 +1838,8 @@ fn large_buffer_change(previous: &str, current: &str) -> bool {
     if !previous.starts_with(current) && !current.starts_with(previous) {
         return true;
     }
-    let previous_len = previous.chars().count() as i64;
-    let current_len = current.chars().count() as i64;
+    let previous_len = previous.encode_utf16().count() as i64;
+    let current_len = current.encode_utf16().count() as i64;
     (previous_len - current_len).abs() >= 2
 }
 
@@ -1813,7 +1911,7 @@ fn resolve_cursor_marker(mut text: String) -> String {
     let Some(marker) = text.find(MARKER) else {
         return text;
     };
-    let after = text[marker + MARKER.len()..].chars().count();
+    let after = text[marker + MARKER.len()..].encode_utf16().count();
     text.replace_range(marker..marker + MARKER.len(), "");
     text.push_str(&"\x1b[D".repeat(after));
     text
@@ -1949,16 +2047,15 @@ fn action_requires_visible(action: &str) -> bool {
     ) || action.starts_with("selectSuggestion")
 }
 
-fn action_is_allowed(action: &str, visible: bool, loading: bool) -> bool {
+fn action_is_allowed(action: &str, visible: bool, loading: bool, has_items: bool) -> bool {
     if loading && action == "showAutocompleteFromTab" {
         return false;
     }
-    !action_requires_visible(action) || (visible && !loading)
+    !action_requires_visible(action) || (visible && (!loading || has_items))
 }
 
 fn click_matches_current(click: &ClickInsert, overlay: &OverlayState) -> bool {
     overlay.visible
-        && !overlay.loading
         && click.search == overlay.search_term
         && overlay.items.iter().any(|item| {
             item.name == click.name
@@ -2452,6 +2549,19 @@ mod tests {
     }
 
     #[test]
+    fn cursor_marker_counts_utf16_code_units() {
+        // U+1F600 is two UTF-16 code units, matching JS `string.length`.
+        assert_eq!(resolve_cursor_marker("{cursor}😀".into()), "😀\x1b[D\x1b[D");
+    }
+
+    #[test]
+    fn predicted_buffer_deletes_utf16_units_not_unicode_scalars() {
+        let (buffer, cursor) = predicted_buffer_after_insert("ok😀", 6, "x", 2).expect("predict");
+        assert_eq!(buffer, "okx");
+        assert_eq!(cursor, 3);
+    }
+
+    #[test]
     fn history_insert_value_keeps_literal_spaces() {
         assert_eq!(
             full_insertion_for_item(
@@ -2555,11 +2665,11 @@ mod tests {
 
     #[test]
     fn hidden_overlay_rejects_delayed_row_actions() {
-        assert!(!action_is_allowed("insertSelected", false, false));
-        assert!(!action_is_allowed("navigateDown", false, false));
-        assert!(!action_is_allowed("selectSuggestion1", false, false));
-        assert!(action_is_allowed("showAutocompleteFromTab", false, false));
-        assert!(action_is_allowed("toggleAutocomplete", false, false));
+        assert!(!action_is_allowed("insertSelected", false, false, false));
+        assert!(!action_is_allowed("navigateDown", false, false, false));
+        assert!(!action_is_allowed("selectSuggestion1", false, false, false));
+        assert!(action_is_allowed("showAutocompleteFromTab", false, false, false));
+        assert!(action_is_allowed("toggleAutocomplete", false, false, false));
     }
 
     #[test]
@@ -2590,6 +2700,7 @@ mod tests {
     fn deleting_a_whole_token_reads_as_a_new_token() {
         assert!(backspaced_to_new_token("git commit -m", "git commit"));
         assert!(backspaced_to_new_token("git c", "git "));
+        assert!(backspaced_to_new_token(r#"git commit "msg""#, "git commit"));
     }
 
     #[test]
@@ -2620,8 +2731,10 @@ mod tests {
 
     #[test]
     fn multibyte_edits_are_counted_in_characters_not_bytes() {
-        // One deleted CJK character is three bytes but a single keystroke.
+        // One deleted CJK character is three bytes but a single UTF-16 unit.
         assert!(!large_buffer_change("echo 中文", "echo 中"));
+        // One emoji is two UTF-16 units, matching JavaScript string.length.
+        assert!(large_buffer_change("echo 😀", "echo "));
     }
 
     #[test]
@@ -2651,11 +2764,12 @@ mod tests {
 
     #[test]
     fn loading_overlay_rejects_actions_for_hidden_stale_rows() {
-        assert!(!action_is_allowed("insertSelected", true, true));
-        assert!(!action_is_allowed("insertCommonPrefix", true, true));
-        assert!(!action_is_allowed("navigateDown", true, true));
-        assert!(!action_is_allowed("showAutocompleteFromTab", true, true));
-        assert!(action_is_allowed("hideAutocomplete", true, true));
+        assert!(!action_is_allowed("insertSelected", true, true, false));
+        assert!(action_is_allowed("insertSelected", true, true, true));
+        assert!(action_is_allowed("insertCommonPrefix", true, true, true));
+        assert!(action_is_allowed("navigateDown", true, true, true));
+        assert!(!action_is_allowed("showAutocompleteFromTab", true, true, true));
+        assert!(action_is_allowed("hideAutocomplete", true, true, false));
     }
 
     #[test]
@@ -2696,7 +2810,7 @@ mod tests {
 
         overlay.visible = true;
         overlay.loading = true;
-        assert!(!click_matches_current(&click, &overlay));
+        assert!(click_matches_current(&click, &overlay));
     }
 
     #[test]
