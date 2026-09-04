@@ -1,5 +1,6 @@
 //! Native generators: files, argv scripts, git refs, npm scripts/deps.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
@@ -7,10 +8,14 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime};
 
 use crate::filegen;
-use crate::ir::{ArgSpec, Builtin, Spec, Template};
+use crate::ir::{ArgSpec, Builtin, GeneratorSpec, GeneratorTrigger, Spec, SuggestionMeta, Template};
 use crate::process;
 use crate::query::matches_query;
-use crate::runtime::{Suggestion, query_term_for, suggestion_query_term};
+use crate::runtime::{Suggestion, query_term_with_hook, suggestion_query_term_with_hook};
+
+fn hidden_generated_row_is_visible(suggestion: &Suggestion, query: &str) -> bool {
+    !suggestion.hidden || suggestion.name.eq_ignore_ascii_case(query)
+}
 
 fn hidden_static_seed_is_visible(seed: &crate::ir::SuggestionSeed, query: &str, kind: &str) -> bool {
     if !seed.meta.hidden {
@@ -61,6 +66,98 @@ fn script_timeout_for(arg: &ArgSpec) -> Duration {
         arg.script_timeout_ms,
         None,
     ))
+}
+
+#[derive(Clone, Default)]
+struct CachedGenerator {
+    results: Vec<Suggestion>,
+    needs_run: bool,
+    ran: bool,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct GeneratorSession {
+    arg_id: String,
+    search_term: String,
+    entries: Vec<CachedGenerator>,
+}
+
+thread_local! {
+    static GENERATOR_SESSION: RefCell<GeneratorSession> = RefCell::new(GeneratorSession::default());
+    static PENDING_GENERATORS: Cell<(bool, i64)> = const { Cell::new((false, 0)) };
+    static HISTORY: RefCell<Arc<crate::history::HistoryStore>> = RefCell::new(Arc::default());
+}
+
+/// Install a session saved on [`crate::runtime::Engine`]. Each desktop
+/// completion runs on a fresh `ec-engine-attempt` thread, so the cache has
+/// to travel with the engine rather than live only in this thread-local.
+pub(crate) fn install_session(session: GeneratorSession) {
+    GENERATOR_SESSION.with(|cell| *cell.borrow_mut() = session);
+}
+
+pub(crate) fn take_session() -> GeneratorSession {
+    GENERATOR_SESSION.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
+
+/// Hand the `history` template generator the shell history the engine
+/// loaded. The engine calls this once per request with a clone of the
+/// `Arc` it owns, so this is a pointer copy, not a list copy, and the
+/// per-command argument index built inside the store survives the request.
+pub(crate) fn set_history(store: Arc<crate::history::HistoryStore>) {
+    HISTORY.with(|cell| *cell.borrow_mut() = store);
+}
+
+pub(crate) fn history_store() -> Arc<crate::history::HistoryStore> {
+    HISTORY.with(|cell| Arc::clone(&cell.borrow()))
+}
+
+pub fn take_pending_generators() -> (bool, Option<i64>) {
+    PENDING_GENERATORS.with(|cell| {
+        let (pending, debounce_ms) = cell.replace((false, 0));
+        if pending {
+            (true, Some(if debounce_ms > 0 { debounce_ms } else { 200 }))
+        } else {
+            (false, None)
+        }
+    })
+}
+
+fn set_pending_generators(debounce_ms: i64) {
+    PENDING_GENERATORS.with(|cell| cell.set((true, debounce_ms)));
+}
+
+fn generator_arg_id(tokens: &[String], arg: &ArgSpec, cwd: &str, search_term: &str) -> String {
+    // `tokenize` does not emit an empty trailing token, so `git add ` is
+    // `["git", "add"]` with an empty search term. Dropping the last token
+    // there would collapse that to `"git"` and miss the cache when the user
+    // then types `git add s`. Keep every token after a trailing space; drop
+    // only the token currently being typed.
+    let path = if search_term.is_empty() || tokens.len() <= 1 {
+        tokens.join("\x1f")
+    } else {
+        tokens[..tokens.len() - 1].join("\x1f")
+    };
+    let gens = arg
+        .generators
+        .iter()
+        .map(|generator| {
+            format!(
+                "{:?}:{}:{}:{}",
+                generator.templates,
+                generator.js_custom.as_deref().unwrap_or(""),
+                generator.js_script.as_deref().unwrap_or(""),
+                generator.script.join(",")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    format!(
+        "{cwd}::{path}::{}::{:?}::{gens}::{}::{}",
+        arg.name,
+        arg.builtin,
+        arg.js_custom.as_deref().unwrap_or(""),
+        arg.script.join("\x1f")
+    )
 }
 
 struct MtimeLru<T> {
@@ -136,16 +233,24 @@ pub fn generate(spec: &Spec, tokens: &[String], query: &str, cwd: &str, fuzzy: b
         return Vec::new();
     }
     let ends_with_space = query.is_empty();
-    let active = crate::lookup::resolve_context(Arc::new(spec.clone()), tokens, ends_with_space, query, query, None)
-        .active_arg
-        .or_else(|| {
-            spec.args.first().map(|arg| crate::lookup::ActiveArg {
-                arg: arg.clone(),
-                query: query.to_string(),
-                search_term: query.to_string(),
-                exclusive: false,
-            })
-        });
+    let mut walk_tokens = tokens.to_vec();
+    let active = crate::lookup::resolve_context(
+        Arc::new(spec.clone()),
+        &mut walk_tokens,
+        ends_with_space,
+        query,
+        query,
+        None,
+    )
+    .active_arg
+    .or_else(|| {
+        spec.args.first().map(|arg| crate::lookup::ActiveArg {
+            arg: arg.clone(),
+            query: query.to_string(),
+            search_term: query.to_string(),
+            exclusive: false,
+        })
+    });
     if let Some(active) = active {
         return generate_for_arg_with_search_term(&active.arg, tokens, &active.query, &active.search_term, cwd, fuzzy);
     }
@@ -175,50 +280,172 @@ pub(crate) fn generate_for_arg_with_search_term(
     cwd: &str,
     fuzzy: bool,
 ) -> Vec<Suggestion> {
-    let query = arg.meta.get_query_term.as_deref().map_or_else(
-        || query.to_string(),
-        |separator| query_term_for(search_term, Some(separator)),
-    );
-    let timeout = script_timeout_for(arg);
-    let mut out = generate_arg(arg, tokens, &query, search_term, cwd, fuzzy, timeout);
-    // `isDangerous` on an argument is a safety boundary for every completion
-    // source under that argument, including scripts, builtins, and filepath
-    // templates.  Preserve a stricter seed-level flag as well.
-    if arg.meta.is_dangerous {
-        for suggestion in &mut out {
-            suggestion.is_dangerous = true;
-        }
-    }
-    // Native generators (paths, argv scripts, and builtins) do not originate
-    // from a static seed, so carry an argument-level query term onto every
-    // generated row.  A seed-specific rule takes precedence below.
-    if let Some(separator) = arg.meta.get_query_term.as_deref() {
-        let query_term = query_term_for(search_term, Some(separator));
-        for suggestion in &mut out {
-            if suggestion.query_term.is_none() {
-                suggestion.query_term = Some(query_term.clone());
-            }
-        }
-    }
-    dedup_suggestions(&mut out);
-    out.truncate(MAX_RESULTS);
-    out
+    generate_for_arg_with_history(arg, tokens, query, search_term, cwd, fuzzy, &[])
 }
 
-fn generate_arg(
+/// Like [`generate_for_arg_with_search_term`], with the values a `history`
+/// template offers: what earlier commands put in this same argument slot,
+/// most recent first (`crate::history::HistoryStore::arg_values`).
+pub(crate) fn generate_for_arg_with_history(
     arg: &ArgSpec,
     tokens: &[String],
     query: &str,
     search_term: &str,
     cwd: &str,
     fuzzy: bool,
-    timeout: Duration,
+    history_values: &[String],
 ) -> Vec<Suggestion> {
+    let arg_query =
+        if arg.meta.get_query_term.is_some() || arg.js_get_query_term.is_some() || arg.meta.js_get_query_term.is_some()
+        {
+            query_term_with_hook(
+                search_term,
+                arg.meta.get_query_term.as_deref(),
+                arg.js_get_query_term
+                    .as_deref()
+                    .or(arg.meta.js_get_query_term.as_deref()),
+            )
+        } else {
+            query.to_string()
+        };
+    let timeout = script_timeout_for(arg);
+    let mut out = generate_static_seeds(arg, &arg_query, search_term, fuzzy);
+    let generators = effective_generators(arg);
+    let arg_id = generator_arg_id(tokens, arg, cwd, search_term);
+    let debounce = arg.debounce_ms.is_some();
+    let debounce_ms = arg.debounce_ms.unwrap_or(200);
+    let mut pending = false;
+    GENERATOR_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        let arg_changed = session.arg_id != arg_id;
+        if arg_changed {
+            session.arg_id.clone_from(&arg_id);
+            session.entries.clear();
+            session.search_term.clear();
+        }
+        session.entries.resize_with(generators.len(), CachedGenerator::default);
+        let previous = session.search_term.clone();
+        for (index, generator) in generators.iter().enumerate() {
+            let trigger = should_trigger(
+                generator.trigger.as_ref(),
+                debounce,
+                arg_changed || !session.entries[index].ran,
+                search_term,
+                &previous,
+                generator_lists_paths(generator, arg),
+            );
+            let gen_query = query_term_with_hook(
+                search_term,
+                generator
+                    .get_query_term
+                    .as_deref()
+                    .or(arg.meta.get_query_term.as_deref()),
+                generator
+                    .js_get_query_term
+                    .as_deref()
+                    .or(arg.js_get_query_term.as_deref())
+                    .or(arg.meta.js_get_query_term.as_deref()),
+            );
+            let follow_up =
+                debounce && !arg_changed && session.entries[index].needs_run && session.search_term == search_term;
+            let has_query_rule = generator.get_query_term.is_some()
+                || generator.js_get_query_term.is_some()
+                || arg.meta.get_query_term.is_some()
+                || arg.js_get_query_term.is_some()
+                || arg.meta.js_get_query_term.is_some();
+            let mut rows = if debounce && !follow_up && (trigger || arg_changed) {
+                session.entries[index].needs_run = true;
+                pending = true;
+                // Fig kept a loading generator's previous rows on screen only
+                // when it had no `getQueryTerm`: with one, the old rows may
+                // not filter correctly against the new term, so they are
+                // withheld until the debounced run lands.
+                if has_query_rule {
+                    Vec::new()
+                } else {
+                    refilter_generated(&session.entries[index].results, &gen_query, fuzzy)
+                }
+            } else if !trigger && !follow_up {
+                refilter_generated(&session.entries[index].results, &gen_query, fuzzy)
+            } else {
+                let rows = generate_from_generator(
+                    arg,
+                    generator,
+                    tokens,
+                    history_values,
+                    &gen_query,
+                    search_term,
+                    cwd,
+                    fuzzy,
+                    timeout,
+                );
+                session.entries[index].results = rows.clone();
+                session.entries[index].needs_run = false;
+                session.entries[index].ran = true;
+                rows
+            };
+            stamp_query_term(&mut rows, &gen_query, search_term, has_query_rule);
+            out.extend(rows);
+        }
+        session.search_term = search_term.to_string();
+    });
+    if pending {
+        set_pending_generators(debounce_ms);
+    }
+    if arg.meta.is_dangerous {
+        for suggestion in &mut out {
+            suggestion.is_dangerous = true;
+        }
+    }
+    let has_arg_query_rule =
+        arg.meta.get_query_term.is_some() || arg.js_get_query_term.is_some() || arg.meta.js_get_query_term.is_some();
+    stamp_query_term(&mut out, &arg_query, search_term, has_arg_query_rule);
+    dedup_suggestions(&mut out);
+    out
+}
+
+fn stamp_query_term(rows: &mut [Suggestion], query_term: &str, search_term: &str, has_rule: bool) {
+    if !has_rule {
+        return;
+    }
+    for suggestion in rows {
+        if suggestion.query_term.is_some() {
+            continue;
+        }
+        // Native file/folder names already include the typed directory
+        // (`src/main.rs` from `src/m`). Stamping the getQueryTerm tail would
+        // make insertion delete only that tail and double the directory.
+        if path_row_already_includes_directory_prefix(&suggestion.name, &suggestion.kind, search_term, query_term) {
+            continue;
+        }
+        suggestion.query_term = Some(query_term.to_string());
+    }
+}
+
+fn path_row_already_includes_directory_prefix(name: &str, kind: &str, search_term: &str, query_term: &str) -> bool {
+    if !matches!(kind, "file" | "folder") {
+        return false;
+    }
+    if !search_term.ends_with(query_term) {
+        return false;
+    }
+    // `getQueryTerm: "/"` on `src/` yields an empty tail. The directory is
+    // then the whole search term; skip stamping so insertion still uses `src/`.
+    let directory = &search_term[..search_term.len() - query_term.len()];
+    !directory.is_empty() && name.starts_with(directory)
+}
+
+fn generate_static_seeds(arg: &ArgSpec, query: &str, search_term: &str, fuzzy: bool) -> Vec<Suggestion> {
     let mut out = Vec::new();
     for seed in &arg.suggestions {
         let suggestion_kind = seed.meta.suggestion_type.as_deref().unwrap_or("arg");
-        let (seed_query, seed_query_term) =
-            suggestion_query_term(suggestion_kind, seed.meta.get_query_term.as_deref(), query, search_term);
+        let (seed_query, seed_query_term) = suggestion_query_term_with_hook(
+            suggestion_kind,
+            seed.meta.get_query_term.as_deref(),
+            seed.meta.js_get_query_term.as_deref(),
+            query,
+            search_term,
+        );
         let name = seed
             .names
             .iter()
@@ -255,16 +482,185 @@ fn generate_arg(
                         seed.meta.icon.clone(),
                     )
                     .with_primary_name(seed.names.first().cloned())
+                    .with_alias_names(seed.names.clone())
                     .with_dangerous(seed.meta.is_dangerous || arg.meta.is_dangerous)
                     .with_original_type(seed.meta.original_type.clone())
                     .with_query_term(seed_query_term),
             );
         }
     }
-    let mut builtins = arg.builtins.clone();
-    if let Some(builtin) = arg.builtin {
-        builtins.push(builtin);
+    out
+}
+
+fn effective_generators(arg: &ArgSpec) -> Vec<GeneratorSpec> {
+    if !arg.generators.is_empty() {
+        let mut generators = arg.generators.clone();
+        let covered: HashSet<Template> = generators
+            .iter()
+            .flat_map(|generator| generator.templates.iter().copied())
+            .collect();
+        let missing: Vec<Template> = arg
+            .templates
+            .iter()
+            .copied()
+            .filter(|template| !covered.contains(template))
+            .collect();
+        if !missing.is_empty() {
+            generators.push(GeneratorSpec {
+                templates: missing,
+                ..GeneratorSpec::default()
+            });
+        }
+        return generators;
     }
+    vec![GeneratorSpec {
+        templates: arg.templates.clone(),
+        script: arg.script.clone(),
+        split_on: arg.split_on.clone(),
+        js_post_process: arg.js_post_process.clone(),
+        js_custom: arg.js_custom.clone(),
+        js_script: arg.js_script.clone(),
+        cache_key: arg.cache_key.clone(),
+        cache_by_directory: arg.cache_by_directory,
+        cache_ttl_ms: arg.cache_ttl_ms,
+        cache_strategy: arg.cache_strategy.clone(),
+        script_timeout_ms: arg.script_timeout_ms,
+        builtin: arg.builtin,
+        get_query_term: arg.meta.get_query_term.clone(),
+        js_get_query_term: arg.js_get_query_term.clone().or(arg.meta.js_get_query_term.clone()),
+        js_filter_template_suggestions: None,
+        trigger: None,
+        ..GeneratorSpec::default()
+    }]
+}
+
+fn generator_lists_paths(generator: &GeneratorSpec, arg: &ArgSpec) -> bool {
+    let templates = if !arg.generators.is_empty() {
+        generator.templates.as_slice()
+    } else if generator.templates.is_empty() {
+        arg.templates.as_slice()
+    } else {
+        generator.templates.as_slice()
+    };
+    templates
+        .iter()
+        .any(|template| matches!(template, Template::Filepaths | Template::Folders))
+}
+
+fn should_trigger(
+    trigger: Option<&GeneratorTrigger>,
+    debounce: bool,
+    arg_changed: bool,
+    search_term: &str,
+    previous: &str,
+    lists_paths: bool,
+) -> bool {
+    if arg_changed {
+        return true;
+    }
+    let Some(trigger) = trigger else {
+        // Fig `filepaths()` retriggers when the typed prefix changes directory
+        // or filename; a missing trigger on a real JS generator does not.
+        return if lists_paths { search_term != previous } else { debounce };
+    };
+    match trigger.on.as_str() {
+        "function" => {
+            let Some(hook) = trigger.js_trigger.as_deref() else {
+                return true;
+            };
+            crate::js_host::current()
+                .and_then(|(host, _)| host.trigger(hook, search_term, previous))
+                .unwrap_or(true)
+        },
+        "string" => {
+            let needle = trigger_string(trigger);
+            last_index(search_term, &needle) != last_index(previous, &needle)
+        },
+        "threshold" => {
+            let length = usize::try_from(trigger.length.unwrap_or(0)).unwrap_or(0);
+            utf16_len(search_term) > length && utf16_len(previous) <= length
+        },
+        "match" => trigger_match_index(trigger, search_term) != trigger_match_index(trigger, previous),
+        _ => search_term != previous,
+    }
+}
+
+fn trigger_string(trigger: &GeneratorTrigger) -> String {
+    match trigger.string.as_ref() {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Array(items)) => items
+            .first()
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn trigger_match_index(trigger: &GeneratorTrigger, search_term: &str) -> i32 {
+    let strings: Vec<String> = match trigger.string.as_ref() {
+        Some(serde_json::Value::String(text)) => vec![text.clone()],
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    };
+    strings
+        .iter()
+        .position(|candidate| candidate == search_term)
+        .map_or(-1, |index| i32::try_from(index).unwrap_or(-1))
+}
+
+fn last_index(haystack: &str, needle: &str) -> i32 {
+    if needle.is_empty() {
+        return i32::try_from(utf16_len(haystack)).unwrap_or(-1);
+    }
+    haystack.rfind(needle).map_or(-1, |index| {
+        i32::try_from(haystack[..index].encode_utf16().count()).unwrap_or(-1)
+    })
+}
+
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+fn refilter_generated(rows: &[Suggestion], query: &str, fuzzy: bool) -> Vec<Suggestion> {
+    rows.iter()
+        .filter(|suggestion| query.is_empty() || matches_query(&suggestion.name, query, fuzzy))
+        .filter(|suggestion| hidden_generated_row_is_visible(suggestion, query))
+        .cloned()
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_from_generator(
+    arg: &ArgSpec,
+    generator: &GeneratorSpec,
+    tokens: &[String],
+    history_values: &[String],
+    query: &str,
+    search_term: &str,
+    cwd: &str,
+    fuzzy: bool,
+    timeout: Duration,
+) -> Vec<Suggestion> {
+    let timeout = Duration::from_millis(effective_script_timeout_ms(
+        i64::try_from(timeout.as_millis()).unwrap_or(DEFAULT_SCRIPT_TIMEOUT_MS),
+        generator.script_timeout_ms.or(arg.script_timeout_ms),
+        None,
+    ));
+    let mut out = Vec::new();
+    let builtins = if arg.generators.is_empty() {
+        let mut builtins = arg.builtins.clone();
+        if let Some(builtin) = generator.builtin.or(arg.builtin) {
+            builtins.push(builtin);
+        }
+        builtins
+    } else {
+        generator.builtin.into_iter().collect()
+    };
     let mut seen_builtins = HashSet::new();
     for builtin in builtins {
         if !seen_builtins.insert(builtin) {
@@ -284,36 +680,106 @@ fn generate_arg(
             Builtin::Cobra => crate::cobra::complete(tokens, cwd, fuzzy),
         });
     }
+    let snapshot = arg_snapshot_for_generator(arg, generator);
+    // Fig's script and custom generators both bail on `haveContextForGenerator`
+    // — no cwd, no run — so an empty cwd yields no rows from either.
     if let Some((host, scope_cwd)) = crate::js_host::current() {
         let cwd = if cwd.is_empty() { scope_cwd } else { cwd };
-        let has_js = arg.js_script.is_some() || arg.js_post_process.is_some() || arg.js_custom.is_some();
-        if has_js {
-            out.extend(run_js_generators(host, arg, tokens, query, cwd, fuzzy, timeout));
-        } else if !arg.script.is_empty() {
-            out.extend(run_script(
-                &arg.script,
-                query,
-                cwd,
-                fuzzy,
-                timeout,
-                arg.split_on.as_deref(),
-            ));
-        }
-    } else if !arg.script.is_empty() {
+        out.extend(run_js_generators(host, &snapshot, tokens, query, cwd, fuzzy, timeout));
+    } else if !snapshot.script.is_empty() && !cwd.is_empty() {
         out.extend(run_script(
-            &arg.script,
+            &snapshot.script,
             query,
             cwd,
             fuzzy,
             timeout,
-            arg.split_on.as_deref(),
+            snapshot.split_on.as_deref(),
         ));
     }
-    let folders_only = arg.templates.contains(&Template::Folders) && !arg.templates.contains(&Template::Filepaths);
-    if !arg.templates.is_empty() {
-        out.extend(filegen::complete_path(query, cwd, folders_only, fuzzy));
+    let templates = if arg.generators.is_empty() && generator.templates.is_empty() {
+        arg.templates.as_slice()
+    } else {
+        generator.templates.as_slice()
+    };
+    let folders_only = (templates.contains(&Template::Folders) && !templates.contains(&Template::Filepaths))
+        || generator.show_folders.as_deref() == Some("only");
+    let lists_paths = templates
+        .iter()
+        .any(|template| matches!(template, Template::Filepaths | Template::Folders));
+    let mut template_rows = Vec::new();
+    if lists_paths {
+        let environment = crate::js_host::current_shell().environment_variables.as_slice();
+        let filter = filegen::PathFilter {
+            folders_only,
+            files_only: generator.show_folders.as_deref() == Some("never"),
+            extensions: generator.extensions.as_slice(),
+            equals: generator.equals.as_slice(),
+            filter_folders: generator.filter_folders.unwrap_or(false),
+            file_priority: generator.file_priority,
+            folder_priority: generator.folder_priority,
+            root_directory: generator.root_directory.as_deref(),
+            environment,
+            matches: generator.matches.as_deref(),
+            matches_flags: generator.matches_flags.as_deref(),
+        };
+        template_rows.extend(filegen::complete_path_filtered(search_term, cwd, fuzzy, &filter));
     }
+    if templates.contains(&Template::History) {
+        template_rows.extend(history_template_suggestions(history_values, query, fuzzy));
+    }
+    if let Some(hook) = generator.js_filter_template_suggestions.as_deref()
+        && let Some((host, _)) = crate::js_host::current()
+        && let Some(filtered) = host.filter_template_suggestions(hook, &template_rows)
+    {
+        template_rows = filtered;
+    }
+    out.extend(template_rows);
     out
+}
+
+fn arg_snapshot_for_generator(arg: &ArgSpec, generator: &GeneratorSpec) -> ArgSpec {
+    if arg.generators.is_empty() {
+        return arg.clone();
+    }
+    ArgSpec {
+        name: arg.name.clone(),
+        description: arg.description.clone(),
+        templates: generator.templates.clone(),
+        script: generator.script.clone(),
+        split_on: generator.split_on.clone(),
+        js_post_process: generator.js_post_process.clone(),
+        js_custom: generator.js_custom.clone(),
+        js_script: generator.js_script.clone(),
+        cache_key: generator.cache_key.clone(),
+        cache_by_directory: generator.cache_by_directory,
+        cache_ttl_ms: generator.cache_ttl_ms,
+        cache_strategy: generator.cache_strategy.clone(),
+        script_timeout_ms: generator.script_timeout_ms.or(arg.script_timeout_ms),
+        builtin: generator.builtin,
+        meta: SuggestionMeta {
+            get_query_term: generator.get_query_term.clone().or(arg.meta.get_query_term.clone()),
+            js_get_query_term: generator
+                .js_get_query_term
+                .clone()
+                .or(arg.js_get_query_term.clone())
+                .or(arg.meta.js_get_query_term.clone()),
+            is_dangerous: arg.meta.is_dangerous,
+            ..SuggestionMeta::default()
+        },
+        js_get_query_term: generator.js_get_query_term.clone().or(arg.js_get_query_term.clone()),
+        debounce_ms: arg.debounce_ms,
+        ..ArgSpec::default()
+    }
+}
+
+/// Fig `getHistoryArgSuggestions` rows: `{ name: value, type: "arg" }` for
+/// each value, already ordered most recent first by the history index.
+fn history_template_suggestions(values: &[String], query: &str, fuzzy: bool) -> Vec<Suggestion> {
+    values
+        .iter()
+        .filter(|value| query.is_empty() || matches_query(value, query, fuzzy))
+        .map(|value| Suggestion::new(value.clone(), "", "arg").with_insert_value(value.clone()))
+        .collect()
 }
 
 fn dedup_suggestions(suggestions: &mut Vec<Suggestion>) {
@@ -336,34 +802,41 @@ fn run_js_generators(
     fuzzy: bool,
     timeout: Duration,
 ) -> Vec<Suggestion> {
-    let has_script_hook = !arg.script.is_empty() || arg.js_script.is_some() || arg.js_post_process.is_some();
+    let has_script = !arg.script.is_empty() || arg.js_script.is_some();
     if cwd.is_empty() {
         return Vec::new();
     }
     let mut out = Vec::new();
-    if has_script_hook {
-        let raw = crate::js_host::cached_suggestions(host, arg, tokens, cwd, "script", || {
-            run_script_or_post_process(host, arg, tokens, cwd, timeout)
-        });
+    if has_script {
+        let raw = run_script_or_post_process(host, arg, tokens, cwd, timeout);
         out.extend(
             raw.into_iter()
-                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy)),
+                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy))
+                .filter(|suggestion| hidden_generated_row_is_visible(suggestion, query)),
         );
     }
     if let Some(hook_id) = arg.js_custom.as_deref() {
-        let custom = crate::js_host::cached_suggestions(host, arg, tokens, cwd, "custom", || {
+        let fallback = crate::js_host::custom_cache_fallback(tokens);
+        let custom = crate::js_host::cached_suggestions(host, arg, cwd, "custom", &fallback, || {
             host.custom(hook_id, tokens, cwd, query, timeout, arg.meta.is_dangerous)
                 .unwrap_or_default()
         });
         out.extend(
             custom
                 .into_iter()
-                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy)),
+                .filter(|suggestion| matches_query(&suggestion.name, query, fuzzy))
+                .filter(|suggestion| hidden_generated_row_is_visible(suggestion, query)),
         );
     }
     out
 }
 
+/// Fig `getScriptSuggestions`. The command is resolved first (a function
+/// `script` runs on every turn, uncached), then its stdout is cached on
+/// that command and cwd, and only then shaped: `splitOn` wins, else
+/// `postProcess` runs against the current tokens, else there are no rows.
+/// Caching stdout rather than rows is what lets a `postProcess` that reads
+/// `tokens` see the current buffer on a cache hit, as it does in Fig.
 fn run_script_or_post_process(
     host: &crate::js_host::JsHost,
     arg: &ArgSpec,
@@ -371,7 +844,7 @@ fn run_script_or_post_process(
     cwd: &str,
     timeout: Duration,
 ) -> Vec<Suggestion> {
-    let command = if let Some(hook_id) = arg.js_script.as_deref() {
+    let (command, args, timeout) = if let Some(hook_id) = arg.js_script.as_deref() {
         let Some(script) = host.script_command(hook_id, tokens) else {
             return Vec::new();
         };
@@ -386,21 +859,40 @@ fn run_script_or_post_process(
     } else {
         return Vec::new();
     };
-    let stdout = process::execute(&command.0, &command.1, cwd, command.2);
-    // Fig's `getScriptSuggestions` branches on `splitOn` first and only falls
-    // back to `postProcess`. Specs that declare both rely on that order, so
-    // running the hook here would feed it output it never expects.
+    if command.is_empty() {
+        return Vec::new();
+    }
+    let fallback = crate::js_host::script_cache_fallback(&command, &args, cwd);
+    let stdout = crate::js_host::cached_script_output(host, arg, cwd, &fallback, || {
+        process::execute(&command, &args, cwd, timeout)
+    });
+    shape_script_output(host, arg, tokens, &stdout)
+}
+
+/// Fig's `getScriptSuggestions` branches on `splitOn` first and only falls
+/// back to `postProcess`. Specs that declare both rely on that order, so
+/// running the hook here would feed it output it never expects. With
+/// neither, the result stays `[]`.
+fn shape_script_output(
+    host: &crate::js_host::JsHost,
+    arg: &ArgSpec,
+    tokens: &[String],
+    stdout: &str,
+) -> Vec<Suggestion> {
+    // `executeCommandTimeout` hands both branches `cleanOutput(stdout)`.
+    let stdout = crate::js_host::clean_output(stdout);
     if let Some(separator) = arg.split_on.as_deref() {
         return all_split(&stdout, separator);
     }
     if let Some(hook_id) = arg.js_post_process.as_deref() {
-        return host
-            .post_process(hook_id, &crate::js_host::clean_output(&stdout), tokens)
-            .unwrap_or_default();
+        return host.post_process(hook_id, &stdout, tokens).unwrap_or_default();
     }
-    all_lines(&stdout)
+    Vec::new()
 }
 
+/// Host-less fallback for callers outside a completion attempt (the
+/// `generate` compatibility wrapper). Same shape rules as
+/// [`shape_script_output`] minus `postProcess`, which needs the JS host.
 fn run_script(
     script: &[String],
     query: &str,
@@ -415,7 +907,7 @@ fn run_script(
     let stdout = process::execute(command, args, cwd, timeout);
     match split_on {
         Some(separator) => filter_split(&stdout, query, fuzzy, separator),
-        None => filter_lines(&stdout, query, fuzzy),
+        None => Vec::new(),
     }
 }
 
@@ -841,7 +1333,7 @@ fn read_package_json(cwd: &str) -> Option<Arc<serde_json::Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{ArgSpec, OptionSpec, Spec, SuggestionSeed, Template};
+    use crate::ir::{ArgSpec, OptionSpec, Spec, SuggestionMeta, SuggestionSeed, Template};
     use std::fs;
 
     #[test]
@@ -850,6 +1342,7 @@ mod tests {
             names: vec!["demo".into()],
             args: vec![ArgSpec {
                 script: vec!["printf".into(), "alpha\nbeta\nalpaca\n".into()],
+                split_on: Some("\n".into()),
                 ..ArgSpec::default()
             }],
             ..Spec::default()
@@ -989,6 +1482,7 @@ mod tests {
             names: vec!["checkout".into()],
             args: vec![ArgSpec {
                 script: vec!["printf".into(), "feature-x\nmain\norigin/foo\n".into()],
+                split_on: Some("\n".into()),
                 ..ArgSpec::default()
             }],
             ..Spec::default()
@@ -1049,6 +1543,366 @@ mod tests {
             vec!["co"]
         );
         assert_eq!(suggestions[0].description, "Alias for 'checkout -b main'");
+    }
+
+    #[test]
+    fn filepaths_with_query_term_still_list_the_typed_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("main.rs"), "fn").unwrap();
+        fs::write(dir.path().join("other.rs"), "x").unwrap();
+        let arg = ArgSpec {
+            templates: vec![Template::Filepaths],
+            meta: SuggestionMeta {
+                get_query_term: Some("/".into()),
+                ..SuggestionMeta::default()
+            },
+            ..ArgSpec::default()
+        };
+        let suggestions = generate_for_arg_with_search_term(
+            &arg,
+            &["cat".into(), "src/m".into()],
+            "m",
+            "src/m",
+            &dir.path().display().to_string(),
+            false,
+        );
+        assert!(
+            suggestions.iter().any(|item| item.name == "src/main.rs"),
+            "{suggestions:?}"
+        );
+        assert!(
+            suggestions.iter().all(|item| item.name != "other.rs"),
+            "{suggestions:?}"
+        );
+        let row = suggestions
+            .iter()
+            .find(|item| item.name == "src/main.rs")
+            .expect("prefixed path");
+        assert_eq!(
+            row.query_term.as_deref(),
+            None,
+            "prefixed native path rows keep the raw search term for insertion"
+        );
+    }
+
+    #[test]
+    fn filepaths_with_query_term_after_trailing_slash_keep_raw_search() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("main.rs"), "fn").unwrap();
+        let arg = ArgSpec {
+            templates: vec![Template::Filepaths],
+            meta: SuggestionMeta {
+                get_query_term: Some("/".into()),
+                ..SuggestionMeta::default()
+            },
+            ..ArgSpec::default()
+        };
+        let suggestions = generate_for_arg_with_search_term(
+            &arg,
+            &["cat".into(), "src/".into()],
+            "",
+            "src/",
+            &dir.path().display().to_string(),
+            false,
+        );
+        let row = suggestions
+            .iter()
+            .find(|item| item.name == "src/main.rs")
+            .expect("prefixed path");
+        assert_eq!(row.query_term.as_deref(), None, "{suggestions:?}");
+    }
+
+    #[test]
+    fn filepaths_relist_when_the_typed_prefix_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("main.rs"), "fn").unwrap();
+        fs::write(dir.path().join("other.rs"), "x").unwrap();
+        let cwd = dir.path().display().to_string();
+        let arg = ArgSpec {
+            templates: vec![Template::Filepaths],
+            ..ArgSpec::default()
+        };
+        let first = generate_for_arg_with_search_term(&arg, &["cat".into(), "s".into()], "s", "s", &cwd, false);
+        assert!(first.iter().any(|item| item.name == "src/"), "{first:?}");
+        let second =
+            generate_for_arg_with_search_term(&arg, &["cat".into(), "src/m".into()], "src/m", "src/m", &cwd, false);
+        assert!(second.iter().any(|item| item.name == "src/main.rs"), "{second:?}");
+        assert!(second.iter().all(|item| item.name != "other.rs"), "{second:?}");
+    }
+
+    #[test]
+    fn each_generator_keeps_its_own_script_and_templates() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("main.rs"), "fn").unwrap();
+        let cwd = dir.path().display().to_string();
+        let arg = ArgSpec {
+            templates: vec![Template::Filepaths],
+            script: vec!["printf".into(), "from-flat\n".into()],
+            split_on: Some("\n".into()),
+            generators: vec![
+                crate::ir::GeneratorSpec {
+                    templates: vec![Template::Filepaths],
+                    ..crate::ir::GeneratorSpec::default()
+                },
+                crate::ir::GeneratorSpec {
+                    script: vec!["printf".into(), "from-gen\n".into()],
+                    split_on: Some("\n".into()),
+                    ..crate::ir::GeneratorSpec::default()
+                },
+            ],
+            ..ArgSpec::default()
+        };
+        let suggestions = generate_for_arg_with_search_term(&arg, &["demo".into(), "".into()], "", "", &cwd, false);
+        let names: Vec<_> = suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names.iter().filter(|name| **name == "src/").count(), 1, "{names:?}");
+        assert!(names.contains(&"from-gen"), "{names:?}");
+        assert!(!names.contains(&"from-flat"), "{names:?}");
+    }
+
+    #[test]
+    fn arg_level_templates_still_run_alongside_generators() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        let cwd = dir.path().display().to_string();
+        let arg = ArgSpec {
+            templates: vec![Template::Filepaths],
+            generators: vec![crate::ir::GeneratorSpec {
+                script: vec!["printf".into(), "from-gen\n".into()],
+                split_on: Some("\n".into()),
+                ..crate::ir::GeneratorSpec::default()
+            }],
+            ..ArgSpec::default()
+        };
+        let suggestions = generate_for_arg_with_search_term(&arg, &["mount".into(), "".into()], "", "", &cwd, false);
+        let names: Vec<_> = suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"from-gen"), "{names:?}");
+        assert!(names.contains(&"src/"), "{names:?}");
+    }
+
+    #[test]
+    fn filepaths_helper_extensions_keep_suffix_matches_and_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("keep.py"), "").unwrap();
+        fs::write(dir.path().join("drop.txt"), "").unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        let cwd = dir.path().display().to_string();
+        let arg = ArgSpec {
+            meta: SuggestionMeta {
+                get_query_term: Some("/".into()),
+                ..SuggestionMeta::default()
+            },
+            generators: vec![crate::ir::GeneratorSpec {
+                templates: vec![Template::Filepaths],
+                get_query_term: Some("/".into()),
+                extensions: vec!["py".into()],
+                file_priority: Some(76),
+                ..crate::ir::GeneratorSpec::default()
+            }],
+            ..ArgSpec::default()
+        };
+        let rows = generate_for_arg_with_search_term(&arg, &["python".into(), "".into()], "", "", &cwd, false);
+        let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert!(names.contains(&"keep.py"), "{names:?}");
+        assert!(names.contains(&"src/"), "{names:?}");
+        assert!(!names.contains(&"drop.txt"), "{names:?}");
+        let py = rows.iter().find(|row| row.name == "keep.py").unwrap();
+        assert_eq!(py.priority, 76);
+    }
+
+    #[test]
+    fn filepaths_helper_matches_keeps_env_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".env"), "").unwrap();
+        fs::write(dir.path().join(".env.staging"), "").unwrap();
+        fs::write(dir.path().join("keep.py"), "").unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        let cwd = dir.path().display().to_string();
+        let arg = ArgSpec {
+            meta: SuggestionMeta {
+                get_query_term: Some("/".into()),
+                ..SuggestionMeta::default()
+            },
+            generators: vec![crate::ir::GeneratorSpec {
+                templates: vec![Template::Filepaths],
+                get_query_term: Some("/".into()),
+                matches: Some(r"^\.env.*$".into()),
+                ..crate::ir::GeneratorSpec::default()
+            }],
+            ..ArgSpec::default()
+        };
+        let rows = generate_for_arg_with_search_term(&arg, &["dotenv-vault".into(), "".into()], "", "", &cwd, false);
+        let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert!(names.contains(&".env"), "{names:?}");
+        assert!(names.contains(&".env.staging"), "{names:?}");
+        assert!(names.contains(&"src/"), "{names:?}");
+        assert!(!names.contains(&"keep.py"), "{names:?}");
+    }
+
+    #[test]
+    fn generated_rows_carry_function_query_term() {
+        let arg = ArgSpec {
+            js_get_query_term: Some("unused".into()),
+            meta: SuggestionMeta {
+                get_query_term: Some("/".into()),
+                ..SuggestionMeta::default()
+            },
+            script: vec!["printf".into(), "main\n".into()],
+            split_on: Some("\n".into()),
+            ..ArgSpec::default()
+        };
+        let suggestions =
+            generate_for_arg_with_search_term(&arg, &["cd".into(), "src/m".into()], "m", "src/m", "/", false);
+        let row = suggestions.iter().find(|item| item.name == "main").expect("row");
+        assert_eq!(row.query_term.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn empty_generator_result_does_not_retrigger_on_the_next_keystroke() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let cwd = dir.path().display().to_string();
+        let script = format!("printf x >> '{}'; true", count.display());
+        let arg = ArgSpec {
+            name: "empty-retrigger".into(),
+            script: vec!["sh".into(), "-c".into(), script],
+            ..ArgSpec::default()
+        };
+        let first = generate_for_arg_with_search_term(&arg, &["cmd".into(), "a".into()], "a", "a", &cwd, false);
+        let second = generate_for_arg_with_search_term(&arg, &["cmd".into(), "ab".into()], "ab", "ab", &cwd, false);
+        assert!(first.is_empty(), "{first:?}");
+        assert!(second.is_empty(), "{second:?}");
+        assert_eq!(fs::read_to_string(&count).unwrap().matches('x').count(), 1);
+    }
+
+    #[test]
+    fn generator_arg_id_treats_trailing_space_as_the_same_slot() {
+        let arg = ArgSpec {
+            name: "pathspec".into(),
+            ..ArgSpec::default()
+        };
+        let after_space = generator_arg_id(&["git".into(), "add".into()], &arg, "/tmp", "");
+        let while_typing = generator_arg_id(&["git".into(), "add".into(), "s".into()], &arg, "/tmp", "s");
+        let other_command = generator_arg_id(&["git".into(), "rm".into()], &arg, "/tmp", "");
+        assert_eq!(after_space, while_typing);
+        assert_ne!(after_space, other_command);
+    }
+
+    #[test]
+    fn trailing_space_keeps_the_same_generator_arg_as_the_typed_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let cwd = dir.path().display().to_string();
+        let script = format!("printf 'src\\n'; printf x >> '{}'", count.display());
+        let arg = ArgSpec {
+            name: "trailing-space-arg-id".into(),
+            script: vec!["sh".into(), "-c".into(), script],
+            split_on: Some("\n".into()),
+            ..ArgSpec::default()
+        };
+        let first = generate_for_arg_with_search_term(&arg, &["git".into(), "add".into()], "", "", &cwd, false);
+        let second =
+            generate_for_arg_with_search_term(&arg, &["git".into(), "add".into(), "s".into()], "s", "s", &cwd, false);
+        assert!(first.iter().any(|row| row.name == "src"), "{first:?}");
+        assert!(second.iter().any(|row| row.name == "src"), "{second:?}");
+        assert_eq!(fs::read_to_string(&count).unwrap().matches('x').count(), 1);
+    }
+
+    #[test]
+    fn debounced_generator_with_a_query_term_withholds_stale_rows_while_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().display().to_string();
+        let run = |arg: &ArgSpec, tokens: &[&str], term: &str| {
+            let tokens: Vec<String> = tokens.iter().map(|token| (*token).to_string()).collect();
+            let rows = generate_for_arg_with_search_term(arg, &tokens, term, term, &cwd, false);
+            let (pending, _) = take_pending_generators();
+            let names: Vec<String> = rows.iter().map(|row| row.name.clone()).collect();
+            (names, pending)
+        };
+        let with_query_term = ArgSpec {
+            name: "query-term-debounce".into(),
+            script: vec!["sh".into(), "-c".into(), "printf 'alpha\\nbeta\\n'".into()],
+            split_on: Some("\n".into()),
+            debounce_ms: Some(200),
+            meta: SuggestionMeta {
+                get_query_term: Some("/".into()),
+                ..SuggestionMeta::default()
+            },
+            ..ArgSpec::default()
+        };
+        install_session(GeneratorSession::default());
+        // First keystroke: nothing cached yet, generator is debounced.
+        let (names, pending) = run(&with_query_term, &["tool"], "");
+        assert!(pending);
+        assert!(names.is_empty(), "{names:?}");
+        // Debounce follow-up: same term, the generator runs.
+        let (names, pending) = run(&with_query_term, &["tool"], "");
+        assert!(!pending);
+        assert_eq!(names, vec!["alpha", "beta"]);
+        // A new term re-debounces. Fig hides a loading generator's old rows
+        // when it has a `getQueryTerm`, so nothing is shown while waiting.
+        let (names, pending) = run(&with_query_term, &["tool", "a"], "a");
+        assert!(pending);
+        assert!(names.is_empty(), "{names:?}");
+
+        let without_query_term = ArgSpec {
+            name: "plain-debounce".into(),
+            meta: SuggestionMeta::default(),
+            ..with_query_term.clone()
+        };
+        install_session(GeneratorSession::default());
+        let _ = run(&without_query_term, &["tool"], "");
+        let (names, _) = run(&without_query_term, &["tool"], "");
+        assert_eq!(names, vec!["alpha", "beta"]);
+        // Without a query rule the previous rows stay, filtered by the term.
+        let (names, pending) = run(&without_query_term, &["tool", "a"], "a");
+        assert!(pending);
+        assert_eq!(names, vec!["alpha"]);
+        install_session(GeneratorSession::default());
+    }
+
+    #[test]
+    fn different_subcommands_do_not_share_a_generator_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let cwd = dir.path().display().to_string();
+        let script = format!("printf x >> '{}'; true", count.display());
+        let arg = ArgSpec {
+            name: "pathspec".into(),
+            script: vec!["sh".into(), "-c".into(), script],
+            ..ArgSpec::default()
+        };
+        let _ = generate_for_arg_with_search_term(&arg, &["git".into(), "add".into()], "", "", &cwd, false);
+        let _ = generate_for_arg_with_search_term(&arg, &["git".into(), "rm".into()], "", "", &cwd, false);
+        assert_eq!(fs::read_to_string(&count).unwrap().matches('x').count(), 2);
+    }
+
+    #[test]
+    fn history_template_rows_are_arg_rows_in_index_order_filtered_by_query() {
+        let arg = ArgSpec {
+            templates: vec![Template::History],
+            ..ArgSpec::default()
+        };
+        let values = vec!["feature".to_string(), "main".to_string(), "fix/1".to_string()];
+        let rows = generate_for_arg_with_history(&arg, &["git".into(), "checkout".into()], "", "", "/", false, &values);
+        let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, vec!["feature", "main", "fix/1"]);
+        assert!(rows.iter().all(|row| row.kind == "arg"), "{rows:?}");
+
+        let rows = generate_for_arg_with_history(
+            &arg,
+            &["git".into(), "checkout".into(), "f".into()],
+            "f",
+            "f",
+            "/",
+            false,
+            &values,
+        );
+        let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, vec!["feature", "fix/1"]);
     }
 
     #[test]
@@ -1368,18 +2222,177 @@ mod tests {
     }
 
     #[test]
-    fn native_script_still_runs_with_an_empty_cwd_when_there_is_no_js_hook() {
+    fn script_cache_without_a_cache_key_does_not_include_the_typed_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let script = format!("printf 'web\\napi\\n'; echo x >> '{}'", count.display());
+        let arg = ArgSpec {
+            script: vec!["sh".into(), "-c".into(), script],
+            split_on: Some("\n".into()),
+            cache_ttl_ms: Some(60_000),
+            ..ArgSpec::default()
+        };
+        let cwd = dir.path().display().to_string();
+        let host = crate::js_host::JsHost::new(dir.path().join("hooks"));
+        let first = host.enter(&cwd, || {
+            generate_for_arg(&arg, &["demo".into(), "w".into()], "w", &cwd, false)
+        });
+        let second = host.enter(&cwd, || {
+            generate_for_arg(&arg, &["demo".into(), "we".into()], "we", &cwd, false)
+        });
+        assert!(first.iter().any(|row| row.name == "web"), "{first:?}");
+        assert!(second.iter().any(|row| row.name == "web"), "{second:?}");
+        let written = fs::read_to_string(&count).unwrap_or_default();
+        assert_eq!(written.matches('x').count(), 1, "{written}");
+    }
+
+    #[test]
+    fn js_script_generators_without_a_cache_key_do_not_share_an_entry() {
+        // Fig keys a script generator's cache on the resolved
+        // `executeCommand` input. Every `kubectl` resource generator is a
+        // function-form `script` with `cache: { ttl }` and no `cacheKey`, so
+        // keying on the (empty) static script collided them all.
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = dir.path().join("hooks");
+        fs::create_dir(&hooks).unwrap();
+        fs::write(
+            hooks.join("kdemo_script_0.js"),
+            "export default function() { return ['printf', 'pod-alpha\\npod-beta\\n']; }\n",
+        )
+        .unwrap();
+        fs::write(
+            hooks.join("kdemo_script_1.js"),
+            "export default function() { return ['printf', 'node-1\\nnode-2\\n']; }\n",
+        )
+        .unwrap();
+        let host = crate::js_host::JsHost::new(hooks);
+        let pods = ArgSpec {
+            js_script: Some("kdemo#script#0".into()),
+            split_on: Some("\n".into()),
+            cache_ttl_ms: Some(3_600_000),
+            cache_strategy: Some("stale-while-revalidate".into()),
+            ..ArgSpec::default()
+        };
+        let nodes = ArgSpec {
+            js_script: Some("kdemo#script#1".into()),
+            ..pods.clone()
+        };
+        let cwd = dir.path().display().to_string();
+        let first = host.enter(&cwd, || {
+            generate_for_arg(&pods, &["kdemo".into(), "pods".into()], "", &cwd, false)
+        });
+        let second = host.enter(&cwd, || {
+            generate_for_arg(&nodes, &["kdemo".into(), "nodes".into()], "", &cwd, false)
+        });
+        assert_eq!(
+            first.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            vec!["pod-alpha", "pod-beta"]
+        );
+        assert_eq!(
+            second.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            vec!["node-1", "node-2"]
+        );
+    }
+
+    #[test]
+    fn script_cache_is_keyed_on_the_directory_even_without_cache_by_directory() {
+        // `JSON.stringify(executeCommandInput)` carries `cwd`, so the same
+        // command in another directory is a different entry in Fig.
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let script = format!("pwd; echo x >> '{}'", count.display());
+        let arg = ArgSpec {
+            script: vec!["sh".into(), "-c".into(), script],
+            split_on: Some("\n".into()),
+            cache_ttl_ms: Some(60_000),
+            ..ArgSpec::default()
+        };
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        let host = crate::js_host::JsHost::new(dir.path().join("hooks"));
+        let cwd_a = a.display().to_string();
+        let cwd_b = b.display().to_string();
+        let first = host.enter(&cwd_a, || generate_for_arg(&arg, &["demo".into()], "", &cwd_a, false));
+        let second = host.enter(&cwd_b, || generate_for_arg(&arg, &["demo".into()], "", &cwd_b, false));
+        assert!(first.iter().any(|row| row.name.ends_with("/a")), "{first:?}");
+        assert!(second.iter().any(|row| row.name.ends_with("/b")), "{second:?}");
+        assert_eq!(fs::read_to_string(&count).unwrap_or_default().matches('x').count(), 2);
+    }
+
+    #[test]
+    fn cached_script_output_is_reshaped_by_post_process_with_the_current_tokens() {
+        // Fig caches `executeCommand` stdout and re-runs `postProcess(out,
+        // tokens)` on every hit, so a hook that reads the typed tokens keeps
+        // seeing the current buffer.
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = dir.path().join("hooks");
+        fs::create_dir(&hooks).unwrap();
+        fs::write(
+            hooks.join("demo_postProcess_0.js"),
+            "export default function(out, tokens) { return out.split('\\n').filter(Boolean).map((line) => ({ name: line + '@' + tokens[tokens.length - 1] })); }\n",
+        )
+        .unwrap();
+        let host = crate::js_host::JsHost::new(hooks);
+        let count = dir.path().join("count");
+        let script = format!("printf 'row\\n'; echo x >> '{}'", count.display());
+        let arg = ArgSpec {
+            script: vec!["sh".into(), "-c".into(), script],
+            js_post_process: Some("demo#postProcess#0".into()),
+            cache_ttl_ms: Some(60_000),
+            ..ArgSpec::default()
+        };
+        let cwd = dir.path().display().to_string();
+        let first = host.enter(&cwd, || {
+            generate_for_arg(&arg, &["demo".into(), "one".into()], "", &cwd, false)
+        });
+        let second = host.enter(&cwd, || {
+            generate_for_arg(&arg, &["demo".into(), "two".into()], "", &cwd, false)
+        });
+        assert_eq!(
+            first.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            vec!["row@one"]
+        );
+        assert_eq!(
+            second.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            vec!["row@two"]
+        );
+        assert_eq!(fs::read_to_string(&count).unwrap_or_default().matches('x').count(), 1);
+    }
+
+    #[test]
+    fn script_without_split_on_or_post_process_yields_no_rows() {
+        // Fig `getScriptSuggestions`: `if (splitOn) … else if (postProcess) …`
+        // and otherwise `result` stays `[]`. The four `oxlint` generators
+        // shaped like this used to leak raw `oxlint --rules` lines.
         let dir = tempfile::tempdir().unwrap();
         let host = crate::js_host::JsHost::new(dir.path().join("hooks"));
         let arg = ArgSpec {
             script: vec!["printf".into(), "alpha\n".into()],
             ..ArgSpec::default()
         };
+        let cwd = dir.path().display().to_string();
+        let rows = host.enter(&cwd, || generate_for_arg(&arg, &["demo".into()], "", &cwd, false));
+        assert!(rows.is_empty(), "{rows:?}");
+        let rows = generate_for_arg(&arg, &["demo".into()], "", &cwd, false);
+        assert!(rows.is_empty(), "{rows:?}");
+    }
+
+    #[test]
+    fn scripts_need_a_cwd_like_every_fig_generator() {
+        // `haveContextForGenerator` gates script and custom generators alike.
+        let dir = tempfile::tempdir().unwrap();
+        let host = crate::js_host::JsHost::new(dir.path().join("hooks"));
+        let arg = ArgSpec {
+            script: vec!["printf".into(), "alpha\n".into()],
+            split_on: Some("\n".into()),
+            ..ArgSpec::default()
+        };
         let rows = host.enter("", || generate_for_arg(&arg, &["demo".into()], "", "", false));
-        assert_eq!(
-            rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-            vec!["alpha"]
-        );
+        assert!(rows.is_empty(), "{rows:?}");
+        let rows = generate_for_arg(&arg, &["demo".into()], "", "", false);
+        assert!(rows.is_empty(), "{rows:?}");
     }
 
     #[test]

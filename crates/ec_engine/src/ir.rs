@@ -25,11 +25,13 @@ pub enum Builtin {
     Cobra,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Template {
     Filepaths,
     Folders,
+    History,
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,10 +62,12 @@ pub struct SuggestionMeta {
     /// Type of the row before a wrapper such as auto-execute changed it.
     #[serde(default, alias = "originalType")]
     pub original_type: Option<String>,
-    /// String form of Fig's getQueryTerm.  Function forms are intentionally
-    /// omitted by the compiler because they cannot run in the native engine.
+    /// String form of Fig's getQueryTerm.
     #[serde(default, alias = "getQueryTerm")]
     pub get_query_term: Option<String>,
+    /// Extracted function-form `getQueryTerm`.
+    #[serde(default, alias = "jsGetQueryTerm")]
+    pub js_get_query_term: Option<String>,
     /// Explicit text to put in the shell buffer.  Fig calls this `insertValue`.
     #[serde(default, alias = "insertValue")]
     pub insert_value: Option<String>,
@@ -183,7 +187,8 @@ pub struct ArgSpec {
     #[serde(default, alias = "optionsCanBreakVariadicArg")]
     pub options_can_break_variadic_arg: Option<bool>,
     /// Completed token loads that command's spec from the registry, matching
-    /// Fig `isCommand`. In-progress tokens reuse the first-token command list.
+    /// Fig `isCommand`. While the token is still being typed, Fig does not
+    /// list bundled command names — only the argument's own generators.
     #[serde(default, alias = "isCommand")]
     pub is_command: bool,
     /// Like `is_command`, but path tokens resolve by basename (Fig `isScript`).
@@ -193,6 +198,92 @@ pub struct ArgSpec {
     /// (`python/` + `http` → `python/http`).
     #[serde(default, alias = "isModule")]
     pub is_module: Option<String>,
+    #[serde(default, alias = "jsLoadSpec")]
+    pub js_load_spec: Option<String>,
+    #[serde(default, alias = "jsGetQueryTerm")]
+    pub js_get_query_term: Option<String>,
+    #[serde(default, alias = "debounceMs")]
+    pub debounce_ms: Option<i64>,
+    #[serde(default, alias = "parserDirectives")]
+    pub parser_directives: Option<ParserDirectives>,
+    #[serde(default, alias = "cacheStrategy")]
+    pub cache_strategy: Option<String>,
+    /// Per-generator Fig metadata (trigger, templates, hooks). Flattened
+    /// script/builtin/template fields remain the execution snapshot.
+    #[serde(default)]
+    pub generators: Vec<GeneratorSpec>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GeneratorSpec {
+    #[serde(default)]
+    pub templates: Vec<Template>,
+    #[serde(default)]
+    pub script: Vec<String>,
+    #[serde(default, alias = "splitOn")]
+    pub split_on: Option<String>,
+    #[serde(default, alias = "jsPostProcess")]
+    pub js_post_process: Option<String>,
+    #[serde(default, alias = "jsCustom")]
+    pub js_custom: Option<String>,
+    #[serde(default, alias = "jsScript")]
+    pub js_script: Option<String>,
+    #[serde(default, alias = "cacheKey")]
+    pub cache_key: Option<String>,
+    #[serde(default, alias = "cacheByDirectory")]
+    pub cache_by_directory: Option<bool>,
+    #[serde(default, alias = "cacheTtl")]
+    pub cache_ttl_ms: Option<i64>,
+    #[serde(default, alias = "cacheStrategy")]
+    pub cache_strategy: Option<String>,
+    #[serde(default, alias = "scriptTimeout")]
+    pub script_timeout_ms: Option<i64>,
+    #[serde(default)]
+    pub builtin: Option<Builtin>,
+    #[serde(default, alias = "getQueryTerm")]
+    pub get_query_term: Option<String>,
+    #[serde(default, alias = "jsGetQueryTerm")]
+    pub js_get_query_term: Option<String>,
+    #[serde(default, alias = "jsFilterTemplateSuggestions")]
+    pub js_filter_template_suggestions: Option<String>,
+    #[serde(default)]
+    pub trigger: Option<GeneratorTrigger>,
+    /// Fig `filepaths({ extensions })` — suffix match from the right.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// Fig `filepaths({ equals })` — exact file/folder names that always pass.
+    #[serde(default)]
+    pub equals: Vec<String>,
+    /// Fig `filepaths({ showFolders })`: `only` / `never`. Omitted is `always`.
+    #[serde(default, alias = "showFolders")]
+    pub show_folders: Option<String>,
+    /// Fig `filepaths({ filterFolders })`: folders must also match extensions.
+    #[serde(default, alias = "filterFolders")]
+    pub filter_folders: Option<bool>,
+    #[serde(default, alias = "filePriority")]
+    pub file_priority: Option<i64>,
+    #[serde(default, alias = "folderPriority")]
+    pub folder_priority: Option<i64>,
+    /// Fig `filepaths({ rootDirectory })`: listing base instead of cwd.
+    #[serde(default, alias = "rootDirectory")]
+    pub root_directory: Option<String>,
+    /// Fig `filepaths({ matches })` regex source, without the `/…/` delimiters.
+    #[serde(default)]
+    pub matches: Option<String>,
+    #[serde(default, alias = "matchesFlags")]
+    pub matches_flags: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GeneratorTrigger {
+    #[serde(default)]
+    pub on: String,
+    #[serde(default)]
+    pub string: Option<serde_json::Value>,
+    #[serde(default)]
+    pub length: Option<i64>,
+    #[serde(default, alias = "jsTrigger")]
+    pub js_trigger: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -209,6 +300,11 @@ pub struct ParserDirectives {
     /// empty array intentionally disables attached separators.
     #[serde(default, alias = "optionArgSeparators")]
     pub option_arg_separators: Option<Vec<String>>,
+    /// Spec-level token rewrite used by Fig `parserDirectives.alias`.
+    #[serde(default)]
+    pub alias: Option<String>,
+    #[serde(default, alias = "jsAlias")]
+    pub js_alias: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,6 +380,8 @@ pub struct Spec {
     pub js_generate_spec: Option<String>,
     #[serde(default, alias = "generateSpecCacheKey")]
     pub generate_spec_cache_key: Option<String>,
+    #[serde(default, alias = "jsLoadSpec")]
+    pub js_load_spec: Option<String>,
 }
 
 impl Spec {
@@ -311,6 +409,21 @@ pub struct Registry {
     names: Vec<Arc<str>>,
     /// LRU of loaded spec trees (one entry per file, not per alias).
     loaded: VecDeque<Arc<Spec>>,
+    /// Specs overlaid from a user directory. They live outside `loaded` so
+    /// the LRU can never evict one and fall back to the bundled file it was
+    /// meant to replace — that fallback was silent, and for a command the
+    /// bundle does not know it left no completion at all.
+    pinned: Vec<Arc<Spec>>,
+}
+
+/// How [`Registry::overlay_specs_dir`] treats a name the bundle already has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayMode {
+    /// Fig `devCompletionsFolder`: tried before the public spec, so it wins.
+    Replace,
+    /// Fig `~/.fig/autocomplete/build`: consulted only when
+    /// `publicSpecExists(name)` is false, so a bundled name keeps its spec.
+    FillMissing,
 }
 
 const MAX_CACHED_SPECS: usize = 48;
@@ -351,7 +464,7 @@ impl Registry {
     fn insert_loaded(&mut self, spec: Spec, path: Option<&Path>) {
         let spec = Arc::new(spec);
         for name in &spec.names {
-            if name.is_empty() {
+            if name.is_empty() || self.is_pinned_name(name) {
                 continue;
             }
             if let Some(path) = path {
@@ -370,6 +483,12 @@ impl Registry {
             self.remember_name(Arc::<str>::from(name.as_str()));
         }
         self.loaded.push_back(spec);
+    }
+
+    fn is_pinned_name(&self, name: &str) -> bool {
+        self.specs
+            .get(name)
+            .is_some_and(|current| self.pinned.iter().any(|pinned| Arc::ptr_eq(pinned, current)))
     }
 
     fn remember_name(&mut self, name: Arc<str>) {
@@ -399,6 +518,13 @@ impl Registry {
 
     fn rebuild_names(&mut self) {
         let mut names: Vec<Arc<str>> = self.files.keys().cloned().collect();
+        names.extend(
+            self.pinned
+                .iter()
+                .flat_map(|spec| spec.names.iter())
+                .filter(|name| !name.is_empty())
+                .map(|name| Arc::<str>::from(name.as_str())),
+        );
         names.sort_by(|a, b| crate::query::cmp_ignore_ascii_case(a, b));
         names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         self.names = names;
@@ -560,6 +686,127 @@ impl Registry {
         index_dir(dir, dir, &mut registry)?;
         registry.rebuild_names();
         Ok(registry)
+    }
+
+    /// Overlay JSON specs from `dir` for the life of the registry. Used for
+    /// `autocomplete.devCompletionsFolder` ([`OverlayMode::Replace`]) and
+    /// `~/.fig/autocomplete/build` ([`OverlayMode::FillMissing`]).
+    pub fn overlay_specs_dir(&mut self, dir: &Path, mode: OverlayMode) {
+        if !dir.is_dir() {
+            return;
+        }
+        overlay_json_dir(self, dir, mode);
+        self.rebuild_names();
+    }
+
+    pub fn overlay_spec(&mut self, spec: Spec, mode: OverlayMode) {
+        let spec = Arc::new(spec);
+        let mut claimed = false;
+        for name in &spec.names {
+            if name.is_empty() {
+                continue;
+            }
+            if mode == OverlayMode::FillMissing && (self.files.contains_key(name.as_str()) || self.is_pinned_name(name))
+            {
+                continue;
+            }
+            self.specs.insert(name.clone(), spec.clone());
+            self.remember_name(Arc::<str>::from(name.as_str()));
+            claimed = true;
+        }
+        if claimed {
+            self.pinned.push(spec);
+        }
+    }
+}
+
+/// Load a standalone JSON spec without indexing a directory.
+pub fn load_standalone_spec(path: &Path) -> Option<Spec> {
+    let root = path.parent().unwrap_or(path);
+    load_spec_file(path, root, &HashMap::new(), &mut Vec::new()).ok()
+}
+
+/// `?` shortcuts: walk from `cwd` toward `/` for `.fig/autocomplete/build/{name}.json`.
+pub fn load_project_fig_spec(cwd: &str, name: &str) -> Option<Spec> {
+    if name.is_empty() || cwd.is_empty() {
+        return None;
+    }
+    let file = format!("{name}.json");
+    let mut dir = PathBuf::from(cwd);
+    loop {
+        for rel in [".fig/autocomplete/build", "fig/autocomplete/build"] {
+            let path = dir.join(rel).join(&file);
+            if path.is_file() {
+                return load_standalone_spec(&path);
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+pub fn load_home_fig_spec(name: &str) -> Option<Spec> {
+    if name.is_empty() {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    load_standalone_spec(
+        &PathBuf::from(home)
+            .join(".fig/autocomplete/build")
+            .join(format!("{name}.json")),
+    )
+}
+
+/// Script argv0 (`./foo`, `/usr/bin/git`): `{scriptDir}/.fig/autocomplete/build/{basename}.json`.
+pub fn load_script_local_spec(cwd: &str, command: &str) -> Option<Spec> {
+    let basename = command.rsplit(['/', '\\']).next().filter(|name| !name.is_empty())?;
+    let dir = command.rsplit_once(['/', '\\']).map_or("", |(dir, _)| dir);
+    let base = if dir.starts_with('/') || dir.starts_with('~') {
+        PathBuf::from(expand_home_dir(dir))
+    } else if dir == "." || dir.starts_with("./") {
+        PathBuf::from(cwd).join(dir.trim_start_matches("./"))
+    } else {
+        PathBuf::from(cwd).join(dir)
+    };
+    for rel in [".fig/autocomplete/build", "fig/autocomplete/build"] {
+        let path = base.join(rel).join(format!("{basename}.json"));
+        if path.is_file() {
+            return load_standalone_spec(&path);
+        }
+    }
+    None
+}
+
+fn expand_home_dir(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest).to_string_lossy().into_owned();
+    }
+    path.to_string()
+}
+
+fn overlay_json_dir(registry: &mut Registry, dir: &Path, mode: OverlayMode) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            overlay_json_dir(registry, &path, mode);
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name == "index.json" || !name.ends_with(".json") {
+            continue;
+        }
+        if let Some(spec) = load_standalone_spec(&path) {
+            registry.overlay_spec(spec, mode);
+        }
     }
 }
 
@@ -847,6 +1094,78 @@ mod tests {
         assert!(registry.get("cmd0").is_some());
         assert!(registry.is_cached("cmd0"));
         assert!(!registry.is_cached("cmd1"));
+    }
+
+    #[test]
+    fn overlaid_specs_survive_lru_eviction_and_fill_missing_never_shadows_the_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..60 {
+            write_spec(
+                dir.path(),
+                &format!("cmd{i}"),
+                &format!(r#"{{"names":["cmd{i}"],"description":"bundled"}}"#),
+            );
+        }
+        let overlay = dir.path().join("overlay");
+        fs::create_dir(&overlay).unwrap();
+        fs::write(
+            overlay.join("cmd0.json"),
+            r#"{"names":["cmd0"],"description":"from dev folder"}"#,
+        )
+        .unwrap();
+        fs::write(
+            overlay.join("mine.json"),
+            r#"{"names":["mine"],"description":"not in the bundle"}"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).expect("load");
+        registry.overlay_specs_dir(&overlay, OverlayMode::Replace);
+        assert_eq!(
+            registry.get("cmd0").map(|spec| spec.description.as_str()),
+            Some("from dev folder")
+        );
+        assert!(
+            registry
+                .command_names_matching("mi")
+                .iter()
+                .any(|(name, _)| name == "mine")
+        );
+
+        // Churn the LRU well past its capacity.
+        for i in 1..60 {
+            assert!(registry.get(&format!("cmd{i}")).is_some());
+        }
+        assert_eq!(
+            registry.get("cmd0").map(|spec| spec.description.as_str()),
+            Some("from dev folder")
+        );
+        assert_eq!(
+            registry.get("mine").map(|spec| spec.description.as_str()),
+            Some("not in the bundle")
+        );
+
+        // `~/.fig/autocomplete/build` only fills names the bundle lacks.
+        let home_build = dir.path().join("home-build");
+        fs::create_dir(&home_build).unwrap();
+        fs::write(
+            home_build.join("cmd1.json"),
+            r#"{"names":["cmd1"],"description":"home build"}"#,
+        )
+        .unwrap();
+        fs::write(
+            home_build.join("extra.json"),
+            r#"{"names":["extra"],"description":"home build"}"#,
+        )
+        .unwrap();
+        registry.overlay_specs_dir(&home_build, OverlayMode::FillMissing);
+        assert_eq!(
+            registry.get("cmd1").map(|spec| spec.description.as_str()),
+            Some("bundled")
+        );
+        assert_eq!(
+            registry.get("extra").map(|spec| spec.description.as_str()),
+            Some("home build")
+        );
     }
 
     #[test]

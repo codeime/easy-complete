@@ -6,22 +6,59 @@ use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use fancy_regex::Regex;
+
 use crate::query::matches_query;
 use crate::runtime::Suggestion;
 
 const MAX_RESULTS: usize = 50;
 
+/// Fig `filepaths({ … })` options recovered at compile time. Empty is the
+/// same as a bare `template: "filepaths"` / `"folders"`.
+#[derive(Debug, Clone, Default)]
+pub struct PathFilter<'a> {
+    pub folders_only: bool,
+    pub files_only: bool,
+    pub extensions: &'a [String],
+    pub equals: &'a [String],
+    pub filter_folders: bool,
+    pub file_priority: Option<i64>,
+    pub folder_priority: Option<i64>,
+    pub root_directory: Option<&'a str>,
+    pub environment: &'a [(String, String)],
+    pub matches: Option<&'a str>,
+    pub matches_flags: Option<&'a str>,
+}
+
+#[cfg(test)]
 pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -> Vec<Suggestion> {
-    if prefix == "~" {
-        return complete_path("~/", cwd, folders_only, fuzzy);
+    complete_path_filtered(
+        prefix,
+        cwd,
+        fuzzy,
+        &PathFilter {
+            folders_only,
+            ..PathFilter::default()
+        },
+    )
+}
+
+pub fn complete_path_filtered(prefix: &str, cwd: &str, fuzzy: bool, filter: &PathFilter<'_>) -> Vec<Suggestion> {
+    let list_cwd = filter.root_directory.filter(|root| !root.is_empty()).unwrap_or(cwd);
+    if list_cwd.is_empty() && !prefix.starts_with('/') && !prefix.starts_with('~') {
+        return Vec::new();
     }
-    let expanded = expand_home(prefix);
-    let (dir, query) = split_prefix(&expanded, cwd);
+    if prefix == "~" {
+        return complete_path_filtered("~/", cwd, fuzzy, filter);
+    }
+    let expanded = expand_home_with(prefix, filter.environment);
+    let (dir, query) = split_prefix(&expanded, list_cwd);
     let display_prefix = dir_prefix(prefix);
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(_) => return Vec::new(),
     };
+    let matches = compiled_matches(filter);
     let mut names = Vec::new();
     for entry in entries.flatten() {
         let mut name = entry.file_name().to_string_lossy().into_owned();
@@ -35,11 +72,17 @@ pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -
             continue;
         }
         let is_dir = entry.path().is_dir();
-        if folders_only && !is_dir {
+        if filter.folders_only && !is_dir {
+            continue;
+        }
+        if filter.files_only && is_dir {
             continue;
         }
         if is_dir && !name.ends_with('/') {
             name.push('/');
+        }
+        if !path_name_passes_filter(&name, is_dir, filter, matches.as_ref()) {
+            continue;
         }
         if !query.is_empty() && !matches_query(&name, &query, fuzzy) {
             continue;
@@ -67,7 +110,7 @@ pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -
         .take(MAX_RESULTS.saturating_sub(1))
         .map(|(name, is_dir)| {
             let name = format!("{display_prefix}{name}");
-            path_suggestion(name, is_dir)
+            path_suggestion_with_filter(name, is_dir, filter)
         })
         .collect::<Vec<_>>();
 
@@ -75,18 +118,98 @@ pub fn complete_path(prefix: &str, cwd: &str, folders_only: bool, fuzzy: bool) -
     // empty.  Keep the row itself as `../`, like the old generator.  Its
     // query-term is the final path segment: accepting it from `src/.` then
     // deletes only `.` and leaves the already-entered `src/` in place.
-    if matches_query("../", &query, fuzzy) {
-        suggestions.push(path_suggestion("../".into(), true).with_query_term(Some(query)));
+    if !filter.files_only
+        && matches_query("../", &query, fuzzy)
+        && path_name_passes_filter("../", true, filter, matches.as_ref())
+    {
+        suggestions.push(path_suggestion_with_filter("../".into(), true, filter).with_query_term(Some(query)));
     }
     suggestions
 }
 
-fn path_suggestion(name: String, is_dir: bool) -> Suggestion {
+fn path_name_passes_filter(name: &str, is_dir: bool, filter: &PathFilter<'_>, matches: Option<&Regex>) -> bool {
+    if filter.extensions.is_empty() && filter.equals.is_empty() && filter.matches.is_none() {
+        return true;
+    }
+    if is_dir && !filter.filter_folders {
+        return true;
+    }
+    if filter.equals.iter().any(|allowed| allowed == name) {
+        return true;
+    }
+    if matches.is_some_and(|regex| regex.is_match(name).unwrap_or(false)) {
+        return true;
+    }
+    extension_matches(name, filter.extensions)
+}
+
+/// Fig `matches` is a JavaScript `RegExp` source. `fancy-regex` keeps
+/// lookarounds such as direnv's `/\.env(?!rc)/` instead of dropping the filter.
+fn compiled_matches(filter: &PathFilter<'_>) -> Option<Regex> {
+    let source = filter.matches.filter(|source| !source.is_empty())?;
+    let mut prefix = String::new();
+    if let Some(flags) = filter.matches_flags {
+        if flags.contains('i') {
+            prefix.push('i');
+        }
+        if flags.contains('m') {
+            prefix.push('m');
+        }
+        if flags.contains('s') {
+            prefix.push('s');
+        }
+    }
+    let pattern = if prefix.is_empty() {
+        source.to_string()
+    } else {
+        format!("(?{prefix}){source}")
+    };
+    Regex::new(&pattern).ok()
+}
+
+/// Fig `filepaths` matches `extensions` against successive suffixes of the
+/// name after the first dot (`foo.bar.py` → `py`, then `bar.py`).
+fn extension_matches(name: &str, extensions: &[String]) -> bool {
+    if extensions.is_empty() {
+        return false;
+    }
+    let mut parts = name.split('.');
+    let Some(_) = parts.next() else {
+        return false;
+    };
+    let rest: Vec<&str> = parts.collect();
+    if rest.is_empty() {
+        return false;
+    }
+    let mut suffix = rest[rest.len() - 1].to_string();
+    let mut index = rest.len() - 1;
+    loop {
+        if extensions.iter().any(|extension| extension == &suffix) {
+            return true;
+        }
+        if index == 0 {
+            return false;
+        }
+        index -= 1;
+        suffix = format!("{}.{}", rest[index], suffix);
+    }
+}
+
+fn path_suggestion_with_filter(name: String, is_dir: bool, filter: &PathFilter<'_>) -> Suggestion {
     let kind = if is_dir { "folder" } else { "file" };
     // The WebView leaves description empty and Description.tsx falls back to
     // the lowercase suggestion type.  Keeping it explicit makes the native
     // row independent of that UI fallback while preserving the visible text.
-    Suggestion::new(name.clone(), kind, kind).with_insert_value(name)
+    let suggestion = Suggestion::new(name.clone(), kind, kind).with_insert_value(name);
+    let priority = if is_dir {
+        filter.folder_priority
+    } else {
+        filter.file_priority
+    };
+    match priority {
+        Some(priority) => suggestion.with_priority(priority),
+        None => suggestion,
+    }
 }
 
 /// Approximate JavaScript's default `localeCompare` for the ASCII-heavy shell
@@ -126,22 +249,28 @@ fn compare_file_names(left: &str, right: &str) -> Ordering {
         .unwrap_or_else(|| left.len().cmp(&right.len()))
 }
 
+#[cfg(test)]
 pub fn expand_home(path: &str) -> String {
-    expand_environment_variables(&expand_tilde(path))
+    expand_home_with(path, &[])
+}
+
+fn expand_home_with(path: &str, env: &[(String, String)]) -> String {
+    expand_environment_variables(&expand_tilde(path, env), env)
 }
 
 /// Expand the same shell-prefix forms that the legacy `shellExpand` helper
 /// supports, without invoking a shell.  The returned path is only used for
 /// filesystem lookup; callers keep the original prefix for insertion text.
-fn expand_tilde(path: &str) -> String {
+fn expand_tilde(path: &str, env: &[(String, String)]) -> String {
     let Some(rest) = path.strip_prefix('~') else {
         return path.to_string();
     };
 
-    // `~` and `~/...` use the current process HOME, preserving the existing
-    // behavior when HOME is unavailable.
+    // `~` and `~/...` use the shell HOME when bound, then the process HOME.
     if rest.is_empty() || rest.starts_with('/') {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = environment_value("HOME", env)
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
         // Strip all separators before joining.  `Path::join` treats an
         // absolute suffix as a replacement path, whereas shell tilde
         // expansion keeps the user's separators after the home directory
@@ -191,7 +320,7 @@ fn join_home_prefix(home: &Path, suffix: &str, append_slash: bool) -> String {
 /// environment.  Unknown variables and malformed expressions are copied
 /// literally, matching the old helper's nullish fallback behavior while
 /// avoiding shell evaluation and command substitution.
-fn expand_environment_variables(path: &str) -> String {
+fn expand_environment_variables(path: &str, env: &[(String, String)]) -> String {
     let chars: Vec<char> = path.chars().collect();
     let mut expanded = String::with_capacity(path.len());
     let mut index = 0;
@@ -212,7 +341,7 @@ fn expand_environment_variables(path: &str) -> String {
             let end = index + 2 + relative_end;
             let body: String = chars[index + 2..end].iter().collect();
             if let Some((name, fallback)) = parse_braced_variable(&body) {
-                if let Some(value) = environment_value(name) {
+                if let Some(value) = environment_value(name, env) {
                     expanded.push_str(&value);
                 } else if let Some(fallback) = fallback {
                     expanded.push_str(fallback);
@@ -242,7 +371,7 @@ fn expand_environment_variables(path: &str) -> String {
         }
 
         let name: String = chars[name_start..name_end].iter().collect();
-        if let Some(value) = environment_value(&name) {
+        if let Some(value) = environment_value(&name, env) {
             expanded.push_str(&value);
         } else {
             expanded.extend(chars[index..name_end].iter());
@@ -264,7 +393,10 @@ fn is_environment_name_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_'
 }
 
-fn environment_value(name: &str) -> Option<String> {
+fn environment_value(name: &str, env: &[(String, String)]) -> Option<String> {
+    if let Some((_, value)) = env.iter().find(|(key, _)| key == name) {
+        return Some(value.clone());
+    }
     // `var` deliberately rejects non-Unicode values instead of lossy
     // conversion; an unrepresentable environment value is left literal.
     std::env::var(name).ok()
@@ -331,7 +463,11 @@ fn dir_prefix(prefix: &str) -> String {
 
 fn split_prefix(prefix: &str, cwd: &str) -> (PathBuf, String) {
     let base = if cwd.is_empty() {
-        PathBuf::from(".")
+        if prefix.starts_with('/') || prefix.starts_with('~') {
+            PathBuf::from("/")
+        } else {
+            return (PathBuf::new(), String::new());
+        }
     } else {
         PathBuf::from(cwd)
     };
@@ -471,6 +607,153 @@ mod tests {
         let home_dir = expand_home("~");
         assert!(home_dir.ends_with('/'), "{home_dir}");
         assert_eq!(expand_home("~/"), home_dir);
+    }
+
+    #[test]
+    fn matches_regex_keeps_env_files_and_unfiltered_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".env"), "").unwrap();
+        fs::write(dir.path().join(".env.foo"), "").unwrap();
+        fs::write(dir.path().join("keep.py"), "").unwrap();
+        fs::create_dir(dir.path().join("folder")).unwrap();
+        let cwd = dir.path().display().to_string();
+        let names: Vec<_> = complete_path_filtered(
+            "",
+            &cwd,
+            false,
+            &PathFilter {
+                matches: Some(r"^\.env.*$"),
+                ..PathFilter::default()
+            },
+        )
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+        assert!(names.contains(&".env".into()), "{names:?}");
+        assert!(names.contains(&".env.foo".into()), "{names:?}");
+        assert!(names.contains(&"folder/".into()), "{names:?}");
+        assert!(names.contains(&"../".into()), "{names:?}");
+        assert!(!names.contains(&"keep.py".into()), "{names:?}");
+    }
+
+    #[test]
+    fn matches_javascript_negative_lookahead() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".env"), "").unwrap();
+        fs::write(dir.path().join(".envrc"), "").unwrap();
+        fs::write(dir.path().join(".env.local"), "").unwrap();
+        let cwd = dir.path().display().to_string();
+        let names: Vec<_> = complete_path_filtered(
+            "",
+            &cwd,
+            false,
+            &PathFilter {
+                matches: Some(r"\.env(?!rc)"),
+                matches_flags: Some("g"),
+                ..PathFilter::default()
+            },
+        )
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+        assert!(names.contains(&".env".into()), "{names:?}");
+        assert!(names.contains(&".env.local".into()), "{names:?}");
+        assert!(!names.contains(&".envrc".into()), "{names:?}");
+    }
+
+    #[test]
+    fn equals_keeps_named_file_and_unfiltered_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        fs::write(dir.path().join("keep.py"), "").unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        let cwd = dir.path().display().to_string();
+        let equals = vec!["Cargo.toml".into()];
+        let names: Vec<_> = complete_path_filtered(
+            "",
+            &cwd,
+            false,
+            &PathFilter {
+                equals: &equals,
+                ..PathFilter::default()
+            },
+        )
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+        assert!(names.contains(&"Cargo.toml".into()), "{names:?}");
+        assert!(names.contains(&"src/".into()), "{names:?}");
+        assert!(!names.contains(&"keep.py".into()), "{names:?}");
+    }
+
+    #[test]
+    fn filter_folders_drops_unrelated_directories_and_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("keep.py"), "").unwrap();
+        fs::create_dir(dir.path().join("folder")).unwrap();
+        let cwd = dir.path().display().to_string();
+        let extensions = vec!["py".into()];
+        let names: Vec<_> = complete_path_filtered(
+            "",
+            &cwd,
+            false,
+            &PathFilter {
+                extensions: &extensions,
+                filter_folders: true,
+                ..PathFilter::default()
+            },
+        )
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+        assert!(names.contains(&"keep.py".into()), "{names:?}");
+        assert!(!names.contains(&"folder/".into()), "{names:?}");
+        assert!(!names.contains(&"../".into()), "{names:?}");
+    }
+
+    #[test]
+    fn extensions_keep_matching_suffixes_and_unfiltered_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("keep.py"), "").unwrap();
+        fs::write(dir.path().join("drop.txt"), "").unwrap();
+        fs::write(dir.path().join("foo.bar.py"), "").unwrap();
+        fs::create_dir(dir.path().join("folder")).unwrap();
+        let cwd = dir.path().display().to_string();
+        let extensions = vec!["py".into()];
+        let names: Vec<_> = complete_path_filtered(
+            "",
+            &cwd,
+            false,
+            &PathFilter {
+                extensions: &extensions,
+                ..PathFilter::default()
+            },
+        )
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+        assert!(names.contains(&"keep.py".into()), "{names:?}");
+        assert!(names.contains(&"foo.bar.py".into()), "{names:?}");
+        assert!(names.contains(&"folder/".into()), "{names:?}");
+        assert!(!names.contains(&"drop.txt".into()), "{names:?}");
+    }
+
+    #[test]
+    fn shell_environment_overrides_process_variables() {
+        let key = "EC_FILEGEN_SHELL_ENV";
+        let previous = std::env::var_os(key);
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var(key, "/from-process") };
+        let env = vec![(key.to_string(), "/from-shell".into())];
+        assert_eq!(expand_home_with(&format!("${key}/child"), &env), "/from-shell/child");
+        assert_eq!(expand_home(&format!("${key}/child")), "/from-process/child");
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
     }
 
     #[test]

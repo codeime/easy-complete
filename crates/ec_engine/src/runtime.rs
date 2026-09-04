@@ -59,6 +59,10 @@ pub struct CompleteRequest {
     /// not clone every `KEY=value` pair.
     #[serde(default, skip_serializing_if = "empty_env")]
     pub environment_variables: Arc<Vec<(String, String)>>,
+    /// Raw `alias` output from the shell integration. Fig expanded argv0
+    /// from this map before walking specs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 fn empty_env(value: &Arc<Vec<(String, String)>>) -> bool {
@@ -78,6 +82,7 @@ impl Default for CompleteRequest {
             current_shell: None,
             current_process: None,
             environment_variables: Arc::new(Vec::new()),
+            alias: None,
         }
     }
 }
@@ -130,6 +135,10 @@ pub struct Suggestion {
     /// permits mandatory arguments without a display name.
     #[serde(default, skip_serializing_if = "is_false")]
     pub requires_arg: bool,
+    /// Every spelling from the source `name` array. History dedup matches
+    /// against this full set, the same way the WebView used `makeArray(name)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alias_names: Vec<String>,
 }
 
 impl Suggestion {
@@ -152,7 +161,13 @@ impl Suggestion {
             query_term: None,
             is_dangerous: false,
             requires_arg: false,
+            alias_names: Vec::new(),
         }
+    }
+
+    pub fn with_alias_names(mut self, names: Vec<String>) -> Self {
+        self.alias_names = names;
+        self
     }
 
     pub fn with_args_hint(mut self, hint: impl Into<String>) -> Self {
@@ -238,17 +253,31 @@ pub fn query_term_for(search_term: &str, separator: Option<&str>) -> String {
     search_term[index + first.len_utf8()..].to_string()
 }
 
+/// String `getQueryTerm` first; function form next. A throwing function keeps
+/// the whole search term, matching `getQueryTermForSuggestion`.
+pub fn query_term_with_hook(search_term: &str, separator: Option<&str>, js_hook: Option<&str>) -> String {
+    if let Some(hook_id) = js_hook.filter(|id| !id.is_empty())
+        && let Some((host, _)) = crate::js_host::current()
+    {
+        return host
+            .get_query_term(hook_id, search_term)
+            .unwrap_or_else(|| search_term.to_string());
+    }
+    query_term_for(search_term, separator)
+}
+
 /// Compute the matching term for one static suggestion. Explicit string
 /// getQueryTerm has priority; shortcut rows use the legacy `?` prefix rule
 /// only when no explicit query-term override is present.
-pub(crate) fn suggestion_query_term(
+pub(crate) fn suggestion_query_term_with_hook(
     kind: &str,
     explicit_separator: Option<&str>,
+    js_hook: Option<&str>,
     query: &str,
     search_term: &str,
 ) -> (String, Option<String>) {
-    if let Some(separator) = explicit_separator {
-        let term = query_term_for(search_term, Some(separator));
+    if explicit_separator.is_some() || js_hook.is_some() {
+        let term = query_term_with_hook(search_term, explicit_separator, js_hook);
         return (term.clone(), Some(term));
     }
     if kind == "shortcut" && search_term.starts_with('?') {
@@ -286,6 +315,12 @@ pub struct CompleteResult {
     /// selected (for example a required special argument with no results).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_arg: Option<CurrentArg>,
+    /// Generators were delayed by `debounce` and should be requested again
+    /// after [`Self::debounce_ms`]. Static rows in this result are current.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pending_generators: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debounce_ms: Option<i64>,
 }
 
 /// Return the root-command key used by native ranking for this edit buffer.
@@ -301,12 +336,18 @@ pub fn ranking_root_command(buffer: &str, cursor: Option<u32>) -> String {
 }
 
 pub struct Engine {
+    specs_dir: PathBuf,
     registry: Registry,
     js_host: crate::js_host::JsHost,
     frecency: Frecency,
     acceptance: Arc<Mutex<rank::AcceptanceIndex>>,
     frecency_loaded: bool,
     history_source: Option<rank::HistorySourceConfig>,
+    /// Spec-aware `template: "history"` index over the frecency lines. Rebuilt
+    /// only when the loaded history changes; requests share it by `Arc`.
+    history: Arc<crate::history::HistoryStore>,
+    /// Generator cache that has to survive the per-request attempt thread.
+    generator_session: crate::generate::GeneratorSession,
 }
 
 impl Engine {
@@ -325,11 +366,13 @@ impl Engine {
     /// Index the specs directory without parsing any spec: `Registry` resolves
     /// files lazily, so this is only `index.json` plus a directory walk.
     pub(crate) fn load_registry(specs_dir: &Path) -> anyhow::Result<Registry> {
-        if specs_dir.is_dir() {
-            Registry::load(specs_dir)
+        let mut registry = if specs_dir.is_dir() {
+            Registry::load(specs_dir)?
         } else {
-            Ok(Registry::new())
-        }
+            Registry::new()
+        };
+        overlay_local_spec_dirs(&mut registry);
+        Ok(registry)
     }
 
     /// Build around an existing index. The supervisor uses this to recover from
@@ -340,12 +383,15 @@ impl Engine {
         acceptance: Arc<Mutex<rank::AcceptanceIndex>>,
     ) -> Self {
         Self {
+            specs_dir: specs_dir.to_path_buf(),
             registry,
             js_host: crate::js_host::JsHost::from_specs_dir(specs_dir),
             frecency: Frecency::default(),
             acceptance,
             frecency_loaded: false,
             history_source: None,
+            history: Arc::default(),
+            generator_session: crate::generate::GeneratorSession::default(),
         }
     }
 
@@ -366,12 +412,14 @@ impl Engine {
         acceptance: Arc<Mutex<rank::AcceptanceIndex>>,
     ) -> anyhow::Result<Self> {
         let js_host = crate::js_host::JsHost::from_specs_dir(&specs_dir);
-        let registry = if specs_dir.is_dir() {
+        let mut registry = if specs_dir.is_dir() {
             Registry::load(&specs_dir)?
         } else {
             Registry::new()
         };
+        overlay_local_spec_dirs(&mut registry);
         Ok(Self {
+            specs_dir,
             registry,
             js_host,
             frecency,
@@ -386,11 +434,30 @@ impl Engine {
                 all_shells: false,
                 current_shell: rank::HistoryShell::Unknown,
             }),
+            history: Arc::default(),
+            generator_session: crate::generate::GeneratorSession::default(),
         })
     }
 
     pub fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    /// The WebView's `clear-cache` event (`ec hook clear-autocomplete-cache`):
+    /// `resetCaches()` dropped every loaded and generated spec, and
+    /// `generatorCache.clear()` every generator result. Re-index the specs
+    /// directory so a spec edited under `devCompletionsFolder` or
+    /// `~/.fig/autocomplete/build` is read again, and forget every hook
+    /// result, the debounce session and the history argument index built on
+    /// the old specs.
+    pub fn clear_caches(&mut self) {
+        crate::js_host::clear_caches(&self.js_host);
+        self.generator_session = crate::generate::GeneratorSession::default();
+        self.history = Arc::default();
+        match Self::load_registry(&self.specs_dir) {
+            Ok(registry) => self.registry = registry,
+            Err(err) => tracing::warn!(%err, "clear-cache: specs directory could not be re-indexed"),
+        }
     }
 
     /// Record a successful completion acceptance. This updates the engine's
@@ -434,7 +501,14 @@ impl Engine {
         self.history_source = Some(source);
     }
 
-    pub fn complete(&mut self, mut request: CompleteRequest) -> anyhow::Result<CompleteResult> {
+    pub fn complete(&mut self, request: CompleteRequest) -> anyhow::Result<CompleteResult> {
+        crate::generate::install_session(std::mem::take(&mut self.generator_session));
+        let result = self.complete_with_thread_session(request);
+        self.generator_session = crate::generate::take_session();
+        result
+    }
+
+    fn complete_with_thread_session(&mut self, mut request: CompleteRequest) -> anyhow::Result<CompleteResult> {
         let buffer = lookup::completion_buffer(&request.buffer, request.cursor);
         let (tokens, ends_with_space) = lookup::tokenize(buffer);
 
@@ -442,6 +516,11 @@ impl Engine {
         if history_loading_enabled(history_disabled) {
             self.ensure_frecency(&request);
         }
+        let lines = self.frecency.command_lines();
+        if !Arc::ptr_eq(self.history.lines(), &lines) {
+            self.history = Arc::new(crate::history::HistoryStore::new(lines));
+        }
+        crate::generate::set_history(Arc::clone(&self.history));
         if request.history_only {
             let history_search_term = if ends_with_space {
                 String::new()
@@ -467,10 +546,10 @@ impl Engine {
                     fuzzy: effective_fuzzy,
                     search_term: history_search_term,
                     match_term: String::new(),
-                    current_arg: None,
+                    ..CompleteResult::default()
                 });
             }
-            let prefix = rank::history_prefix(&tokens, &history_match_term);
+            let prefix = rank::history_prefix_from_buffer(buffer, ends_with_space, &tokens);
             let query = history_match_term.as_str();
             let suggestions = prefix.map_or_else(
                 || self.frecency.history_suggestions(query, effective_fuzzy, true),
@@ -484,7 +563,7 @@ impl Engine {
                 fuzzy: effective_fuzzy,
                 search_term: history_search_term,
                 match_term: history_match_term,
-                current_arg: None,
+                ..CompleteResult::default()
             });
         }
         let mut result = {
@@ -498,7 +577,8 @@ impl Engine {
         };
         if should_merge_history(request.include_history, history_disabled) {
             let effective_fuzzy = result.fuzzy;
-            rank::merge_history(&mut result, &tokens, &self.frecency, effective_fuzzy);
+            let prefix = rank::history_prefix_from_buffer(buffer, ends_with_space, &tokens);
+            rank::merge_history_with_prefix(&mut result, &tokens, prefix, &self.frecency, effective_fuzzy);
         }
         let alphabetical =
             fig_settings::settings::get_string_or("autocomplete.sortMethod", "default".into()) == "alphabetical";
@@ -529,6 +609,28 @@ impl Engine {
             }
         }
         Ok(result)
+    }
+}
+
+/// Fig `importSpecFromLocation`: `devCompletionsFolder` is consulted first,
+/// and only while `isInDevMode()` (`autocomplete.developerMode` or
+/// `autocomplete.developerModeNPM`); `~/.fig/autocomplete/build` is reached
+/// only when `publicSpecExists(name)` is false, so it never shadows a bundled
+/// spec.
+fn overlay_local_spec_dirs(registry: &mut Registry) {
+    let dev_mode = fig_settings::settings::get_bool_or("autocomplete.developerMode", false)
+        || fig_settings::settings::get_bool_or("autocomplete.developerModeNPM", false);
+    if dev_mode
+        && let Ok(Some(dev)) = fig_settings::settings::get_string("autocomplete.devCompletionsFolder")
+        && !dev.is_empty()
+    {
+        registry.overlay_specs_dir(std::path::Path::new(&dev), crate::ir::OverlayMode::Replace);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        registry.overlay_specs_dir(
+            &std::path::PathBuf::from(home).join(".fig/autocomplete/build"),
+            crate::ir::OverlayMode::FillMissing,
+        );
     }
 }
 
@@ -894,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn cobra_fallback_for_unknown_command() {
+    fn unknown_command_does_not_run_cobra_complete() {
         let _lock = engine_lock();
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("fakecobra");
@@ -910,13 +1012,11 @@ mod tests {
                 buffer: format!("{} al", bin.display()),
                 cwd: dir.path().display().to_string(),
                 cursor: None,
+                include_history: false,
                 ..CompleteRequest::default()
             })
             .expect("complete");
-        let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"alpha"), "{names:?}");
-        assert!(names.contains(&"alpaca"), "{names:?}");
-        assert!(!names.contains(&"beta"), "{names:?}");
+        assert!(result.suggestions.is_empty(), "{:?}", result.suggestions);
     }
 
     #[test]
@@ -1146,7 +1246,7 @@ mod tests {
               "args":[
                 {"name":"target","isDangerous":true,
                  "suggestions":[{"names":["wipe"]}],
-                 "script":["printf","generated\\n"]}
+                 "script":["printf","generated\\n"],"splitOn":"\n"}
               ]
             }"#,
         );

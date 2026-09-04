@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::query::MatchScore;
 use crate::runtime::{CompleteResult, Suggestion};
 
-const HISTORY_LIMIT: usize = 20;
+/// Fig did not cap unique history rows. Keep a high ceiling so ranking cannot
+/// drop a recent match the overlay would have shown, without walking an
+/// unbounded database on every keystroke.
+const HISTORY_LIMIT: usize = 10_000;
 const CUSTOM_HISTORY_TIMEOUT: Duration = Duration::from_secs(5);
 /// State key used for the native equivalent of the WebView's recency index.
 /// The value is a JSON object `{ command: { acceptedName: unixMillis } }`.
@@ -75,6 +78,11 @@ pub struct Frecency {
     /// command or `cmd sub` prefix -> (count, last_seen_unix_secs)
     stats: HashMap<String, (u32, u64)>,
     commands: Vec<(String, u64)>,
+    /// The same commands as plain lines, shared with the `history` template
+    /// generator. History is loaded once and read on every keystroke, so a
+    /// per-request `Vec<String>` clone of ten thousand lines was the wrong
+    /// shape; the thread-local takes a clone of this `Arc` instead.
+    lines: Arc<Vec<String>>,
     /// `""` / `"git"` / `"git checkout"` → next-token occurrence counts.
     /// Built once when history is loaded so ranking does not walk the list
     /// on every keystroke.
@@ -101,11 +109,17 @@ impl Frecency {
             }
         }
         let next_word_counts = next_word_counts(&stored);
+        let lines = Arc::new(stored.iter().map(|(command, _)| command.clone()).collect());
         Self {
             stats,
             commands: stored,
+            lines,
             next_word_counts,
         }
+    }
+
+    pub(crate) fn command_lines(&self) -> Arc<Vec<String>> {
+        Arc::clone(&self.lines)
     }
 
     pub fn score(&self, key: &str) -> i64 {
@@ -485,13 +499,24 @@ fn completion_prefix(tokens: &[String], search_term: &str) -> String {
     }
 }
 
+#[cfg(test)]
 pub fn merge_history(result: &mut CompleteResult, tokens: &[String], frecency: &Frecency, fuzzy: bool) {
+    merge_history_with_prefix(result, tokens, None, frecency, fuzzy);
+}
+
+pub fn merge_history_with_prefix(
+    result: &mut CompleteResult,
+    tokens: &[String],
+    buffer_prefix: Option<String>,
+    frecency: &Frecency,
+    fuzzy: bool,
+) {
     if tokens.is_empty() {
         return;
     }
 
     let query = matching_term(result);
-    let history = if let Some(prefix) = history_prefix(tokens, query) {
+    let history = if let Some(prefix) = buffer_prefix.or_else(|| history_prefix(tokens, query)) {
         frecency.history_suffix_suggestions(&prefix, query, fuzzy)
     } else {
         // While completing the first token, the old UI keeps the complete
@@ -507,9 +532,12 @@ pub fn merge_history(result: &mut CompleteResult, tokens: &[String], frecency: &
         .suggestions
         .iter()
         .flat_map(|suggestion| {
-            [Some(suggestion.name.as_str()), suggestion.primary_name.as_deref()]
-                .into_iter()
-                .flatten()
+            suggestion
+                .alias_names
+                .iter()
+                .map(String::as_str)
+                .chain([suggestion.name.as_str()])
+                .chain(suggestion.primary_name.as_deref())
                 .map(str::to_string)
         })
         .collect();
@@ -546,6 +574,46 @@ pub(crate) fn history_prefix(tokens: &[String], query: &str) -> Option<String> {
     }
 }
 
+/// WebView `getFullHistorySuggestions` slices the original command buffer:
+/// `originalNode.startIndex + text.length - innerText.length`. Quotes and
+/// doubled spaces stay in the prefix; alias expansion does not.
+pub(crate) fn history_prefix_from_buffer(
+    command_buffer: &str,
+    ends_with_space: bool,
+    tokens: &[String],
+) -> Option<String> {
+    if tokens.is_empty() || (tokens.len() == 1 && !ends_with_space) {
+        return None;
+    }
+    if ends_with_space {
+        let mut prefix = command_buffer.to_string();
+        if !prefix.ends_with(' ') {
+            prefix.push(' ');
+        }
+        return Some(prefix);
+    }
+    let raw = crate::lookup::current_token_raw(command_buffer);
+    let inner = tokens.last().map(String::as_str).unwrap_or_default();
+    if command_buffer.len() < raw.len() {
+        return history_prefix(tokens, inner);
+    }
+    let start = command_buffer.len() - raw.len();
+    // Quotes are part of the original node text and stay in the prefix.
+    // Backslash-escaped spaces are not: copying `text.length - innerText`
+    // would swallow the first character of the token and miss history rows.
+    let prefix_end = if raw.starts_with(['\'', '"']) || raw.starts_with("$'") {
+        start.saturating_add(raw.len().saturating_sub(inner.len()))
+    } else {
+        start
+    };
+    let prefix = command_buffer.get(..prefix_end.min(command_buffer.len()))?;
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix.to_string())
+    }
+}
+
 /// Load the complete local history database.  This remains public for the
 /// headless/diagnostic callers; the engine uses [`load_commands_for`] so the
 /// selected source follows the legacy custom-command and shell settings.
@@ -574,10 +642,41 @@ pub(crate) fn load_commands_for(config: &HistorySourceConfig) -> Vec<(String, u6
         return load_database_commands(|_| true);
     }
 
+    let mut from_shell = Vec::new();
     match config.current_shell {
-        HistoryShell::Unknown => load_database_commands(|_| true),
-        _ => load_database_commands(|row_shell| includes_database_shell(config, *row_shell)),
+        HistoryShell::Zsh => {
+            from_shell.extend(login_history_commands("zsh", "fc -R; fc -ln 1"));
+        },
+        HistoryShell::Bash => {
+            from_shell.extend(login_history_commands("bash", "fc -ln 1"));
+        },
+        HistoryShell::Fish => {
+            from_shell.extend(login_history_commands("fish", "history search"));
+        },
+        HistoryShell::Unknown => {},
     }
+    if config.all_shells {
+        if config.current_shell != HistoryShell::Zsh {
+            from_shell.extend(login_history_commands("zsh", "fc -R; fc -ln 1"));
+        }
+        if config.current_shell != HistoryShell::Bash {
+            from_shell.extend(login_history_commands("bash", "fc -ln 1"));
+        }
+    }
+    if from_shell.is_empty() {
+        match config.current_shell {
+            HistoryShell::Unknown => load_database_commands(|_| true),
+            _ => load_database_commands(|row_shell| includes_database_shell(config, *row_shell)),
+        }
+    } else {
+        from_shell
+    }
+}
+
+fn login_history_commands(shell: &str, command: &str) -> Vec<(String, u64)> {
+    crate::process::try_execute_isolated_success(shell, &["-lc".into(), command.into()], "", CUSTOM_HISTORY_TIMEOUT)
+        .map(|output| history_commands_from_output(&output))
+        .unwrap_or_default()
 }
 
 fn includes_database_shell(config: &HistorySourceConfig, row_shell: HistoryShell) -> bool {
@@ -676,7 +775,7 @@ mod tests {
             search_term: "ch".into(),
             match_term: "ch".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply(&mut result, &["ch".into()], &frecency);
         assert_eq!(result.suggestions[0].name, "cherry-pick");
@@ -695,7 +794,7 @@ mod tests {
             search_term: "git".into(),
             match_term: "git".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply(&mut result, &["git".into()], &frecency);
         assert_eq!(
@@ -719,7 +818,7 @@ mod tests {
             search_term: "scope@foo".into(),
             match_term: "scope@foo".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply(&mut result, &["cmd".into(), "scope@foo".into()], &frecency);
         assert_eq!(result.suggestions[0].name, "foo");
@@ -737,7 +836,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply(&mut result, &["git".into()], &frecency);
         assert_eq!(
@@ -763,7 +862,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply(&mut result, &[], &frecency);
         assert_eq!(
@@ -793,7 +892,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply_with_acceptance(
             &mut result,
@@ -813,7 +912,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply_with_acceptance(
             &mut isolated,
@@ -840,7 +939,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply_with_acceptance(
             &mut before,
@@ -861,7 +960,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply_with_acceptance(
             &mut after,
@@ -898,7 +997,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply_with_acceptance(
             &mut result,
@@ -926,7 +1025,7 @@ mod tests {
             search_term: "git".into(),
             match_term: "git".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         merge_history(&mut result, &["git".into()], &frecency, false);
         assert!(
@@ -968,11 +1067,15 @@ mod tests {
     fn history_dedup_considers_flattened_static_aliases() {
         let frecency = Frecency::from_commands([("git checkout".into(), 1)]);
         let mut result = CompleteResult {
-            suggestions: vec![Suggestion::new("co", "", "subcommand").with_primary_name(Some("checkout".into()))],
+            suggestions: vec![
+                Suggestion::new("co", "", "subcommand")
+                    .with_primary_name(Some("checkout".into()))
+                    .with_alias_names(vec!["checkout".into(), "co".into()]),
+            ],
             search_term: "co".into(),
             match_term: "co".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         merge_history(&mut result, &["git".into(), "co".into()], &frecency, false);
         assert!(result.suggestions.iter().all(|item| item.kind != "history"));
@@ -998,7 +1101,7 @@ mod tests {
             search_term: "'co".into(),
             match_term: "co".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         merge_history(&mut result, &["git".into(), "co".into()], &frecency, false);
         let history = result
@@ -1022,7 +1125,7 @@ mod tests {
             search_term: "ch".into(),
             match_term: "ch".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         merge_history(&mut result, &["git".into(), "ch".into()], &frecency, false);
         apply(&mut result, &["git".into(), "ch".into()], &frecency);
@@ -1062,7 +1165,7 @@ mod tests {
             search_term: String::new(),
             match_term: String::new(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         merge_history(&mut result, &["git".into()], &frecency, false);
         assert!(
@@ -1093,7 +1196,7 @@ mod tests {
             search_term: "st".into(),
             match_term: "st".into(),
             fuzzy: false,
-            current_arg: None,
+            ..CompleteResult::default()
         };
         apply(&mut result, &["git".into(), "st".into()], &frecency);
         assert_eq!(result.suggestions.len(), 2);
@@ -1192,5 +1295,26 @@ mod tests {
                 "prefix {prefix:?}"
             );
         }
+    }
+
+    #[test]
+    fn history_prefix_keeps_quotes_and_double_spaces_from_the_buffer() {
+        let (tokens, ends) = crate::lookup::tokenize("git  'ch");
+        assert_eq!(
+            history_prefix_from_buffer("git  'ch", ends, &tokens).as_deref(),
+            Some("git  '")
+        );
+        let (tokens, ends) = crate::lookup::tokenize("g checkout");
+        assert_eq!(
+            history_prefix_from_buffer("g checkout", ends, &tokens).as_deref(),
+            Some("g ")
+        );
+        let (tokens, ends) = crate::lookup::tokenize("git ");
+        assert_eq!(
+            history_prefix_from_buffer("git ", ends, &tokens).as_deref(),
+            Some("git ")
+        );
+        let (tokens, ends) = crate::lookup::tokenize("git");
+        assert_eq!(history_prefix_from_buffer("git", ends, &tokens), None);
     }
 }

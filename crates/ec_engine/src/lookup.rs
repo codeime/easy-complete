@@ -4,9 +4,90 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ir::{ArgSpec, OptionSpec, ParserDirectives, Registry, Spec, SuggestionMeta};
+use crate::ir::{ArgSpec, OptionSpec, ParserDirectives, Registry, Spec, SuggestionMeta, Template};
 use crate::query::matches_query;
-use crate::runtime::{CompleteRequest, CompleteResult, CurrentArg, Suggestion, query_term_for, suggestion_query_term};
+use crate::runtime::{CompleteRequest, CompleteResult, CurrentArg, Suggestion};
+
+pub fn parse_alias_map(raw: &str, shell_path: Option<&str>) -> std::collections::HashMap<String, String> {
+    let separator = if shell_path.is_some_and(|path| path.contains("fish")) {
+        ' '
+    } else {
+        '='
+    };
+    let mut aliases = std::collections::HashMap::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("alias ").unwrap_or(line);
+        let Some((key, value)) = line.split_once(separator) else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let value = value.trim().trim_matches('\'').to_string();
+        aliases.insert(key.to_string(), value);
+    }
+    aliases
+}
+
+/// Fig only substitutes when the command has more than one token. A trailing
+/// space counts as that extra token (`g ` → `git `).
+pub fn expand_alias_tokens(
+    tokens: &mut Vec<String>,
+    ends_with_space: bool,
+    raw_aliases: &str,
+    shell_path: Option<&str>,
+) {
+    if tokens.is_empty() || (tokens.len() == 1 && !ends_with_space) {
+        return;
+    }
+    let aliases = parse_alias_map(raw_aliases, shell_path);
+    expand_alias_tokens_with(tokens, ends_with_space, &aliases);
+}
+
+/// [`expand_alias_tokens`] over an already parsed map, for callers that
+/// expand many commands against the same shell aliases.
+pub(crate) fn expand_alias_tokens_with(
+    tokens: &mut Vec<String>,
+    ends_with_space: bool,
+    aliases: &std::collections::HashMap<String, String>,
+) {
+    if tokens.is_empty() || (tokens.len() == 1 && !ends_with_space) {
+        return;
+    }
+    let mut used = std::collections::HashSet::new();
+    loop {
+        if tokens.len() == 1 && !ends_with_space {
+            break;
+        }
+        let Some(name) = tokens.first() else {
+            break;
+        };
+        if !used.insert(name.clone()) {
+            break;
+        }
+        let Some(value) = aliases.get(name) else {
+            break;
+        };
+        let (alias_tokens, _) = tokenize(value);
+        if alias_tokens.is_empty() {
+            break;
+        }
+        tokens.splice(0..1, alias_tokens);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quote {
+    Single,
+    Double,
+    AnsiC,
+}
+
+fn double_quote_escape(ch: char) -> bool {
+    matches!(ch, '$' | '`' | '"' | '\\' | '\n')
+}
 
 pub fn tokenize(buffer: &str) -> (Vec<String>, bool) {
     let mut tokens = Vec::new();
@@ -15,23 +96,34 @@ pub fn tokenize(buffer: &str) -> (Vec<String>, bool) {
     let mut quote = None;
     let mut escaped = false;
     let mut trailing_space = false;
+    let mut chars = buffer.chars().peekable();
 
-    for ch in buffer.chars() {
+    while let Some(ch) = chars.next() {
         if escaped {
-            token.push(ch);
+            if quote == Some(Quote::Double) && !double_quote_escape(ch) {
+                token.push('\\');
+            }
+            if ch != '\n' || quote != Some(Quote::Double) {
+                token.push(ch);
+            }
             started = true;
             escaped = false;
             trailing_space = false;
             continue;
         }
-        if ch == '\\' && quote != Some('\'') {
+        let in_single = matches!(quote, Some(Quote::Single | Quote::AnsiC));
+        if ch == '\\' && !in_single {
             escaped = true;
             started = true;
             trailing_space = false;
             continue;
         }
         if let Some(active) = quote {
-            if ch == active {
+            let closer = match active {
+                Quote::Double => '"',
+                Quote::Single | Quote::AnsiC => '\'',
+            };
+            if ch == closer {
                 quote = None;
             } else {
                 token.push(ch);
@@ -40,18 +132,44 @@ pub fn tokenize(buffer: &str) -> (Vec<String>, bool) {
             trailing_space = false;
             continue;
         }
+        if ch == '$' && chars.peek() == Some(&'\'') {
+            chars.next();
+            quote = Some(Quote::AnsiC);
+            started = true;
+            trailing_space = false;
+            continue;
+        }
         match ch {
-            '\'' | '"' => {
-                quote = Some(ch);
+            '\'' => {
+                quote = Some(Quote::Single);
                 started = true;
                 trailing_space = false;
             },
-            ch if ch.is_whitespace() => {
+            '"' => {
+                quote = Some(Quote::Double);
+                started = true;
+                trailing_space = false;
+            },
+            ' ' => {
                 if started {
                     tokens.push(std::mem::take(&mut token));
                     started = false;
                 }
                 trailing_space = true;
+            },
+            '\t' => {
+                if started {
+                    tokens.push(std::mem::take(&mut token));
+                    started = false;
+                }
+                trailing_space = false;
+            },
+            '\n' | '\r' => {
+                if started {
+                    tokens.push(std::mem::take(&mut token));
+                    started = false;
+                }
+                trailing_space = false;
             },
             ch => {
                 token.push(ch);
@@ -61,8 +179,6 @@ pub fn tokenize(buffer: &str) -> (Vec<String>, bool) {
         }
     }
     if escaped {
-        // Preserve a dangling escape in the logical token.  The raw query
-        // remains available through current_token_raw for insertion.
         token.push('\\');
         started = true;
         trailing_space = false;
@@ -167,7 +283,7 @@ fn operator_len(buffer: &str, index: usize) -> Option<usize> {
     let next = chars.next();
     match (ch, next) {
         ('&' | '|', Some('&')) | ('&', Some(';')) | ('|', Some('|')) => Some(2),
-        (';' | '|', _) => Some(1),
+        (';' | '|' | '\n', _) => Some(1),
         ('&', _) => {
             let prev = buffer.get(..index).and_then(|prefix| prefix.chars().next_back());
             if matches!(prev, Some('>' | '<')) || matches!(next, Some('>')) {
@@ -244,7 +360,18 @@ fn innermost_command_start(buffer: &str) -> usize {
             continue;
         }
         if ch == '$' {
-            if peek_char(buffer, index + ch_len) == Some('(') {
+            let next = peek_char(buffer, index + ch_len);
+            if next == Some('\'') {
+                quote = Some('\'');
+                index += ch_len + 1;
+                continue;
+            }
+            if next == Some('(') {
+                let inner = peek_char(buffer, index + ch_len + 1);
+                if inner == Some('(') {
+                    index += ch_len;
+                    continue;
+                }
                 frames.push(CommandFrame {
                     start: index + ch_len + 1,
                     kind: FrameKind::Subshell,
@@ -253,14 +380,6 @@ fn innermost_command_start(buffer: &str) -> usize {
                 continue;
             }
             index += ch_len;
-            continue;
-        }
-        if (ch == '<' || ch == '>') && peek_char(buffer, index + ch_len) == Some('(') {
-            frames.push(CommandFrame {
-                start: index + ch_len + 1,
-                kind: FrameKind::Subshell,
-            });
-            index += ch_len + 1;
             continue;
         }
         if ch == '`' {
@@ -430,7 +549,26 @@ fn command_is_disabled_from(commands: &[String], command: &str) -> bool {
     commands.iter().any(|disabled| disabled == command)
 }
 
-pub(crate) fn command_is_disabled(command: &str) -> bool {
+pub(crate) fn help_template_suggestions(root: &Spec, current: &Spec, query: &str, fuzzy: bool) -> Vec<Suggestion> {
+    let triggering: HashSet<&str> = current.names.iter().map(String::as_str).collect();
+    root.subcommands
+        .iter()
+        .filter(|sub| !sub.names.iter().any(|name| triggering.contains(name.as_str())))
+        .filter_map(|sub| {
+            let name = sub
+                .names
+                .iter()
+                .find(|candidate| query.is_empty() || matches_query(candidate, query, fuzzy))?;
+            Some(
+                Suggestion::new(name.clone(), sub.description.clone(), "special")
+                    .with_insert_value(name.clone())
+                    .with_primary_name(sub.names.first().cloned()),
+            )
+        })
+        .collect()
+}
+
+fn command_is_disabled(command: &str) -> bool {
     fig_settings::settings::get::<Vec<String>>("autocomplete.disableForCommands")
         .ok()
         .flatten()
@@ -455,6 +593,9 @@ pub(crate) struct ActiveArg {
 pub(crate) struct CompletionContext {
     pub spec: Arc<Spec>,
     pub active_arg: Option<ActiveArg>,
+    /// Spec whose subcommands `template: help` lists: the node entered just
+    /// before `current`, matching Fig's last-subcommand-before-help walk.
+    pub help_parent: Arc<Spec>,
     /// The effective persistent option set after walking through any parent
     /// subcommands/loadSpecs. The WebView parser mutates this set onto the
     /// child completion object before collecting rows.
@@ -466,10 +607,14 @@ pub(crate) struct CompletionContext {
     pub parser_directives: ParserDirectives,
     /// Whether sibling options are legal at the current parser state.
     pub options_allowed: bool,
+    /// Argument slots the token being typed fills, for `template: history`.
+    pub history_slots: Vec<crate::history::ArgSlot>,
 }
 
 #[derive(Debug, Clone)]
 struct OptionArgState {
+    /// The option whose argument is being filled, for the history trace.
+    option: OptionSpec,
     arg: ArgSpec,
     /// Number of values already consumed for this option argument. A zero
     /// count means the flag was entered and is waiting for its first value.
@@ -488,6 +633,12 @@ fn merge_parser_directives(parent: &ParserDirectives, spec: &Spec) -> ParserDire
         option_arg_separators: child
             .and_then(|directives| directives.option_arg_separators.clone())
             .or_else(|| parent.option_arg_separators.clone()),
+        alias: child
+            .and_then(|directives| directives.alias.clone())
+            .or_else(|| parent.alias.clone()),
+        js_alias: child
+            .and_then(|directives| directives.js_alias.clone())
+            .or_else(|| parent.js_alias.clone()),
     }
 }
 
@@ -551,7 +702,7 @@ struct ResolvedOptionToken<'spec, 'token> {
 
 pub(crate) fn resolve_context(
     root: Arc<Spec>,
-    tokens: &[String],
+    tokens: &mut Vec<String>,
     ends_with_space: bool,
     query: &str,
     raw_query: &str,
@@ -562,45 +713,72 @@ pub(crate) fn resolve_context(
     } else {
         tokens.len().saturating_sub(1)
     };
-    let (spec, path_end, persistent_options, passed_options, parser_directives, options_allowed) =
-        walk_spec(root, tokens, current_limit, registry);
-    let persistent_refs: Vec<&OptionSpec> = persistent_options.iter().collect();
+    let mut trace = crate::history::WalkTrace::new(root.as_ref());
+    let walked = walk_spec(root, tokens, current_limit, registry, Some(&mut trace));
+    let persistent_refs: Vec<&OptionSpec> = walked.persistent_options.iter().collect();
+    // `walk_spec` splices `parserDirectives.alias` expansions into `tokens`
+    // in place (Fig: `tokens = currentCommand.tokens.slice(startIndex)`), so
+    // the boundary of the token being typed is the walker's, not the one
+    // computed from the buffer: `git co ` with `co = checkout -b` has to
+    // land on `-b`'s argument, not `checkout`'s first positional.
     let active = active_arg(
-        spec.as_ref(),
+        walked.spec.as_ref(),
         &persistent_refs,
         tokens,
-        path_end,
-        current_limit,
+        walked.path_end,
+        walked.limit,
         ends_with_space,
         query,
         raw_query,
-        &parser_directives,
+        &walked.parser_directives,
     );
     CompletionContext {
-        spec,
+        spec: walked.spec,
         active_arg: active,
-        persistent_options,
-        passed_options,
-        parser_directives,
-        options_allowed,
+        help_parent: walked.parent,
+        persistent_options: walked.persistent_options,
+        passed_options: walked.passed_options,
+        parser_directives: walked.parser_directives,
+        options_allowed: walked.options_allowed,
+        history_slots: trace.current,
     }
+}
+
+struct WalkedSpec {
+    spec: Arc<Spec>,
+    parent: Arc<Spec>,
+    path_end: usize,
+    /// Index of the token being typed after alias expansion grew `tokens`.
+    limit: usize,
+    persistent_options: Vec<OptionSpec>,
+    passed_options: Vec<OptionSpec>,
+    parser_directives: ParserDirectives,
+    options_allowed: bool,
+}
+
+/// Parse a finished history command with the same walker the buffer uses,
+/// recording which argument slot every token filled into `trace`. `limit`
+/// is the full length: there is no token being typed.
+pub(crate) fn annotate_history_command(
+    root: Arc<Spec>,
+    tokens: &mut Vec<String>,
+    registry: &mut Registry,
+    trace: &mut crate::history::WalkTrace,
+) {
+    let limit = tokens.len();
+    walk_spec(root, tokens, limit, Some(registry), Some(trace));
 }
 
 fn walk_spec(
     root: Arc<Spec>,
-    tokens: &[String],
-    limit: usize,
+    tokens: &mut Vec<String>,
+    mut limit: usize,
     mut registry: Option<&mut Registry>,
-) -> (
-    Arc<Spec>,
-    usize,
-    Vec<OptionSpec>,
-    Vec<OptionSpec>,
-    ParserDirectives,
-    bool,
-) {
+    mut trace: Option<&mut crate::history::WalkTrace>,
+) -> WalkedSpec {
     let mut current = root;
     apply_generate_spec(&mut current, tokens);
+    let mut parent = current.clone();
     let mut index = 1;
     let mut path_end = 1usize;
     let mut positional = 0usize;
@@ -611,6 +789,7 @@ fn walk_spec(
     let mut option_arg = None;
     let mut entered_args = false;
     let mut subcommand_variadic_count = 0usize;
+    let mut substituted_aliases = HashSet::new();
     while index < limit {
         let token = &tokens[index];
         let persistent_refs: Vec<&OptionSpec> = persistent_options.iter().collect();
@@ -627,6 +806,7 @@ fn walk_spec(
         if !after_double_dash && token == "--" && options_allowed {
             after_double_dash = true;
             index += 1;
+            substituted_aliases.clear();
             continue;
         }
         if !after_double_dash && token.starts_with('-') && options_allowed {
@@ -639,14 +819,22 @@ fn walk_spec(
                 }
                 if let Some(arg) = option.args.first() {
                     if let Some(attached) = resolved.attached_value {
+                        if let Some(trace) = trace.as_deref_mut() {
+                            trace.record_option_arg(&option, 0, attached);
+                        }
                         option_arg = arg.is_variadic.then(|| OptionArgState {
+                            option: option.clone(),
                             arg: arg.clone(),
                             count: 1,
                         });
                         index += 1;
                         if let Some(next) = next_spec_after_arg(registry.as_deref_mut(), arg, attached) {
+                            if let Some(trace) = trace.as_deref_mut() {
+                                trace.enter_root(next.as_ref());
+                            }
                             enter_loaded_spec(
                                 &mut current,
+                                &mut parent,
                                 &mut path_end,
                                 &mut positional,
                                 &mut persistent_options,
@@ -660,6 +848,7 @@ fn walk_spec(
                                 tokens,
                             );
                         }
+                        substituted_aliases.clear();
                         continue;
                     }
                     if index + 1 < limit
@@ -671,14 +860,22 @@ fn walk_spec(
                         ) || !arg.is_optional)
                     {
                         let value = tokens[index + 1].clone();
+                        if let Some(trace) = trace.as_deref_mut() {
+                            trace.record_option_arg(&option, 0, &value);
+                        }
                         option_arg = arg.is_variadic.then(|| OptionArgState {
+                            option: option.clone(),
                             arg: arg.clone(),
                             count: 1,
                         });
                         index += 2;
                         if let Some(next) = next_spec_after_arg(registry.as_deref_mut(), arg, &value) {
+                            if let Some(trace) = trace.as_deref_mut() {
+                                trace.enter_root(next.as_ref());
+                            }
                             enter_loaded_spec(
                                 &mut current,
+                                &mut parent,
                                 &mut path_end,
                                 &mut positional,
                                 &mut persistent_options,
@@ -692,30 +889,52 @@ fn walk_spec(
                                 tokens,
                             );
                         }
+                        substituted_aliases.clear();
                         continue;
                     }
                     option_arg = Some(OptionArgState {
+                        option: option.clone(),
                         arg: arg.clone(),
                         count: 0,
                     });
                 }
                 index += 1;
+                substituted_aliases.clear();
                 continue;
             }
         }
         if option_arg.is_some() {
+            let token = tokens[index].clone();
+            if let Some(state) = option_arg.as_ref()
+                && let Some(alias_value) = resolve_arg_alias(&state.arg, &token)
+                && substituted_aliases.insert(token.clone())
+                && let Some(extra) = substitute_token_alias(tokens, index, &alias_value)
+            {
+                limit += extra;
+                continue;
+            }
             let state = option_arg.expect("checked above");
+            if let Some(trace) = trace.as_deref_mut() {
+                trace.record_option_arg(&state.option, state.count, &token);
+            }
             option_arg = state.arg.is_variadic.then_some(OptionArgState {
+                option: state.option,
                 arg: state.arg,
                 count: state.count + 1,
             });
             index += 1;
+            substituted_aliases.clear();
             continue;
         }
         if !after_double_dash && subcommands_allowed && !token.starts_with('-') {
             if let Some(next) = current.find_subcommand(token) {
+                if let Some(trace) = trace.as_deref_mut() {
+                    trace.enter_subcommand(next);
+                }
+                parent = current.clone();
                 current = Arc::new(next.clone());
                 apply_generate_spec(&mut current, tokens);
+                apply_js_load_spec(&mut current, token);
                 index += 1;
                 path_end = index;
                 positional = 0;
@@ -724,6 +943,7 @@ fn walk_spec(
                 passed_options.clear();
                 entered_args = false;
                 subcommand_variadic_count = 0;
+                substituted_aliases.clear();
                 continue;
             }
         }
@@ -731,16 +951,38 @@ fn walk_spec(
         // boundary moves past that token so the loaded spec does not recount
         // the value as its own first positional argument.
         if let Some(arg) = subcommand_arg {
+            let token = tokens[index].clone();
+            if let Some(alias_value) = resolve_arg_alias(arg, &token)
+                && substituted_aliases.insert(token.clone())
+                && let Some(extra) = substitute_token_alias(tokens, index, &alias_value)
+            {
+                limit += extra;
+                continue;
+            }
             entered_args = true;
+            // Fig's `walkSubcommand` counts every positional annotation in
+            // the scope, variadic or not, and looks up `args[n]` by that count.
+            let annotation_index = positional + subcommand_variadic_count;
             if arg.is_variadic {
                 subcommand_variadic_count += 1;
             } else {
                 positional += 1;
             }
             index += 1;
-            if let Some(next) = next_spec_after_arg(registry.as_deref_mut(), arg, token) {
+            let next = next_spec_after_arg(registry.as_deref_mut(), arg, &token);
+            if let Some(trace) = trace.as_deref_mut() {
+                // Fig re-parses from a command-valued token as a new root
+                // (`sudo curl …` annotates `curl` as the curl spec), so it
+                // is not a value of `sudo`'s argument.
+                match next.as_ref() {
+                    Some(next) => trace.enter_root(next.as_ref()),
+                    None => trace.record_positional(&current.args, annotation_index, &token),
+                }
+            }
+            if let Some(next) = next {
                 enter_loaded_spec(
                     &mut current,
+                    &mut parent,
                     &mut path_end,
                     &mut positional,
                     &mut persistent_options,
@@ -754,10 +996,19 @@ fn walk_spec(
                     tokens,
                 );
             }
+            substituted_aliases.clear();
             continue;
         }
         positional += 1;
         index += 1;
+        substituted_aliases.clear();
+    }
+    if let Some(trace) = trace {
+        trace.set_current(
+            &current.args,
+            positional + subcommand_variadic_count,
+            option_arg.as_ref().map(|state| (&state.option, state.count)),
+        );
     }
     let options_allowed = can_consume_options(
         &parser_directives,
@@ -767,14 +1018,51 @@ fn walk_spec(
         positional_arg(&current.args, positional),
         subcommand_variadic_count,
     );
-    (
-        current,
+    WalkedSpec {
+        spec: current,
+        parent,
         path_end,
+        limit,
         persistent_options,
         passed_options,
         parser_directives,
         options_allowed,
-    )
+    }
+}
+
+fn resolve_arg_alias(arg: &ArgSpec, token: &str) -> Option<String> {
+    let directives = arg.parser_directives.as_ref()?;
+    if let Some(literal) = directives.alias.as_deref().filter(|value| !value.is_empty()) {
+        return Some(literal.to_string());
+    }
+    let hook_id = directives.js_alias.as_deref()?;
+    let (host, cwd) = crate::js_host::current()?;
+    let timeout = Duration::from_millis(u64::try_from(crate::generate::DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000));
+    host.alias(hook_id, token, cwd, timeout)
+}
+
+fn substitute_token_alias(tokens: &mut Vec<String>, index: usize, alias_value: &str) -> Option<usize> {
+    let (alias_tokens, _) = tokenize(alias_value.trim());
+    if alias_tokens.is_empty() {
+        return None;
+    }
+    let extra = alias_tokens.len().saturating_sub(1);
+    tokens.splice(index..index + 1, alias_tokens);
+    Some(extra)
+}
+
+fn apply_js_load_spec(current: &mut Arc<Spec>, token: &str) {
+    let Some(hook_id) = current.js_load_spec.clone() else {
+        return;
+    };
+    let Some((host, cwd)) = crate::js_host::current() else {
+        return;
+    };
+    let timeout = Duration::from_millis(u64::try_from(crate::generate::DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000));
+    let Some(loaded) = host.load_spec(&hook_id, token, cwd, timeout) else {
+        return;
+    };
+    *current = Arc::new(crate::js_host::merge_generated_spec(current.as_ref(), loaded));
 }
 
 fn apply_generate_spec(current: &mut Arc<Spec>, tokens: &[String]) {
@@ -800,6 +1088,7 @@ fn apply_generate_spec(current: &mut Arc<Spec>, tokens: &[String]) {
 #[allow(clippy::too_many_arguments)]
 fn enter_loaded_spec(
     current: &mut Arc<Spec>,
+    parent: &mut Arc<Spec>,
     path_end: &mut usize,
     positional: &mut usize,
     persistent_options: &mut Vec<OptionSpec>,
@@ -812,8 +1101,12 @@ fn enter_loaded_spec(
     index: usize,
     tokens: &[String],
 ) {
+    *parent = current.clone();
     *current = next;
     apply_generate_spec(current, tokens);
+    if let Some(token) = tokens.get(index.saturating_sub(1)) {
+        apply_js_load_spec(current, token);
+    }
     *path_end = index;
     *positional = 0;
     *persistent_options = merge_persistent_options(persistent_options, current.as_ref());
@@ -827,6 +1120,13 @@ fn enter_loaded_spec(
 /// Fig prefers a static `loadSpec` on the argument. Only when that is absent
 /// do `isCommand` / `isScript` / `isModule` load another bundled spec.
 fn next_spec_after_arg(registry: Option<&mut Registry>, arg: &ArgSpec, token: &str) -> Option<Arc<Spec>> {
+    if let Some(hook_id) = arg.js_load_spec.as_deref() {
+        return crate::js_host::current().and_then(|(host, cwd)| {
+            let timeout =
+                Duration::from_millis(u64::try_from(crate::generate::DEFAULT_SCRIPT_TIMEOUT_MS).unwrap_or(5_000));
+            host.load_spec(hook_id, token, cwd, timeout).map(Arc::new)
+        });
+    }
     if arg.load_spec.is_some() {
         return arg.resolved_spec.as_deref().map(|spec| Arc::new(spec.clone()));
     }
@@ -865,32 +1165,6 @@ fn command_lookup_name(token: &str, is_script: bool) -> String {
     } else {
         token.to_string()
     }
-}
-
-fn arg_suggests_commands(arg: &ArgSpec) -> bool {
-    arg.is_command || arg.is_script || arg.is_module.as_ref().is_some_and(|prefix| !prefix.is_empty())
-}
-
-fn command_arg_suggestions(registry: &Registry, arg: &ArgSpec, query: &str, fuzzy: bool) -> Vec<Suggestion> {
-    if let Some(prefix) = arg.is_module.as_deref().filter(|prefix| !prefix.is_empty()) {
-        let needle = format!("{prefix}{query}");
-        return registry
-            .command_names_matching_including_exact_with(&needle, fuzzy)
-            .into_iter()
-            .filter_map(|(name, description)| {
-                let display = name.strip_prefix(prefix)?.to_string();
-                if display.is_empty() {
-                    return None;
-                }
-                Some(Suggestion::new(display.clone(), description, "arg").with_insert_value(display))
-            })
-            .collect();
-    }
-    registry
-        .command_names_matching_including_exact_with(query, fuzzy)
-        .into_iter()
-        .map(|(name, description)| Suggestion::new(name.clone(), description, "arg").with_insert_value(name))
-        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -953,6 +1227,7 @@ fn active_arg<'a>(
                     }
                     if let Some(arg) = option.args.first().filter(|arg| arg.is_variadic) {
                         option_arg = Some(OptionArgState {
+                            option: option.clone(),
                             arg: arg.clone(),
                             count: 1,
                         });
@@ -970,6 +1245,7 @@ fn active_arg<'a>(
                             .first()
                             .filter(|arg| arg.is_variadic)
                             .map(|arg| OptionArgState {
+                                option: option.clone(),
                                 arg: arg.clone(),
                                 count: 1,
                             });
@@ -991,6 +1267,7 @@ fn active_arg<'a>(
         }
         if let Some(state) = option_arg {
             option_arg = Some(OptionArgState {
+                option: state.option,
                 arg: state.arg,
                 count: state.count + 1,
             });
@@ -1092,6 +1369,11 @@ fn positional_arg(args: &[ArgSpec], index: usize) -> Option<&ArgSpec> {
         && arg.script.is_empty()
         && arg.templates.is_empty()
         && arg.suggestions.is_empty()
+        && arg.generators.is_empty()
+        && arg.js_custom.is_none()
+        && arg.js_script.is_none()
+        && arg.js_post_process.is_none()
+        && arg.js_load_spec.is_none()
         && !arg.is_command
         && !arg.is_script
         && arg.is_module.is_none()
@@ -1324,8 +1606,176 @@ fn should_consume_option_value(spec: &Spec, option: &OptionSpec, next: &str, _di
     spec.find_subcommand(next).is_none()
 }
 
+const FIRST_TOKEN_LOGIN_TIMEOUT: Duration = Duration::from_millis(1_500);
+const FIRST_TOKEN_CACHE_TTL: Duration = Duration::from_secs(10);
+
+fn slash_command_spec_name(command: &str) -> &str {
+    if command == "bin/console" || command.ends_with("/bin/console") {
+        "php/bin-console"
+    } else {
+        "dotslash"
+    }
+}
+
+/// Root spec for a lone first token that contains a `/`. Fig checked only
+/// `bin/console` before handing every other path to `dotslash`; neither a
+/// `.fig` script spec nor a bundled spec with the same basename is consulted
+/// until a space finishes the token.
+fn single_slash_token_spec(registry: &mut Registry, command: &str) -> Option<Arc<Spec>> {
+    let name = if command == "bin/console" {
+        "php/bin-console"
+    } else {
+        "dotslash"
+    };
+    registry.get_arc(name)
+}
+
+fn first_token_command_names(query: &str, request: &CompleteRequest) -> Vec<(String, String)> {
+    let mut names = first_token_cached_listing(request);
+    if let Some(alias) = request.alias.as_deref() {
+        for key in parse_alias_map(alias, request.current_shell.as_deref()).into_keys() {
+            if !names.iter().any(|existing| existing == &key) {
+                names.push(key);
+            }
+        }
+    }
+    let mut matched: Vec<(String, String)> = names
+        .into_iter()
+        .filter(|name| query.is_empty() || matches_query(name, query, request.fuzzy))
+        .map(|name| (name, String::new()))
+        .collect();
+    matched.sort_by(|left, right| crate::query::cmp_ignore_ascii_case(&left.0, &right.0));
+    matched
+}
+
+fn first_token_cached_listing(request: &CompleteRequest) -> Vec<String> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+    struct Cache {
+        key: String,
+        fetched_at: Instant,
+        names: Vec<String>,
+    }
+    static CACHE: OnceLock<Mutex<Option<Cache>>> = OnceLock::new();
+    let key = format!(
+        "{}|{}",
+        request.current_shell.as_deref().unwrap_or(""),
+        request.current_process.as_deref().unwrap_or("")
+    );
+    if let Ok(cache) = CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        if let Some(entry) = cache.as_ref() {
+            if entry.key == key && entry.fetched_at.elapsed() < FIRST_TOKEN_CACHE_TTL {
+                return entry.names.clone();
+            }
+        }
+    }
+    let mut names = first_token_login_listing(request);
+    if names.is_empty() {
+        names = first_token_nologin_listing(request);
+    }
+    if names.is_empty() {
+        names = first_token_path_and_alias_listing(request);
+    }
+    if let Ok(mut cache) = CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        *cache = Some(Cache {
+            key,
+            fetched_at: Instant::now(),
+            names: names.clone(),
+        });
+    }
+    names
+}
+
+fn first_token_login_listing(request: &CompleteRequest) -> Vec<String> {
+    let process = request
+        .current_process
+        .as_deref()
+        .or(request.current_shell.as_deref())
+        .unwrap_or("");
+    let (shell, command) = if process.contains("fish") {
+        ("fish", "complete -C ''")
+    } else if process.contains("bash") {
+        ("bash", "compgen -ac")
+    } else {
+        ("zsh", "print -rl -- ${(k)commands} ${(k)aliases}")
+    };
+    let Some(output) = crate::process::try_execute_isolated_success(
+        shell,
+        &["-lc".into(), command.into()],
+        "",
+        FIRST_TOKEN_LOGIN_TIMEOUT,
+    ) else {
+        return Vec::new();
+    };
+    dedupe_command_lines(&output)
+}
+
+fn first_token_nologin_listing(request: &CompleteRequest) -> Vec<String> {
+    let process = request
+        .current_process
+        .as_deref()
+        .or(request.current_shell.as_deref())
+        .unwrap_or("");
+    let (shell, command) = if process.contains("fish") {
+        ("fish", "complete -C ''")
+    } else if process.contains("bash") {
+        ("bash", "compgen -ac")
+    } else {
+        ("zsh", "print -rl -- ${(k)commands} ${(k)aliases}")
+    };
+    let Some(output) = crate::process::try_execute_isolated_success(
+        shell,
+        &["-c".into(), command.into()],
+        "",
+        FIRST_TOKEN_LOGIN_TIMEOUT,
+    ) else {
+        return Vec::new();
+    };
+    dedupe_command_lines(&output)
+}
+
+fn first_token_path_and_alias_listing(request: &CompleteRequest) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    if let Some(alias) = request.alias.as_deref() {
+        for key in parse_alias_map(alias, request.current_shell.as_deref()).into_keys() {
+            names.insert(key);
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue;
+                }
+                names.insert(name);
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
+fn dedupe_command_lines(output: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for line in output.lines() {
+        let name = line.split('\t').next().unwrap_or(line).trim();
+        if name.is_empty() || !seen.insert(name.to_string()) {
+            continue;
+        }
+        names.push(name.to_string());
+    }
+    names
+}
+
 fn first_token_result(
-    registry: &mut Registry,
     request: &CompleteRequest,
     raw_search_term: String,
     normalized_search_term: String,
@@ -1336,13 +1786,11 @@ fn first_token_result(
             fuzzy: request.fuzzy,
             search_term: raw_search_term,
             match_term: normalized_search_term,
-            current_arg: None,
+            ..CompleteResult::default()
         };
     }
     let mut suggestions = Vec::new();
-    for (name, description) in
-        registry.command_names_matching_including_exact_with(&normalized_search_term, request.fuzzy)
-    {
+    for (name, description) in first_token_command_names(&normalized_search_term, request) {
         // The legacy first-token generator returned ordinary `arg` rows
         // with an explicit raw insertValue and no shouldAddSpace flag.
         // Keeping that shape matters: accepting `git` must insert only
@@ -1362,17 +1810,28 @@ fn first_token_result(
         fuzzy: request.fuzzy,
         search_term: raw_search_term,
         match_term: normalized_search_term,
-        current_arg: None,
+        ..CompleteResult::default()
     }
+}
+
+fn arg_uses_history_template(arg: &ArgSpec) -> bool {
+    arg.templates.contains(&Template::History)
+        || arg
+            .generators
+            .iter()
+            .any(|generator| generator.templates.contains(&Template::History))
 }
 
 pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteResult {
     let raw = buffer_before_cursor(&request.buffer, request.cursor);
     let buffer = completion_buffer(&request.buffer, request.cursor);
-    let (tokens, ends_with_space) = tokenize(buffer);
+    let (mut tokens, ends_with_space) = tokenize(buffer);
+    if let Some(alias) = request.alias.as_deref() {
+        expand_alias_tokens(&mut tokens, ends_with_space, alias, request.current_shell.as_deref());
+    }
     if tokens.is_empty() {
         if is_fresh_command_position(raw) {
-            return first_token_result(registry, request, String::new(), String::new());
+            return first_token_result(request, String::new(), String::new());
         }
         return CompleteResult {
             fuzzy: request.fuzzy,
@@ -1399,31 +1858,44 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
             fuzzy: request.fuzzy,
             search_term: raw_search_term,
             match_term: normalized_search_term,
-            current_arg: None,
+            ..CompleteResult::default()
         };
     }
 
-    if tokens.len() == 1 && !ends_with_space {
-        return first_token_result(registry, request, raw_search_term, normalized_search_term);
+    if tokens.len() == 1 && !ends_with_space && !command.contains('/') {
+        return first_token_result(request, raw_search_term, normalized_search_term);
     }
 
     let query = normalized_search_term.clone();
 
-    let Some(root) = registry.get_arc(command) else {
+    let root = if tokens.len() == 1 && !ends_with_space {
+        // Fig `parseArguments`, single-token branch: a first token with a
+        // `/` is a script path being typed, so it completes against
+        // `dotslash` (files) regardless of what its basename happens to
+        // match. `./git` lists `./git*`, not git's subcommands filtered to
+        // nothing. `bin/console` is the one special case.
+        single_slash_token_spec(registry, command)
+    } else {
+        root_spec_for_command(registry, request, command)
+    };
+    let Some(root) = root else {
         return CompleteResult {
-            suggestions: filter_query(
-                crate::cobra::complete(&tokens, &request.cwd, request.fuzzy),
-                &query,
-                request.fuzzy,
-            ),
+            suggestions: Vec::new(),
             fuzzy: request.fuzzy,
             search_term: raw_search_term,
             match_term: query,
-            current_arg: None,
+            ..CompleteResult::default()
         };
     };
 
-    let context = resolve_context(root, &tokens, ends_with_space, &query, &raw_search_term, Some(registry));
+    let context = resolve_context(
+        root.clone(),
+        &mut tokens,
+        ends_with_space,
+        &query,
+        &raw_search_term,
+        Some(registry),
+    );
     let fuzzy = effective_fuzzy(
         request.fuzzy,
         Some(context.spec.as_ref()),
@@ -1442,18 +1914,10 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
         })
         .flatten();
     let open_option_chain = option_chain.filter(|chain| chain.attached_value.is_none());
-    let (mut query, search_term) = context.active_arg.as_ref().map_or_else(
+    let (query, search_term) = context.active_arg.as_ref().map_or_else(
         || (query.clone(), raw_search_term.clone()),
         |active| (active.query.clone(), active.search_term.clone()),
     );
-    // A generator-level string getQueryTerm changes the term used by every
-    // row it returns.  Per-suggestion overrides are applied independently in
-    // collect_named/generate_arg below.
-    if let Some(active) = context.active_arg.as_ref() {
-        if active.arg.meta.get_query_term.is_some() {
-            query = query_term_for(&search_term, active.arg.meta.get_query_term.as_deref());
-        }
-    }
     let current_arg = context.active_arg.as_ref().map(|active| CurrentArg {
         name: active.arg.name.clone(),
         description: active.arg.description.clone(),
@@ -1489,16 +1953,24 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
     // options. Keep that ordering so a generated git alias does not jump
     // behind the static option list while ranking is still settling.
     if let Some(active) = context.active_arg.as_ref() {
-        if arg_suggests_commands(&active.arg) {
-            suggestions.extend(command_arg_suggestions(registry, &active.arg, &query, fuzzy));
-        }
-        let mut active_suggestions = crate::generate::generate_for_arg_with_search_term(
+        let history_values = if arg_uses_history_template(&active.arg) {
+            crate::generate::history_store().arg_values(
+                registry,
+                request.alias.as_deref(),
+                request.current_shell.as_deref(),
+                &context.history_slots,
+            )
+        } else {
+            Vec::new()
+        };
+        let mut active_suggestions = crate::generate::generate_for_arg_with_history(
             &active.arg,
             &tokens,
             &query,
             &search_term,
             &request.cwd,
             fuzzy,
+            &history_values,
         );
         if open_option_chain.is_some() {
             for suggestion in &mut active_suggestions {
@@ -1506,6 +1978,14 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
             }
         }
         suggestions.extend(active_suggestions);
+        if active.arg.templates.contains(&Template::Help) {
+            suggestions.extend(help_template_suggestions(
+                context.help_parent.as_ref(),
+                current,
+                &query,
+                fuzzy,
+            ));
+        }
     }
     let mut additional_items = current.additional_suggestions.clone();
     additional_items.sort_by(|left, right| cmp_named_names(&left.names, &right.names));
@@ -1543,8 +2023,7 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
         }
     }
     suggestions.extend(additional);
-    let include_options =
-        context.options_allowed && !completing_exclusive_arg && (query.is_empty() || query.starts_with('-'));
+    let include_options = context.options_allowed && !completing_exclusive_arg;
     if let Some(chain) = open_option_chain {
         suggestions.extend(option_chain_suggestions(
             current,
@@ -1563,14 +2042,6 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
             fuzzy,
             prefer_verbose,
             &context.parser_directives,
-        ));
-    }
-
-    if suggestions.is_empty() && context.active_arg.is_none() {
-        suggestions.extend(filter_query(
-            crate::cobra::complete(&tokens, &request.cwd, fuzzy),
-            &query,
-            fuzzy,
         ));
     }
 
@@ -1600,13 +2071,53 @@ pub fn complete(registry: &mut Registry, request: &CompleteRequest) -> CompleteR
         fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false),
     );
 
+    let (pending_generators, debounce_ms) = crate::generate::take_pending_generators();
     CompleteResult {
         suggestions,
         fuzzy,
         search_term,
         match_term: query,
         current_arg,
+        pending_generators,
+        debounce_ms,
     }
+}
+
+fn root_spec_for_command(registry: &mut Registry, request: &CompleteRequest, command: &str) -> Option<Arc<Spec>> {
+    let shortcuts_token = fig_settings::settings::get_string_or("autocomplete.personalShortcutsToken", "+".into());
+    if command == "?" {
+        return crate::ir::load_project_fig_spec(&request.cwd, "_shortcuts")
+            .or_else(|| crate::ir::load_home_fig_spec("_shortcuts"))
+            .map(Arc::new)
+            .or_else(|| registry.get_arc("_shortcuts"));
+    }
+    if command == shortcuts_token {
+        return crate::ir::load_home_fig_spec(command)
+            .map(Arc::new)
+            .or_else(|| registry.get_arc(command));
+    }
+    if command.contains('/') {
+        if let Some(local) = crate::ir::load_script_local_spec(&request.cwd, command) {
+            return Some(Arc::new(local));
+        }
+        let basename = local_spec_name(command);
+        if let Some(bundled) = registry.get_arc(basename) {
+            return Some(bundled);
+        }
+        return registry.get_arc(slash_command_spec_name(command));
+    }
+    registry.get_arc(command)
+}
+
+pub(crate) fn local_spec_name(command: &str) -> &str {
+    if command == "?" {
+        return "_shortcuts";
+    }
+    command
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(command)
 }
 
 pub fn buffer_before_cursor(buffer: &str, cursor: Option<u32>) -> &str {
@@ -1636,16 +2147,6 @@ pub fn args_hint(args: &[ArgSpec]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn filter_query(items: Vec<Suggestion>, query: &str, fuzzy: bool) -> Vec<Suggestion> {
-    if query.is_empty() {
-        return items;
-    }
-    items
-        .into_iter()
-        .filter(|item| matches_query(&item.name, query, fuzzy))
-        .collect()
 }
 
 fn select_named_candidate<'a>(
@@ -1716,7 +2217,15 @@ pub(crate) fn effective_fuzzy_for_tokens(
     let Some(root) = registry.get_arc(command) else {
         return user_fuzzy;
     };
-    let context = resolve_context(root, tokens, ends_with_space, query, raw_query, Some(registry));
+    let mut walk_tokens = tokens.to_vec();
+    let context = resolve_context(
+        root,
+        &mut walk_tokens,
+        ends_with_space,
+        query,
+        raw_query,
+        Some(registry),
+    );
     effective_fuzzy(
         user_fuzzy,
         Some(context.spec.as_ref()),
@@ -1745,8 +2254,13 @@ fn collect_named<T>(
         let item_names = names(item);
         let metadata = meta(item);
         let suggestion_kind = metadata.suggestion_type.as_deref().unwrap_or(kind);
-        let (item_query, item_query_term) =
-            suggestion_query_term(suggestion_kind, metadata.get_query_term.as_deref(), query, search_term);
+        let (item_query, item_query_term) = crate::runtime::suggestion_query_term_with_hook(
+            suggestion_kind,
+            metadata.get_query_term.as_deref(),
+            metadata.js_get_query_term.as_deref(),
+            query,
+            search_term,
+        );
         let prefer_long_name = prefer_verbose && matches!(suggestion_kind, "option" | "subcommand");
         let name = select_named_candidate(
             item_names,
@@ -1782,7 +2296,8 @@ fn collect_named<T>(
             .with_primary_name(item_names.first().cloned())
             .with_dangerous(metadata.is_dangerous)
             .with_original_type(metadata.original_type.clone())
-            .with_query_term(item_query_term);
+            .with_query_term(item_query_term)
+            .with_alias_names(item_names.to_vec());
         suggestion.requires_arg = requires_arg(item);
         out.push(suggestion);
     }
@@ -2068,6 +2583,7 @@ fn add_exact_auto_execute(
         query_term: original.query_term,
         is_dangerous: false,
         requires_arg: false,
+        alias_names: original.alias_names,
     };
     suggestions.insert(0, auto);
 }
@@ -2101,6 +2617,7 @@ fn add_space_auto_execute(
             query_term: None,
             is_dangerous: true,
             requires_arg: false,
+            alias_names: Vec::new(),
         },
     );
 }
@@ -2169,6 +2686,7 @@ fn add_current_token_auto_execute(
                 query_term: None,
                 is_dangerous: false,
                 requires_arg: false,
+                alias_names: Vec::new(),
             },
         );
         return;
@@ -2197,6 +2715,7 @@ fn add_current_token_auto_execute(
             query_term: None,
             is_dangerous: false,
             requires_arg: false,
+            alias_names: Vec::new(),
         },
     );
 }
@@ -2254,6 +2773,9 @@ mod tests {
         assert_eq!(current_command_slice(r#""FOO=1" git ch"#), r#""FOO=1" git ch"#);
         assert_eq!(current_command_slice("FOO=1 (git ch"), "git ch");
         assert_eq!(current_command_slice("echo `foo)` && git ch"), "git ch");
+        assert_eq!(current_command_slice("echo x\ngit ch"), "git ch");
+        assert_eq!(current_command_slice("echo $((git ch"), "echo $((git ch");
+        assert_eq!(current_command_slice("cat <(git ch"), "cat <(git ch");
         assert!(is_fresh_command_position("echo x && "));
         assert!(!is_fresh_command_position("echo x &&"));
         assert!(!is_fresh_command_position(""));
@@ -2277,6 +2799,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2302,6 +2825,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2326,6 +2850,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2349,6 +2874,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2372,6 +2898,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2395,6 +2922,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         assert!(result.suggestions.iter().any(|s| s.name == "status"));
@@ -2418,6 +2946,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2442,6 +2971,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
@@ -2465,10 +2995,174 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         assert!(result.suggestions.is_empty(), "{:?}", result.suggestions);
         assert_eq!(result.search_term, "gi");
+    }
+
+    #[test]
+    fn trailing_space_expands_a_shell_alias_before_spec_lookup() {
+        let (_dir, mut registry) = load_git();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "g ".into(),
+                cwd: "/".into(),
+                cursor: None,
+                fuzzy: false,
+                history_only: false,
+                include_history: false,
+                suggest_first_token: false,
+                current_shell: Some("/bin/zsh".into()),
+                current_process: None,
+                environment_variables: Default::default(),
+                alias: Some("alias g=git\n".into()),
+            },
+        );
+        assert!(
+            result.suggestions.iter().any(|item| item.name == "checkout"),
+            "{:?}",
+            result.suggestions
+        );
+    }
+
+    #[test]
+    fn a_single_alias_token_without_space_is_not_expanded() {
+        let (_dir, mut registry) = load_git();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "g".into(),
+                cwd: "/".into(),
+                cursor: None,
+                fuzzy: false,
+                history_only: false,
+                include_history: false,
+                suggest_first_token: false,
+                current_shell: Some("/bin/zsh".into()),
+                current_process: None,
+                environment_variables: Default::default(),
+                alias: Some("alias g=git\n".into()),
+            },
+        );
+        assert!(result.suggestions.is_empty(), "{:?}", result.suggestions);
+    }
+
+    #[test]
+    fn history_template_offers_values_from_the_same_spec_slot_across_aliases_and_options() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("git.json"),
+            r#"{
+              "names":["git"],
+              "options":[{"names":["-C"],"args":[{"name":"path"}]}],
+              "subcommands":[{
+                "names":["add"],
+                "options":[{"names":["-v"]}],
+                "args":[{"name":"pathspec","templates":["history"]}]
+              }]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        crate::generate::set_history(Arc::new(crate::history::HistoryStore::from_lines(vec![
+            "g add file".into(),
+            "git -C /repo add -v other".into(),
+            "git add -v".into(),
+        ])));
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "g add ".into(),
+                cwd: dir.path().display().to_string(),
+                cursor: None,
+                fuzzy: false,
+                history_only: false,
+                include_history: false,
+                suggest_first_token: false,
+                current_shell: Some("/bin/zsh".into()),
+                current_process: None,
+                environment_variables: Default::default(),
+                alias: Some("alias g=git\n".into()),
+            },
+        );
+        crate::generate::set_history(Arc::default());
+        let history: Vec<&str> = result
+            .suggestions
+            .iter()
+            .filter(|item| item.kind == "arg")
+            .map(|item| item.name.as_str())
+            .collect();
+        // Most recent first; `-v` is an option, not a pathspec value.
+        assert_eq!(history, vec!["other", "file"]);
+    }
+
+    #[test]
+    fn help_template_lists_sibling_subcommands() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("tool.json"),
+            r#"{
+              "names":["tool"],
+              "subcommands":[
+                {"names":["help"],"args":[{"name":"command","templates":["help"]}]},
+                {"names":["build"],"description":"Build it"},
+                {"names":["test"],"description":"Test it"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "tool help ".into(),
+                cwd: "/".into(),
+                cursor: None,
+                fuzzy: false,
+                history_only: false,
+                include_history: false,
+                suggest_first_token: false,
+                current_shell: None,
+                current_process: None,
+                environment_variables: Default::default(),
+                alias: None,
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"build"), "{names:?}");
+        assert!(names.contains(&"test"), "{names:?}");
+        assert!(!names.contains(&"help"), "{names:?}");
+        assert!(
+            result.suggestions.iter().any(|item| item.kind == "special"),
+            "{:?}",
+            result.suggestions
+        );
+    }
+
+    #[test]
+    fn unknown_commands_do_not_run_cobra_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::load(dir.path()).expect("load");
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "definitely-not-a-spec-binary ".into(),
+                cwd: dir.path().display().to_string(),
+                cursor: None,
+                fuzzy: false,
+                history_only: false,
+                include_history: false,
+                suggest_first_token: false,
+                current_shell: None,
+                current_process: None,
+                environment_variables: Default::default(),
+                alias: None,
+            },
+        );
+        assert!(result.suggestions.is_empty(), "{:?}", result.suggestions);
     }
 
     #[test]
@@ -2498,6 +3192,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         assert!(
@@ -2524,6 +3219,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         assert!(
@@ -3199,6 +3895,15 @@ mod tests {
         let (tokens, trailing) = tokenize("git 'fe bar' ");
         assert_eq!(tokens, vec!["git", "fe bar"]);
         assert!(trailing);
+        let (tokens, trailing) = tokenize("git $'ch");
+        assert_eq!(tokens, vec!["git", "ch"]);
+        assert!(!trailing);
+        let (tokens, trailing) = tokenize("git\t");
+        assert_eq!(tokens, vec!["git"]);
+        assert!(!trailing);
+        let (tokens, trailing) = tokenize(r#"git "c\x"#);
+        assert_eq!(tokens, vec!["git", r"c\x"]);
+        assert!(!trailing);
     }
 
     #[test]
@@ -3232,6 +3937,7 @@ mod tests {
                 current_shell: None,
                 current_process: None,
                 environment_variables: Default::default(),
+                alias: None,
             },
         );
         let checkout = result
@@ -3371,7 +4077,32 @@ mod tests {
             .expect("static suggestion");
         assert_eq!(suggestion.query_term.as_deref(), Some("fi"));
         assert_eq!(result.search_term, "dir/fi");
-        assert_eq!(result.match_term, "fi");
+        assert_eq!(result.match_term, "dir/fi");
+    }
+
+    #[test]
+    fn nameless_generator_arg_is_still_the_active_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("demo.json"),
+            r#"{
+              "names": ["demo"],
+              "args": [{ "generators": [{ "script": ["printf", "alpha\n"], "splitOn": "\n" }] }]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "demo ".into(),
+                cwd: "/".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"alpha"), "{names:?}");
     }
 
     #[test]
@@ -3453,7 +4184,8 @@ mod tests {
 
         let root = registry.get_arc("demo").expect("demo spec");
         let (tokens, trailing) = tokenize("demo vis");
-        let context = resolve_context(root, &tokens, trailing, "vis", "vis", None);
+        let mut tokens = tokens;
+        let context = resolve_context(root, &mut tokens, trailing, "vis", "vis", None);
         assert_eq!(
             context
                 .active_arg
@@ -3673,20 +4405,21 @@ mod tests {
     }
 
     #[test]
-    fn is_command_token_lists_bundled_commands() {
+    fn is_command_token_does_not_list_bundled_commands() {
         let (_dir, mut registry) = load_is_command_registry();
         let result = context_result(&mut registry, "wrapper ta");
         assert!(
-            result.suggestions.iter().any(|item| item.name == "target"),
+            result.suggestions.iter().all(|item| item.name != "target"),
             "{:?}",
             result.suggestions
         );
         let empty = context_result(&mut registry, "wrapper ");
         assert!(
-            empty.suggestions.iter().any(|item| item.name == "target"),
+            empty.suggestions.iter().all(|item| item.name != "target"),
             "{:?}",
             empty.suggestions
         );
+        assert_eq!(empty.current_arg.as_ref().map(|arg| arg.name.as_str()), Some("command"));
     }
 
     #[test]
@@ -3730,8 +4463,13 @@ mod tests {
         .unwrap();
         let mut registry = Registry::load(dir.path()).unwrap();
         let result = context_result(&mut registry, "sudoish sudoish sudoish ");
+        assert_eq!(
+            result.current_arg.as_ref().map(|arg| arg.name.as_str()),
+            Some("command"),
+            "{result:?}"
+        );
         assert!(
-            result.suggestions.iter().any(|item| item.name == "sudoish"),
+            result.suggestions.iter().all(|item| item.name != "sudoish"),
             "{:?}",
             result.suggestions
         );
@@ -3753,10 +4491,11 @@ mod tests {
         let (_dir, mut registry) = load_is_command_registry();
         let typing = context_result(&mut registry, "modhost ht");
         assert!(
-            typing.suggestions.iter().any(|item| item.name == "http"),
+            typing.suggestions.iter().all(|item| item.name != "http"),
             "{:?}",
             typing.suggestions
         );
+        assert_eq!(typing.current_arg.as_ref().map(|arg| arg.name.as_str()), Some("module"));
         let switched = context_result(&mut registry, "modhost http g");
         assert!(
             switched.suggestions.iter().any(|item| item.name == "get"),
@@ -3808,5 +4547,328 @@ mod tests {
         assert_eq!(command_lookup_name("./bin/git", false), "git");
         assert_eq!(command_lookup_name("/usr/bin/git", false), "git");
         assert_eq!(command_lookup_name("~/bin/git", true), "git");
+    }
+
+    #[test]
+    fn parser_directives_alias_rewrites_the_token_and_walks_the_subcommand() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("git.json"),
+            r#"{
+              "names": ["git"],
+              "subcommands": [
+                {"names": ["status"], "description": "Show status", "options": [{"names": ["-s"], "description": "Short"}]}
+              ],
+              "args": [{
+                "name": "alias",
+                "isOptional": true,
+                "parserDirectives": { "alias": "status" }
+              }]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "git st -".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"-s"), "{names:?}");
+    }
+
+    #[test]
+    fn multi_token_parser_directives_alias_moves_the_typed_token_boundary() {
+        // `co = checkout -b`: after expansion the token being typed is the
+        // argument of `-b`, not `checkout`'s first positional. Fig re-slices
+        // `tokens` from the substituted command and keeps walking; the Rust
+        // walker grows `limit` in place, and `active_arg` has to use that
+        // grown boundary rather than the one computed from the raw buffer.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("git.json"),
+            r#"{
+              "names": ["git"],
+              "subcommands": [{
+                "names": ["checkout"],
+                "options": [{"names": ["-b"], "args": [{"name": "new-branch", "suggestions": [{"names": ["fresh"]}]}]}],
+                "args": [{"name": "branch", "suggestions": [{"names": ["existing"]}]}]
+              }],
+              "args": [{
+                "name": "alias",
+                "isOptional": true,
+                "parserDirectives": { "alias": "checkout -b" }
+              }]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "git co ".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"fresh"), "{names:?}");
+        assert!(!names.contains(&"existing"), "{names:?}");
+
+        let typed = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "git co fr".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = typed.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, vec!["fresh"], "{names:?}");
+    }
+
+    #[test]
+    fn slash_command_after_space_walks_the_dotslash_spec() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("dotslash.json"),
+            r#"{
+              "names": ["dotslash"],
+              "options": [{"names": ["--bar"], "description": "A flag"}]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "./script --".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"--bar"), "{names:?}");
+    }
+
+    #[test]
+    fn slash_first_token_runs_dotslash_filepaths() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("dotslash.json"),
+            r#"{"names":["dotslash"],"args":[{"name":"path","templates":["filepaths","folders"]}]}"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "./s".into(),
+                cwd: dir.path().display().to_string(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.iter().any(|name| name.contains("src")), "{names:?}");
+    }
+
+    #[test]
+    fn slash_first_token_ignores_a_bundled_spec_with_the_same_basename() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("gitk"), "").unwrap();
+        fs::write(
+            dir.path().join("git.json"),
+            r#"{"names":["git"],"subcommands":[{"names":["checkout"]}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("dotslash.json"),
+            r#"{"names":["dotslash"],"args":[{"name":"path","templates":["filepaths","folders"]}]}"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        // Still typing `./git`: Fig's single-token branch is `dotslash`, so
+        // the row is the `./gitk` file and not git's subcommands filtered to
+        // an empty list.
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "./git".into(),
+                cwd: dir.path().display().to_string(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.iter().any(|name| name.ends_with("gitk")), "{names:?}");
+        assert!(!names.contains(&"checkout"), "{names:?}");
+    }
+
+    #[test]
+    fn question_mark_after_space_loads_project_shortcuts() {
+        let dir = tempfile::tempdir().unwrap();
+        let fig = dir.path().join(".fig/autocomplete/build");
+        fs::create_dir_all(&fig).unwrap();
+        fs::write(
+            fig.join("_shortcuts.json"),
+            r#"{"names":["_shortcuts"],"subcommands":[{"names":["deploy"],"description":"Ship it"}]}"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "? ".into(),
+                cwd: dir.path().display().to_string(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"deploy"), "{names:?}");
+    }
+
+    #[test]
+    fn absolute_path_after_space_uses_the_bundled_basename_spec() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("git.json"),
+            r#"{
+              "names": ["git"],
+              "subcommands": [{"names": ["checkout"], "description": "Switch branches"}]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("dotslash.json"),
+            r#"{
+              "names": ["dotslash"],
+              "subcommands": [{"names": ["not-git"], "description": "Wrong spec"}]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "/usr/bin/git ch".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"checkout"), "{names:?}");
+        assert!(!names.contains(&"not-git"), "{names:?}");
+    }
+
+    #[test]
+    fn help_template_lists_the_parent_subcommands_not_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("docker.json"),
+            r#"{
+              "names": ["docker"],
+              "subcommands": [
+                {"names": ["run"], "description": "Run a container"},
+                {
+                  "names": ["compose"],
+                  "subcommands": [
+                    {"names": ["up"], "description": "Create and start"},
+                    {"names": ["help"], "args": [{"name": "command", "templates": ["help"]}]}
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "docker compose help ".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"up"), "{names:?}");
+        assert!(!names.contains(&"run"), "{names:?}");
+        assert!(!names.contains(&"compose"), "{names:?}");
+    }
+
+    #[test]
+    fn parser_directives_alias_can_rewrite_the_same_text_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("git.json"),
+            r#"{
+              "names": ["git"],
+              "subcommands": [
+                {"names": ["status"], "description": "Show status", "options": [{"names": ["-s"], "description": "Short"}]}
+              ],
+              "args": [{
+                "name": "alias",
+                "isOptional": true,
+                "isVariadic": true,
+                "parserDirectives": { "alias": "status" }
+              }]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "git st st -".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let names: Vec<_> = result.suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.contains(&"-s"), "{names:?}");
+    }
+
+    #[test]
+    fn fish_first_token_lines_keep_the_command_name_before_the_tab() {
+        assert_eq!(
+            dedupe_command_lines("git\tGit version control\ngit\nls\tlist files\n"),
+            vec!["git", "ls"]
+        );
+    }
+
+    #[test]
+    fn named_rows_carry_every_alias_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("git.json"),
+            r#"{
+              "names": ["git"],
+              "subcommands": [
+                {"names": ["checkout", "co", "switch"], "description": "Switch branches"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut registry = Registry::load(dir.path()).unwrap();
+        let result = complete(
+            &mut registry,
+            &CompleteRequest {
+                buffer: "git c".into(),
+                include_history: false,
+                ..CompleteRequest::default()
+            },
+        );
+        let checkout = result
+            .suggestions
+            .iter()
+            .find(|item| item.alias_names.iter().any(|name| name == "checkout"))
+            .expect("checkout");
+        assert!(checkout.alias_names.contains(&"co".to_string()));
+        assert!(checkout.alias_names.contains(&"switch".to_string()));
     }
 }

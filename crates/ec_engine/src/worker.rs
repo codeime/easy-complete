@@ -41,6 +41,9 @@ enum JobKind {
         accepted_name: String,
         timestamp: u64,
     },
+    /// `ec hook clear-autocomplete-cache`: drop every cached spec and
+    /// generator result before the next completion runs.
+    ClearCaches,
 }
 
 // A completion attempt can legitimately spend the legacy 5s script timeout
@@ -143,22 +146,32 @@ impl EngineClient {
                             );
                             continue;
                         },
+                        JobKind::ClearCaches => {
+                            clear_caches(&mut engine, &mut registry_template);
+                            continue;
+                        },
                         JobKind::Complete { request, reply } => Job {
                             kind: JobKind::Complete { request, reply },
                         },
                     };
                     // Rapid typing queues many jobs; only the latest buffer matters.
-                    // Acceptance records are independent events and are applied
-                    // while draining instead of being mistaken for completion
-                    // work or dropped by latest-job coalescing.
-                    let latest = drain_to_latest(&rx, first, |root_command, accepted_name, timestamp| {
-                        record_acceptance(
+                    // Acceptance records and cache clears are independent
+                    // events and are applied while draining instead of being
+                    // mistaken for completion work or dropped by latest-job
+                    // coalescing.
+                    let latest = drain_to_latest(&rx, first, |side_effect| match side_effect {
+                        SideEffect::RecordAcceptance {
+                            root_command,
+                            accepted_name,
+                            timestamp,
+                        } => record_acceptance(
                             &mut engine,
                             &worker_acceptance,
                             &root_command,
                             &accepted_name,
                             timestamp,
-                        );
+                        ),
+                        SideEffect::ClearCaches => clear_caches(&mut engine, &mut registry_template),
                     });
                     let JobKind::Complete { request, reply } = latest.kind else {
                         unreachable!("drain_to_latest returns a completion job");
@@ -268,6 +281,36 @@ impl EngineClient {
                 anyhow!("engine thread is gone")
             })
     }
+
+    /// Forget every cached spec and generator result. Applied on the worker
+    /// between completions, like an acceptance record, so it is never
+    /// coalesced away by a newer completion request.
+    pub fn clear_caches(&self) -> anyhow::Result<()> {
+        self.tx
+            .send(Job {
+                kind: JobKind::ClearCaches,
+            })
+            .map_err(|_err| anyhow!("engine thread is gone"))
+    }
+}
+
+/// A queued job that is not a completion: applied in order while draining.
+enum SideEffect {
+    RecordAcceptance {
+        root_command: String,
+        accepted_name: String,
+        timestamp: u64,
+    },
+    ClearCaches,
+}
+
+fn clear_caches(engine: &mut Option<Engine>, registry_template: &mut Option<Registry>) {
+    if let Some(engine) = engine.as_mut() {
+        engine.clear_caches();
+    }
+    // The pristine index a reset engine is rebuilt from would otherwise keep
+    // serving the spec files as they were at startup.
+    *registry_template = None;
 }
 
 impl AttemptFailure {
@@ -372,9 +415,9 @@ fn rebuild_engine(
     Ok(Engine::from_registry(specs_dir, registry, acceptance.clone()))
 }
 
-fn drain_to_latest<F>(rx: &mpsc::Receiver<Job>, first: Job, mut on_acceptance: F) -> Job
+fn drain_to_latest<F>(rx: &mpsc::Receiver<Job>, first: Job, mut on_side_effect: F) -> Job
 where
-    F: FnMut(String, String, u64),
+    F: FnMut(SideEffect),
 {
     let mut job = first;
     while let Ok(next) = rx.try_recv() {
@@ -383,7 +426,12 @@ where
                 root_command,
                 accepted_name,
                 timestamp,
-            } => on_acceptance(root_command, accepted_name, timestamp),
+            } => on_side_effect(SideEffect::RecordAcceptance {
+                root_command,
+                accepted_name,
+                timestamp,
+            }),
+            JobKind::ClearCaches => on_side_effect(SideEffect::ClearCaches),
             JobKind::Complete { request, reply } => {
                 // A newer request makes the current one irrelevant, but its
                 // caller is still waiting on the reply channel. Finish it
@@ -504,7 +552,7 @@ mod tests {
         ))
         .unwrap();
         let first = rx.recv().unwrap();
-        let latest = drain_to_latest(&rx, first, |_, _, _| unreachable!("no acceptance in this test"));
+        let latest = drain_to_latest(&rx, first, |_| unreachable!("no side effects in this test"));
         let JobKind::Complete { request, .. } = latest.kind else {
             unreachable!("latest job should be a completion")
         };
@@ -545,8 +593,13 @@ mod tests {
         .unwrap();
 
         let mut records = Vec::new();
-        let latest = drain_to_latest(&rx, rx.recv().unwrap(), |command, name, _| {
-            records.push((command, name));
+        let latest = drain_to_latest(&rx, rx.recv().unwrap(), |side_effect| match side_effect {
+            SideEffect::RecordAcceptance {
+                root_command,
+                accepted_name,
+                ..
+            } => records.push((root_command, accepted_name)),
+            SideEffect::ClearCaches => unreachable!("no cache clear in this test"),
         });
         assert_eq!(records, vec![("git".into(), "status".into())]);
         let JobKind::Complete { request, .. } = latest.kind else {
@@ -576,6 +629,150 @@ mod tests {
             "{:?}",
             result.suggestions
         );
+    }
+
+    fn counting_script(count: &std::path::Path) -> String {
+        format!("printf 'src\\n'; printf x >> '{}'", count.display())
+    }
+
+    /// Watchdog for the reset tests. The request after a reset runs on a
+    /// fresh engine that still has to load shell history, so this needs
+    /// real headroom over that on a loaded test host; 100ms did not have it.
+    const WATCHDOG_UNDER_TEST: Duration = Duration::from_secs(1);
+
+    #[test]
+    fn generator_session_survives_attempt_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let spec = serde_json::json!({
+            "names": ["demo"],
+            "args": [{
+                "name": "slot",
+                "script": ["sh", "-c", counting_script(&count)],
+                "splitOn": "\n",
+                "debounceMs": 200
+            }]
+        });
+        std::fs::write(dir.path().join("demo.json"), spec.to_string()).unwrap();
+        let engine = EngineClient::spawn(dir.path().to_path_buf()).expect("spawn");
+        let cwd = dir.path().display().to_string();
+        let request = CompleteRequest {
+            buffer: "demo ".into(),
+            cwd,
+            include_history: false,
+            ..CompleteRequest::default()
+        };
+        let first = engine.complete_blocking(request.clone()).expect("first");
+        assert!(
+            first.pending_generators,
+            "debounce should delay the first run: {first:?}"
+        );
+        assert!(!count.exists() || std::fs::read_to_string(&count).unwrap().is_empty());
+
+        let second = engine.complete_blocking(request).expect("follow-up");
+        assert!(
+            second.suggestions.iter().any(|row| row.name == "src"),
+            "{:?}",
+            second.suggestions
+        );
+        assert_eq!(std::fs::read_to_string(&count).unwrap().matches('x').count(), 1);
+        assert!(!second.pending_generators);
+    }
+
+    #[test]
+    fn clear_caches_rereads_specs_and_forgets_generator_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let spec = |names: &[&str]| {
+            serde_json::json!({
+                "names": ["demo"],
+                "subcommands": names.iter().map(|name| serde_json::json!({"names": [name]})).collect::<Vec<_>>(),
+                "args": [{
+                    "name": "slot",
+                    "script": ["sh", "-c", counting_script(&count)],
+                    "splitOn": "\n",
+                    "cacheTtl": 60000
+                }]
+            })
+        };
+        std::fs::write(dir.path().join("demo.json"), spec(&["before"]).to_string()).unwrap();
+        let engine = EngineClient::spawn(dir.path().to_path_buf()).expect("spawn");
+        let request = CompleteRequest {
+            buffer: "demo ".into(),
+            cwd: dir.path().display().to_string(),
+            include_history: false,
+            ..CompleteRequest::default()
+        };
+        let first = engine.complete_blocking(request.clone()).expect("first");
+        assert!(first.suggestions.iter().any(|row| row.name == "before"), "{first:?}");
+        assert_eq!(std::fs::read_to_string(&count).unwrap().matches('x').count(), 1);
+
+        // Edit the spec on disk; a cached spec and a cached script result
+        // would both hide the change.
+        std::fs::write(dir.path().join("demo.json"), spec(&["after"]).to_string()).unwrap();
+        let stale = engine.complete_blocking(request.clone()).expect("stale");
+        assert!(stale.suggestions.iter().any(|row| row.name == "before"), "{stale:?}");
+        assert_eq!(std::fs::read_to_string(&count).unwrap().matches('x').count(), 1);
+
+        engine.clear_caches().expect("clear");
+        let fresh = engine.complete_blocking(request).expect("fresh");
+        assert!(fresh.suggestions.iter().any(|row| row.name == "after"), "{fresh:?}");
+        assert!(fresh.suggestions.iter().all(|row| row.name != "before"), "{fresh:?}");
+        assert_eq!(std::fs::read_to_string(&count).unwrap().matches('x').count(), 2);
+    }
+
+    #[test]
+    fn trailing_space_and_typed_token_share_generator_session_across_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = dir.path().join("count");
+        let script = counting_script(&count);
+        let spec = serde_json::json!({
+            "names": ["git"],
+            "subcommands": [
+                {"names": ["add"], "args": [{"name": "pathspec", "script": ["sh", "-c", script.clone()], "splitOn": "\n"}]},
+                {"names": ["rm"], "args": [{"name": "pathspec", "script": ["sh", "-c", script], "splitOn": "\n"}]}
+            ]
+        });
+        std::fs::write(dir.path().join("git.json"), spec.to_string()).unwrap();
+        let engine = EngineClient::spawn(dir.path().to_path_buf()).expect("spawn");
+        let cwd = dir.path().display().to_string();
+        let after_space = engine
+            .complete_blocking(CompleteRequest {
+                buffer: "git add ".into(),
+                cwd: cwd.clone(),
+                include_history: false,
+                ..CompleteRequest::default()
+            })
+            .expect("git add ");
+        let while_typing = engine
+            .complete_blocking(CompleteRequest {
+                buffer: "git add s".into(),
+                cwd: cwd.clone(),
+                include_history: false,
+                ..CompleteRequest::default()
+            })
+            .expect("git add s");
+        let other_command = engine
+            .complete_blocking(CompleteRequest {
+                buffer: "git rm ".into(),
+                cwd,
+                include_history: false,
+                ..CompleteRequest::default()
+            })
+            .expect("git rm ");
+        assert!(
+            after_space.suggestions.iter().any(|row| row.name == "src"),
+            "{after_space:?}"
+        );
+        assert!(
+            while_typing.suggestions.iter().any(|row| row.name == "src"),
+            "{while_typing:?}"
+        );
+        assert!(
+            other_command.suggestions.iter().any(|row| row.name == "src"),
+            "{other_command:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&count).unwrap().matches('x').count(), 2);
     }
 
     #[test]
@@ -624,8 +821,8 @@ mod tests {
         tx.send(completion_job(CompleteRequest::default(), reply)).unwrap();
         drop(caller);
 
-        let job = drain_to_latest(&rx, rx.recv().unwrap(), |_, _, _| {
-            unreachable!("no acceptance in this test")
+        let job = drain_to_latest(&rx, rx.recv().unwrap(), |_| {
+            unreachable!("no side effects in this test")
         });
         let JobKind::Complete { reply, .. } = job.kind else {
             unreachable!("job should be a completion")
@@ -665,14 +862,17 @@ mod tests {
             // future directly, never yielding back to `block_on`.
             for round in 0..200u32 {
                 let mut future = Box::pin(client.complete(request.clone()));
-                let mut spins = 0u32;
+                // A livelocked reply never resolves, so a wall-clock bound
+                // catches it; a spin count did not survive a loaded test
+                // host, where the first round also pays for the engine's
+                // history load.
+                let deadline = std::time::Instant::now() + Duration::from_secs(20);
                 let result = loop {
                     match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
                         Poll::Ready(result) => break result,
                         Poll::Pending => {
-                            spins += 1;
                             assert!(
-                                spins < 200_000,
+                                std::time::Instant::now() < deadline,
                                 "round {round}: the reply future stopped making progress on this thread"
                             );
                             thread::yield_now();
@@ -690,7 +890,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("hang.json"),
-            r#"{"names":["hang"],"args":[{"script":["sleep","1"]}]}"#,
+            r#"{"names":["hang"],"args":[{"script":["sleep","5"]}]}"#,
         )
         .unwrap();
         std::fs::write(
@@ -699,8 +899,7 @@ mod tests {
         )
         .unwrap();
 
-        let client =
-            EngineClient::spawn_with_timeout(dir.path().to_path_buf(), Duration::from_millis(100)).expect("spawn");
+        let client = EngineClient::spawn_with_timeout(dir.path().to_path_buf(), WATCHDOG_UNDER_TEST).expect("spawn");
         let first = client.complete_blocking(CompleteRequest {
             buffer: "hang ".into(),
             cwd: dir.path().display().to_string(),
@@ -724,7 +923,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("hang.json"),
-            r#"{"names":["hang"],"args":[{"script":["sleep","1"]}]}"#,
+            r#"{"names":["hang"],"args":[{"script":["sleep","5"]}]}"#,
         )
         .unwrap();
         std::fs::write(
@@ -738,8 +937,7 @@ mod tests {
         )
         .unwrap();
 
-        let client =
-            EngineClient::spawn_with_timeout(dir.path().to_path_buf(), Duration::from_millis(100)).expect("spawn");
+        let client = EngineClient::spawn_with_timeout(dir.path().to_path_buf(), WATCHDOG_UNDER_TEST).expect("spawn");
         let first = client.complete_blocking(CompleteRequest {
             buffer: "hang ".into(),
             cwd: dir.path().display().to_string(),
