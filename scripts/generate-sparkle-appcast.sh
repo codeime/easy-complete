@@ -52,7 +52,7 @@ printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
     --ed-key-file - \
     --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
     --embed-release-notes \
-    --link "https://github.com/${GITHUB_REPOSITORY:-chen86860/easy-complete}" \
+    --link "https://github.com/${GITHUB_REPOSITORY:-codeime/easy-complete}" \
     --maximum-versions "$SPARKLE_MAXIMUM_VERSIONS" \
     --maximum-deltas "$SPARKLE_MAXIMUM_DELTAS" \
     "$APPCAST_DIR"

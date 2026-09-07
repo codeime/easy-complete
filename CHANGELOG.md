@@ -2,14 +2,14 @@
 
 ## Unreleased
 
-- fix: render menu bar icons at Retina resolution and give app icons consistent transparent margins while preserving this fork's artwork.
-
-- feat: update bundled completion specs to `@chen86860/autocomplete-specs@3.1.0`, adding 19 commands and refreshing Claude, Codex, and Copilot suggestions.
-
-- feat: add a native settings switch for the menu bar icon and reopen settings when Easy Complete is launched again, including when the icon is hidden.
+## v3.0.0
 
 - fix: keep the settings sidebar and switches at a stable width on every page; refresh navigation, page headings, grouped controls, and completion theme previews.
+- change: move this fork to the independent 3.0 version line and use `codeime/easy-complete` as the default update source, so upstream releases do not replace this build.
 - feat: separate the settings interface theme from the completion theme; completion previews now show command suggestions using the popup's actual palette.
+- feat: update bundled completion specs to `@chen86860/autocomplete-specs@3.1.0`, adding 19 commands and refreshing Claude, Codex, and Copilot suggestions.
+- feat: add a native settings switch for the menu bar icon and reopen settings when Easy Complete is launched again, including when the icon is hidden.
+- fix: render menu bar icons at Retina resolution and give app icons consistent transparent margins while preserving this fork's artwork.
 
 ## v2.3.0
 

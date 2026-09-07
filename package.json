@@ -2,7 +2,7 @@
   "name": "easy-complete",
   "private": true,
   "author": "Easy Complete Contributors",
-  "repository": "https://github.com/chen86860/easy-complete",
+  "repository": "https://github.com/codeime/easy-complete",
   "license": "MIT",
   "packageManager": "pnpm@11.14.0",
   "type": "module",

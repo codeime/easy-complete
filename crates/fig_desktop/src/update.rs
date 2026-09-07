@@ -144,10 +144,9 @@ mod macos {
         // internally, and we intentionally keep the controller alive for the lifetime of the app.
         let controller: id = unsafe {
             let allocated: id = msg_send![class, alloc];
-            let starts_updater = if starts_updater { YES } else { NO };
             msg_send![
                 allocated,
-                initWithStartingUpdater: starts_updater
+                initWithStartingUpdater: NO
                 updaterDelegate: nil
                 userDriverDelegate: user_driver_delegate()
             ]
@@ -176,6 +175,9 @@ mod macos {
         unsafe {
             let updater: id = msg_send![controller, updater];
             if updater != nil {
+                // A feed persisted by an older build overrides Info.plist. Clear it
+                // before starting checks so this fork only uses its bundled feed.
+                let _: id = msg_send![updater, clearFeedURLFromUserDefaults];
                 let _: () = msg_send![updater, setAutomaticallyChecksForUpdates: YES];
                 let _: () = msg_send![updater, setAutomaticallyDownloadsUpdates: NO];
                 info!(
@@ -183,6 +185,14 @@ mod macos {
                 );
             } else {
                 warn!("Sparkle updater instance is unavailable; cannot enable automatic checks");
+            }
+        }
+
+        if starts_updater {
+            // SAFETY: We opted out of starting the controller during initialization
+            // so the feed migration above happens before any scheduled check.
+            unsafe {
+                let _: () = msg_send![controller, startUpdater];
             }
         }
 

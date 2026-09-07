@@ -15,7 +15,7 @@ APP_DISPLAY="Easy Complete"       # human-readable / bundle directory name
 BUNDLE_ID="dev.emmmm.easy-complete"
 APP_CATEGORY="public.app-category.productivity"   # Finder / Launchpad "Developer Tools"
 COPYRIGHT="${COPYRIGHT:-© 2026 Easy Complete contributors}"
-DEFAULT_SPARKLE_APPCAST_URL="https://github.com/chen86860/easy-complete/releases/latest/download/appcast.xml"
+DEFAULT_SPARKLE_APPCAST_URL="https://github.com/codeime/easy-complete/releases/latest/download/appcast.xml"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
