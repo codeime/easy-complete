@@ -1360,6 +1360,11 @@ fn overlay_window_size_from(overlay: &OverlayState) -> LogicalSize<f64> {
 
 pub fn resolve_overlay_theme() -> OverlayTheme {
     let name = fig_settings::settings::get_string_or("autocomplete.theme", "github-dark".into());
+    overlay_theme_by_name(&name)
+}
+
+/// Resolve colors for both the live overlay and its settings previews.
+pub(crate) fn overlay_theme_by_name(name: &str) -> OverlayTheme {
     match name.to_ascii_lowercase().as_str() {
         "light" => OverlayTheme::light(),
         "dark" => OverlayTheme::dark(),

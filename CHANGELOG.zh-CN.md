@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 修复：设置页侧栏和开关保持固定宽度，避免行为页长文案挤压导航；统一导航、页面标题、分组控件和提示主题预览的布局与样式。
+- 新增：设置界面主题与补全提示主题分开配置；提示主题预览改为命令补全列表，并使用弹窗实际配色。
+
 ## v2.3.0
 
 - ci: 没有 Developer ID 或 Sparkle secrets 时仍然把 ad-hoc ARM64 DMG 发到 GitHub Releases，并且首次发版不再要求 Sparkle delta

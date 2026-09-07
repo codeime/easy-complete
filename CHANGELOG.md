@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- fix: keep the settings sidebar and switches at a stable width on every page; refresh navigation, page headings, grouped controls, and completion theme previews.
+- feat: separate the settings interface theme from the completion theme; completion previews now show command suggestions using the popup's actual palette.
+
 ## v2.3.0
 
 - ci: publish an ad-hoc ARM64 DMG to GitHub Releases when Developer ID or Sparkle secrets are missing, and allow a first release without Sparkle deltas

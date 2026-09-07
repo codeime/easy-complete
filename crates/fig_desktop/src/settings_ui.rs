@@ -27,7 +27,7 @@ pub fn is_open() -> bool {
     SETTINGS_OPEN.load(Ordering::Relaxed)
 }
 
-const SIDEBAR_W: f32 = 226.0;
+const SIDEBAR_W: f32 = 196.0;
 const SETTINGS_TITLEBAR_H: f32 = 44.0;
 const SETTINGS_TRAFFIC_LIGHT_X: f32 = 12.0;
 const SETTINGS_TRAFFIC_LIGHT_Y: f32 = 18.0;
@@ -61,11 +61,18 @@ struct Chrome {
     separator: u32,
     accent: u32,
     track_off: u32,
+    selection: u32,
 }
 
 impl Chrome {
     fn current() -> Self {
-        if ec_gpui::system_appearance_is_dark() {
+        let theme = fig_settings::settings::get_string_or("dashboard.theme", "system".into());
+        let dark = match theme.as_str() {
+            "light" => false,
+            "dark" => true,
+            _ => ec_gpui::system_appearance_is_dark(),
+        };
+        if dark {
             Self {
                 bg: 0x1c1c1e,
                 sidebar: 0x161618,
@@ -76,18 +83,20 @@ impl Chrome {
                 separator: 0x3a3a3c,
                 accent: 0x0a84ff,
                 track_off: 0x48484a,
+                selection: 0x19364f,
             }
         } else {
             Self {
-                bg: 0xf5f5f7,
-                sidebar: 0xe8e8ed,
-                sidebar_border: 0xd4d4d8,
+                bg: 0xf7f8fa,
+                sidebar: 0xeff1f5,
+                sidebar_border: 0xe0e4eb,
                 text: 0x1d1d1f,
                 muted: 0x6e6e73,
                 card: 0xffffff,
                 separator: 0xe5e5ea,
                 accent: 0x007aff,
                 track_off: 0xd1d1d6,
+                selection: 0xe1edfc,
             }
         }
     }
@@ -105,10 +114,6 @@ struct ThemeSwatch {
     label_en: &'static str,
     label_zh: &'static str,
     appearance: ThemeAppearance,
-    bg: u32,
-    text: u32,
-    selection: u32,
-    accent: u32,
 }
 
 const THEMES: &[ThemeSwatch] = &[
@@ -117,120 +122,72 @@ const THEMES: &[ThemeSwatch] = &[
         label_en: "System",
         label_zh: "跟随系统",
         appearance: ThemeAppearance::System,
-        bg: 0x1c1c1c,
-        text: 0xd0d0d0,
-        selection: 0x007aff,
-        accent: 0x007aff,
     },
     ThemeSwatch {
         id: "light",
         label_en: "Light",
         label_zh: "浅色",
         appearance: ThemeAppearance::Light,
-        bg: 0xfefefe,
-        text: 0x070707,
-        selection: 0x2969da,
-        accent: 0xfff899,
     },
     ThemeSwatch {
         id: "github-light",
         label_en: "GitHub Light",
         label_zh: "GitHub Light",
         appearance: ThemeAppearance::Light,
-        bg: 0xffffff,
-        text: 0x24292f,
-        selection: 0x0969da,
-        accent: 0xfff8c5,
     },
     ThemeSwatch {
         id: "claude-light",
         label_en: "Claude Light",
         label_zh: "Claude Light",
         appearance: ThemeAppearance::Light,
-        bg: 0xf3f1e9,
-        text: 0x1a1917,
-        selection: 0xefe5db,
-        accent: 0xcc785c,
     },
     ThemeSwatch {
         id: "catppuccin-latte",
         label_en: "Catppuccin Latte",
         label_zh: "Catppuccin Latte",
         appearance: ThemeAppearance::Light,
-        bg: 0xeff1f5,
-        text: 0x4c4f69,
-        selection: 0x1e66f5,
-        accent: 0x8839ef,
     },
     ThemeSwatch {
         id: "dark",
         label_en: "Dark",
         label_zh: "深色",
         appearance: ThemeAppearance::Dark,
-        bg: 0x303030,
-        text: 0xb4b4b4,
-        selection: 0x1e5ac7,
-        accent: 0x5f5938,
     },
     ThemeSwatch {
         id: "github-dark",
         label_en: "GitHub Dark",
         label_zh: "GitHub Dark",
         appearance: ThemeAppearance::Dark,
-        bg: 0x0d1117,
-        text: 0xc9d1d9,
-        selection: 0x1f6feb,
-        accent: 0x388bfd,
     },
     ThemeSwatch {
         id: "claude-dark",
         label_en: "Claude Dark",
         label_zh: "Claude Dark",
         appearance: ThemeAppearance::Dark,
-        bg: 0x262624,
-        text: 0xf0eee6,
-        selection: 0x3d3d3a,
-        accent: 0xcc785c,
     },
     ThemeSwatch {
         id: "nord",
         label_en: "Nord",
         label_zh: "Nord",
         appearance: ThemeAppearance::Dark,
-        bg: 0x2e3440,
-        text: 0xd8dee9,
-        selection: 0x5e81ac,
-        accent: 0x88c0d0,
     },
     ThemeSwatch {
         id: "gruvbox-dark",
         label_en: "Gruvbox Dark",
         label_zh: "Gruvbox Dark",
         appearance: ThemeAppearance::Dark,
-        bg: 0x282828,
-        text: 0xebdbb2,
-        selection: 0x458588,
-        accent: 0xd79921,
     },
     ThemeSwatch {
         id: "one-dark",
         label_en: "One Dark",
         label_zh: "One Dark",
         appearance: ThemeAppearance::Dark,
-        bg: 0x282c34,
-        text: 0xabb2bf,
-        selection: 0x528bff,
-        accent: 0x98c379,
     },
     ThemeSwatch {
         id: "tokyo-night",
         label_en: "Tokyo Night",
         label_zh: "Tokyo Night",
         appearance: ThemeAppearance::Dark,
-        bg: 0x1a1b26,
-        text: 0xa9b1d6,
-        selection: 0x364a82,
-        accent: 0xbb9af7,
     },
 ];
 
@@ -288,6 +245,7 @@ impl Render for SettingsWindow {
             .flex_row()
             .w_full()
             .h_full()
+            .overflow_hidden()
             .bg(rgb(chrome.bg))
             .text_color(rgb(chrome.text))
             .text_size(px(13.))
@@ -308,21 +266,59 @@ impl Render for SettingsWindow {
 
         root.child(sidebar(section, zh, chrome, entity.clone())).child(
             div()
-                .id("ec-settings-main")
+                .id(("ec-settings-main", section as u32))
                 .flex_1()
+                .min_w(px(0.))
+                .min_h(px(0.))
                 .flex()
                 .flex_col()
-                .pt(px(52.))
+                .pt(px(48.))
                 .px(px(28.))
                 .pb(px(24.))
                 .overflow_y_scroll()
-                .child(match section {
-                    Section::Appearance => appearance_page(zh, chrome, entity.clone()).into_any_element(),
-                    Section::Behavior => behavior_page(zh, chrome, entity).into_any_element(),
-                    Section::About => about_page(zh, chrome, entity, self.copied_doctor).into_any_element(),
-                }),
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(720.))
+                        .min_w(px(0.))
+                        .flex_none()
+                        .mx_auto()
+                        .child(page_header(section, zh, chrome))
+                        .child(match section {
+                            Section::Appearance => appearance_page(zh, chrome, entity.clone()).into_any_element(),
+                            Section::Behavior => behavior_page(zh, chrome, entity).into_any_element(),
+                            Section::About => about_page(zh, chrome, entity, self.copied_doctor).into_any_element(),
+                        }),
+                ),
         )
     }
+}
+
+fn page_header(section: Section, zh: bool, chrome: Chrome) -> impl IntoElement {
+    let (title, description) = match (section, zh) {
+        (Section::Appearance, true) => ("外观", "分别设置界面与终端补全提示的外观"),
+        (Section::Appearance, false) => ("Appearance", "Personalize settings and your terminal completions"),
+        (Section::Behavior, true) => ("行为", "调整启动方式、补全习惯与键盘操作"),
+        (Section::Behavior, false) => ("Behavior", "Choose how Easy Complete starts and responds as you type"),
+        (Section::About, true) => ("关于", "版本、更新与支持"),
+        (Section::About, false) => ("About", "Version, updates, and support"),
+    };
+    div()
+        .mb(px(24.))
+        .child(
+            div()
+                .text_size(px(24.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(
+            div()
+                .mt(px(6.))
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(rgb(chrome.muted))
+                .child(description),
+        )
 }
 
 fn sidebar(section: Section, zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> impl IntoElement {
@@ -331,27 +327,45 @@ fn sidebar(section: Section, zh: bool, chrome: Chrome, entity: Entity<SettingsWi
         (Section::Behavior, if zh { "行为" } else { "Behavior" }),
         (Section::About, if zh { "关于" } else { "About" }),
     ];
-    let mut nav = div().flex().flex_col().px(px(10.)).gap(px(2.));
+    let mut nav = div().flex().flex_col().mt(px(14.)).px(px(12.)).gap(px(5.));
     for (id, label) in items {
         let active = section == id;
         let entity = entity.clone();
         nav = nav.child(
             div()
                 .id(("ec-settings-nav", id as u32))
-                .h(px(28.))
-                .px(px(8.))
-                .rounded(px(6.))
+                .h(px(38.))
+                .flex_none()
+                .px(px(10.))
+                .gap(px(10.))
+                .rounded(px(8.))
                 .flex()
                 .flex_row()
                 .items_center()
                 .cursor_pointer()
-                .bg(rgb(if active { chrome.card } else { chrome.sidebar }))
-                .text_color(rgb(if active { chrome.text } else { chrome.muted }))
+                .bg(rgb(if active { chrome.selection } else { chrome.sidebar }))
+                .text_color(rgb(if active { chrome.accent } else { chrome.text }))
+                .hover(|style| style.bg(rgb(chrome.selection)))
                 .font_weight(if active {
                     gpui::FontWeight::MEDIUM
                 } else {
                     gpui::FontWeight::NORMAL
                 })
+                .child(
+                    div()
+                        .w(px(22.))
+                        .h(px(22.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(16.))
+                        .child(match id {
+                            Section::Appearance => "◐",
+                            Section::Behavior => "⌘",
+                            Section::About => "ⓘ",
+                        }),
+                )
                 .child(label.to_string())
                 .on_mouse_down(MouseButton::Left, move |_e, _w, cx| {
                     entity.update(cx, |this, cx| {
@@ -364,6 +378,7 @@ fn sidebar(section: Section, zh: bool, chrome: Chrome, entity: Entity<SettingsWi
     div()
         .id("ec-settings-sidebar")
         .w(px(SIDEBAR_W))
+        .flex_none()
         .h_full()
         .flex()
         .flex_col()
@@ -388,21 +403,38 @@ fn sidebar(section: Section, zh: bool, chrome: Chrome, entity: Entity<SettingsWi
                 ),
         )
         .child(nav)
+        .child(
+            div()
+                .mt_auto()
+                .px(px(22.))
+                .py(px(20.))
+                .text_size(px(11.))
+                .text_color(rgb(chrome.muted))
+                .child("Easy Complete")
+                .child(div().mt(px(3.)).child(env!("CARGO_PKG_VERSION"))),
+        )
 }
 
 fn card(title: &str, chrome: Chrome, children: impl IntoElement) -> impl IntoElement {
     div()
-        .mb(px(16.))
+        .w_full()
+        .min_w(px(0.))
+        .flex_none()
+        .mb(px(22.))
         .child(
             div()
-                .mb(px(8.))
-                .text_size(px(12.))
-                .text_color(rgb(chrome.muted))
+                .mb(px(9.))
+                .text_size(px(13.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(chrome.text))
                 .child(title.to_string()),
         )
         .child(
             div()
-                .rounded(px(10.))
+                .w_full()
+                .min_w(px(0.))
+                .rounded(px(12.))
+                .overflow_hidden()
                 .bg(rgb(chrome.card))
                 .border_1()
                 .border_color(rgb(chrome.separator))
@@ -417,7 +449,7 @@ fn stacked_row(
     last: bool,
     control: impl IntoElement,
 ) -> impl IntoElement {
-    let mut body = div().px(px(16.)).py(px(12.));
+    let mut body = div().w_full().min_w(px(0.)).px(px(16.)).py(px(14.));
     if !last {
         body = body.border_b_1().border_color(rgb(chrome.separator));
     }
@@ -431,7 +463,7 @@ fn stacked_row(
                     .child(desc),
             )
         })
-        .child(div().mt(px(10.)).w_full().child(control))
+        .child(div().mt(px(10.)).w_full().min_w(px(0.)).child(control))
 }
 
 fn row(
@@ -442,13 +474,15 @@ fn row(
     control: impl IntoElement,
 ) -> impl IntoElement {
     let mut body = div()
+        .w_full()
+        .min_w(px(0.))
         .flex()
         .flex_row()
         .items_center()
         .justify_between()
         .gap(px(16.))
         .px(px(16.))
-        .py(px(12.));
+        .py(px(14.));
     if !last {
         body = body.border_b_1().border_color(rgb(chrome.separator));
     }
@@ -459,19 +493,22 @@ fn row(
             div()
                 .mt(px(3.))
                 .text_size(px(12.))
+                .line_height(px(18.))
+                .whitespace_normal()
                 .text_color(rgb(chrome.muted))
                 .child(description.to_string()),
         );
     }
-    body.child(left).child(control)
+    body.child(left).child(div().flex_none().child(control))
 }
 
 fn toggle(id: SharedString, checked: bool, chrome: Chrome, on_click: impl Fn(&mut App) + 'static) -> impl IntoElement {
     div()
         .id(id)
-        .w(px(40.))
-        .h(px(24.))
-        .rounded(px(12.))
+        .w(px(38.))
+        .flex_none()
+        .h(px(22.))
+        .rounded(px(11.))
         .bg(rgb(if checked { chrome.accent } else { chrome.track_off }))
         .flex()
         .flex_row()
@@ -480,8 +517,9 @@ fn toggle(id: SharedString, checked: bool, chrome: Chrome, on_click: impl Fn(&mu
         .cursor_pointer()
         .child(
             div()
-                .w(px(20.))
-                .h(px(20.))
+                .w(px(18.))
+                .flex_none()
+                .h(px(18.))
                 .rounded(px(10.))
                 .bg(rgb(0xffffff))
                 .when(checked, |this| this.ml(px(16.))),
@@ -555,7 +593,7 @@ fn select_chips(
     on_pick: impl Fn(&'static str, &mut App) + 'static,
 ) -> impl IntoElement {
     let on_pick = std::rc::Rc::new(on_pick);
-    let mut row = div().flex().flex_row().flex_wrap().gap(px(6.));
+    let mut row = div().min_w(px(0.)).flex().flex_row().flex_wrap().gap(px(6.));
     for (i, (label, value)) in options.iter().enumerate() {
         let selected = *value == current;
         let value = *value;
@@ -563,12 +601,16 @@ fn select_chips(
         row = row.child(
             div()
                 .id((id_prefix, i as u32))
+                .flex_none()
+                .whitespace_nowrap()
                 .px(px(10.))
                 .py(px(5.))
-                .rounded(px(8.))
+                .rounded(px(7.))
+                .border_1()
+                .border_color(rgb(if selected { chrome.accent } else { chrome.separator }))
                 .cursor_pointer()
-                .bg(rgb(if selected { chrome.accent } else { chrome.separator }))
-                .text_color(rgb(if selected { 0xffffff } else { chrome.text }))
+                .bg(rgb(if selected { chrome.selection } else { chrome.card }))
+                .text_color(rgb(if selected { chrome.accent } else { chrome.text }))
                 .child((*label).to_string())
                 .on_mouse_down(MouseButton::Left, move |_e, _w, cx| on_pick(value, cx)),
         );
@@ -576,128 +618,36 @@ fn select_chips(
     row
 }
 
-fn theme_dot(color: u32, opacity: f32) -> impl IntoElement {
-    div()
-        .w(px(6.))
-        .h(px(6.))
-        .rounded(px(99.))
-        .bg(rgb(color))
-        .opacity(opacity)
-}
-
-fn theme_preview_window(swatch: &ThemeSwatch) -> impl IntoElement {
-    let light = matches!(swatch.appearance, ThemeAppearance::Light | ThemeAppearance::System);
-    let chrome_line = if light { 0xd0d0d6 } else { 0x3a3a3c };
-    let field_opacity = if light { 0.35 } else { 0.06 };
-    div()
-        .rounded(px(9.))
-        .bg(rgb(swatch.bg))
+fn completion_theme_preview(swatch: &ThemeSwatch) -> impl IntoElement {
+    let theme = crate::overlay::overlay_theme_by_name(swatch.id);
+    let mut list = div()
+        .rounded(px(7.))
         .border_1()
-        .border_color(rgb(chrome_line))
+        .border_color(rgb(theme.border))
+        .bg(rgb(theme.background))
+        .text_color(rgb(theme.text))
+        .font_family("Menlo")
+        .text_size(px(10.))
         .overflow_hidden()
         .child(
             div()
-                .h(px(20.))
                 .px(px(8.))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.))
-                .border_b_1()
-                .border_color(rgb(chrome_line))
-                .child(theme_dot(swatch.accent, 0.55))
-                .child(theme_dot(swatch.text, 0.38))
-                .child(theme_dot(swatch.text, 0.32))
-                .child(
-                    div()
-                        .ml(px(4.))
-                        .flex_1()
-                        .h(px(12.))
-                        .rounded(px(5.))
-                        .border_1()
-                        .border_color(rgb(chrome_line))
-                        .opacity(0.75),
-                ),
-        )
-        .child(
+                .py(px(6.))
+                .text_color(rgb(theme.muted))
+                .child("$ git ch"),
+        );
+    for (index, command) in ["checkout", "cherry-pick", "check-ref-format"].iter().enumerate() {
+        let selected = index == 0;
+        list = list.child(
             div()
-                .px(px(12.))
-                .py(px(10.))
-                .child(
-                    div()
-                        .h(px(16.))
-                        .mb(px(8.))
-                        .rounded(px(5.))
-                        .bg(rgb(swatch.selection))
-                        .opacity(0.85),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(div().w(px(8.)).h(px(8.)).rounded(px(3.)).bg(rgb(swatch.accent)))
-                        .child(
-                            div()
-                                .h(px(8.))
-                                .w(px(52.))
-                                .rounded(px(4.))
-                                .bg(rgb(swatch.text))
-                                .opacity(0.55),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .h(px(16.))
-                                .rounded(px(5.))
-                                .border_1()
-                                .border_color(rgb(chrome_line))
-                                .bg(rgb(0xffffff))
-                                .opacity(field_opacity),
-                        ),
-                )
-                .child(
-                    div()
-                        .mt(px(8.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .h(px(6.))
-                                .w(px(40.))
-                                .rounded(px(99.))
-                                .bg(rgb(swatch.text))
-                                .opacity(0.38),
-                        )
-                        .child(
-                            div()
-                                .h(px(6.))
-                                .w(px(28.))
-                                .rounded(px(99.))
-                                .bg(rgb(swatch.text))
-                                .opacity(0.32),
-                        )
-                        .child(
-                            div()
-                                .h(px(6.))
-                                .w(px(22.))
-                                .rounded(px(99.))
-                                .bg(rgb(swatch.text))
-                                .opacity(0.26),
-                        ),
-                )
-                .child(
-                    div()
-                        .mt(px(6.))
-                        .h(px(3.))
-                        .w(px(32.))
-                        .rounded(px(99.))
-                        .bg(rgb(swatch.accent)),
-                ),
-        )
+                .px(px(8.))
+                .py(px(4.))
+                .bg(rgb(if selected { theme.selected } else { theme.background }))
+                .text_color(rgb(if selected { theme.selected_text } else { theme.text }))
+                .child((*command).to_string()),
+        );
+    }
+    list
 }
 
 fn theme_option(
@@ -712,52 +662,29 @@ fn theme_option(
     let label = if zh { swatch.label_zh } else { swatch.label_en };
     div()
         .id(("ec-theme", index))
-        .w(px(148.))
+        .w(px(164.))
+        .flex_none()
+        .p(px(6.))
+        .rounded(px(10.))
+        .border_1()
+        .border_color(rgb(if selected { chrome.accent } else { chrome.separator }))
+        .bg(rgb(if selected { chrome.selection } else { chrome.card }))
         .cursor_pointer()
+        .hover(|style| style.border_color(rgb(chrome.accent)))
+        .child(completion_theme_preview(swatch))
         .child(
             div()
-                .rounded(px(13.))
-                .border_2()
-                .border_color(rgb(if selected { chrome.accent } else { chrome.card }))
-                .p(px(4.))
-                .child(theme_preview_window(swatch)),
-        )
-        .child(
-            div()
-                .mt(px(6.))
+                .mt(px(7.))
+                .px(px(2.))
                 .flex()
-                .flex_row()
                 .items_center()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .w(px(14.))
-                        .h(px(14.))
-                        .rounded(px(99.))
-                        .border_1()
-                        .border_color(rgb(if selected { chrome.accent } else { chrome.separator }))
-                        .bg(rgb(if selected { chrome.accent } else { chrome.card }))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(if selected {
-                            div()
-                                .w(px(4.))
-                                .h(px(4.))
-                                .rounded(px(99.))
-                                .bg(rgb(0xffffff))
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
-                        }),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(chrome.text))
-                        .child(label.to_string()),
-                ),
+                .justify_between()
+                .gap(px(4.))
+                .text_size(px(11.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(if selected { chrome.accent } else { chrome.text }))
+                .child(label.to_string())
+                .child(div().w(px(12.)).flex_none().child(if selected { "✓" } else { "" })),
         )
         .on_mouse_down(MouseButton::Left, move |_e, _w, cx| {
             entity.update(cx, |this, cx| this.set_string("autocomplete.theme", id, cx));
@@ -765,51 +692,29 @@ fn theme_option(
 }
 
 fn theme_picker(zh: bool, chrome: Chrome, current: &str, entity: Entity<SettingsWindow>) -> impl IntoElement {
-    let groups = [
-        (ThemeAppearance::System, if zh { "自动" } else { "Automatic" }),
-        (ThemeAppearance::Light, if zh { "浅色" } else { "Light" }),
-        (ThemeAppearance::Dark, if zh { "深色" } else { "Dark" }),
-    ];
-    let mut root = div().flex().flex_col().gap(px(20.)).p(px(16.));
-    for (appearance, label) in groups {
-        let themes: Vec<(u32, &ThemeSwatch)> = THEMES
-            .iter()
-            .enumerate()
-            .filter(|(_, swatch)| swatch.appearance == appearance)
-            .map(|(i, swatch)| (i as u32, swatch))
-            .collect();
-        if themes.is_empty() {
-            continue;
-        }
-        let mut grid = div().flex().flex_row().flex_wrap().gap(px(16.));
-        for (index, swatch) in themes {
-            grid = grid.child(theme_option(
-                index,
-                swatch,
-                current == swatch.id,
-                zh,
-                chrome,
-                entity.clone(),
-            ));
-        }
-        root = root.child(
-            div()
-                .child(
-                    div()
-                        .mb(px(10.))
-                        .text_size(px(11.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(rgb(chrome.muted))
-                        .child(label.to_string()),
-                )
-                .child(grid),
-        );
+    let mut grid = div().w_full().min_w(px(0.)).flex().flex_wrap().gap(px(12.)).p(px(16.));
+    let mut themes: Vec<_> = THEMES.iter().enumerate().collect();
+    themes.sort_by_key(|(_, swatch)| match swatch.appearance {
+        ThemeAppearance::System => 0,
+        ThemeAppearance::Light => 1,
+        ThemeAppearance::Dark => 2,
+    });
+    for (index, swatch) in themes {
+        grid = grid.child(theme_option(
+            index as u32,
+            swatch,
+            current == swatch.id,
+            zh,
+            chrome,
+            entity.clone(),
+        ));
     }
-    root
+    grid
 }
 
 fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> impl IntoElement {
     let lang = fig_settings::settings::get_string_or("dashboard.language", "system".into());
+    let interface_theme = fig_settings::settings::get_string_or("dashboard.theme", "system".into());
     let theme = fig_settings::settings::get_string_or("autocomplete.theme", "github-dark".into());
     let font = fig_settings::settings::get_string_or("autocomplete.fontFamily", String::new());
     let font_size = fig_settings::settings::get_int_or("autocomplete.fontSize", 13);
@@ -830,7 +735,7 @@ fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> 
     }
     font_options.insert(0, (if zh { "系统默认" } else { "System default" }, String::new()));
 
-    let mut font_row = div().flex().flex_row().flex_wrap().gap(px(6.));
+    let mut font_row = div().min_w(px(0.)).flex().flex_row().flex_wrap().gap(px(6.));
     for (i, (label, value)) in font_options.iter().enumerate() {
         let selected = value == &font || (value.is_empty() && font.is_empty());
         let value = value.clone();
@@ -838,12 +743,16 @@ fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> 
         font_row = font_row.child(
             div()
                 .id(("ec-font", i as u32))
+                .flex_none()
+                .whitespace_nowrap()
                 .px(px(10.))
                 .py(px(5.))
-                .rounded(px(8.))
+                .rounded(px(7.))
+                .border_1()
+                .border_color(rgb(if selected { chrome.accent } else { chrome.separator }))
                 .cursor_pointer()
-                .bg(rgb(if selected { chrome.accent } else { chrome.separator }))
-                .text_color(rgb(if selected { 0xffffff } else { chrome.text }))
+                .bg(rgb(if selected { chrome.selection } else { chrome.card }))
+                .text_color(rgb(if selected { chrome.accent } else { chrome.text }))
                 .child((*label).to_string())
                 .on_mouse_down(MouseButton::Left, move |_e, _w, cx| {
                     let payload = if value.is_empty() {
@@ -856,32 +765,69 @@ fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> 
         );
     }
 
+    let interface_entity = entity.clone();
+    let interface_options: &[(&str, &str)] = if zh {
+        &[("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")]
+    } else {
+        &[("Follow System", "system"), ("Light", "light"), ("Dark", "dark")]
+    };
     let lang_entity = entity.clone();
     let size_entity = entity.clone();
     let width_entity = entity.clone();
     let height_entity = entity.clone();
 
     div()
+        .w_full()
+        .min_w(px(0.))
         .flex()
         .flex_col()
         .child(card(
-            if zh { "语言" } else { "Language" },
+            if zh { "界面" } else { "Interface" },
             chrome,
-            stacked_row(
-                if zh { "显示语言" } else { "Display Language" },
-                Some(if zh {
-                    "选择设置面板使用的语言"
-                } else {
-                    "Choose the language used in the settings panel"
-                }),
-                chrome,
-                true,
-                select_chips("ec-lang", lang_options, lang.as_str(), chrome, move |value, cx| {
-                    lang_entity.update(cx, |this, cx| this.set_string("dashboard.language", value, cx));
-                }),
-            ),
+            div()
+                .child(row(
+                    if zh { "显示语言" } else { "Display Language" },
+                    None,
+                    chrome,
+                    false,
+                    select_chips("ec-lang", lang_options, lang.as_str(), chrome, move |value, cx| {
+                        lang_entity.update(cx, |this, cx| this.set_string("dashboard.language", value, cx));
+                    }),
+                ))
+                .child(row(
+                    if zh { "界面主题" } else { "Interface Theme" },
+                    None,
+                    chrome,
+                    true,
+                    select_chips(
+                        "ec-interface-theme",
+                        interface_options,
+                        interface_theme.as_str(),
+                        chrome,
+                        move |value, cx| {
+                            interface_entity.update(cx, |this, cx| this.set_string("dashboard.theme", value, cx));
+                        },
+                    ),
+                )),
         ))
-        .child(card(if zh { "主题" } else { "Theme" }, chrome, theme_grid))
+        .child(card(
+            if zh { "提示主题" } else { "Completion Theme" },
+            chrome,
+            div()
+                .child(
+                    div()
+                        .px(px(14.))
+                        .pt(px(12.))
+                        .text_color(rgb(chrome.muted))
+                        .text_size(px(12.))
+                        .child(if zh {
+                            "用于终端中的补全提示列表"
+                        } else {
+                            "Used by the autocomplete popup in your terminal"
+                        }),
+                )
+                .child(theme_grid),
+        ))
         .child(card(
             if zh { "字体" } else { "Typography" },
             chrome,
@@ -975,6 +921,8 @@ fn behavior_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> im
     let e = |entity: &Entity<SettingsWindow>| entity.clone();
 
     div()
+        .w_full()
+        .min_w(px(0.))
         .flex()
         .flex_col()
         .child(card(
@@ -1237,6 +1185,8 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
     let entity_tel = entity.clone();
 
     div()
+        .w_full()
+        .min_w(px(0.))
         .flex()
         .flex_col()
         .child(card(
