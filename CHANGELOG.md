@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- feat: update bundled completion specs to `@chen86860/autocomplete-specs@3.1.0`, adding 19 commands and refreshing Claude, Codex, and Copilot suggestions.
+
 - feat: add a native settings switch for the menu bar icon and reopen settings when Easy Complete is launched again, including when the icon is hidden.
 
 - fix: keep the settings sidebar and switches at a stable width on every page; refresh navigation, page headings, grouped controls, and completion theme previews.
