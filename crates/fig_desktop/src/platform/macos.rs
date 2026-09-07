@@ -2,7 +2,6 @@
 #![allow(unexpected_cfgs)]
 #![allow(deprecated)]
 
-use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
@@ -22,20 +21,19 @@ use macos_utils::accessibility::accessibility_is_enabled;
 use macos_utils::caret_position::{CaretPosition, get_caret_position};
 use macos_utils::window_server::{CGWindowLevelForKey, UIElement};
 use macos_utils::{NotificationCenter, WindowServer, WindowServerEvent};
-use objc::declare::MethodImplementation;
-use objc::runtime::{BOOL, Class, Object, Sel, class_addMethod};
-use objc::{Encode, EncodeArguments, Encoding, msg_send, sel, sel_impl};
+use objc::runtime::{BOOL, Class};
+use objc::{msg_send, sel, sel_impl};
 use objc2_foundation::{NSDictionary, NSOperationQueue, ns_string};
 use serde::Serialize;
 use tao::dpi::{LogicalPosition, LogicalSize, Position};
 use tao::platform::macos::ActivationPolicy;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, warn};
 
 use super::{PlatformBoundEvent, PlatformWindow};
 use crate::event::{Event, WindowEvent, WindowPosition};
 use crate::utils::Rect;
 use crate::webview::notification::WebviewNotificationsState;
-use crate::webview::{FigIdMap, GLOBAL_PROXY, WindowId};
+use crate::webview::{FigIdMap, WindowId};
 use crate::{AUTOCOMPLETE_ID, AUTOCOMPLETE_WINDOW_TITLE, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget};
 
 pub const DEFAULT_CARET_WIDTH: f64 = 10.0;
@@ -253,42 +251,6 @@ impl PlatformStateImpl {
         }
     }
 
-    //
-    fn method_type_encoding(ret: &Encoding, args: &[Encoding]) -> CString {
-        let mut types = ret.as_str().to_owned();
-        // First two arguments are always self and the selector
-        types.push_str(<*mut Object>::encode().as_str());
-        types.push_str(Sel::encode().as_str());
-        types.extend(args.iter().map(|e| e.as_str()));
-        CString::new(types).unwrap()
-    }
-
-    fn override_app_delegate_method<F>(sel: Sel, func: F)
-    where
-        F: MethodImplementation<Callee = Object>,
-    {
-        unsafe {
-            let app: id = {
-                let Some(application) = Class::get("NSApplication") else {
-                    warn!("NSApplication class missing");
-                    return;
-                };
-                msg_send![application, sharedApplication]
-            };
-            let delegate: id = msg_send![app, delegate];
-            if delegate.is_null() {
-                warn!("NSApplication has no delegate yet; reopen handler not installed");
-                return;
-            }
-            let cls: *mut Class = msg_send![delegate, class];
-            let encs = F::Args::encodings();
-            let encs = encs.as_ref();
-            let types = Self::method_type_encoding(&F::Ret::encode(), encs);
-            let res = class_addMethod(cls, sel, func.imp(), types.as_ptr());
-            trace!(sel =% sel.name(), %res, "class_addMethod on app delegate");
-        }
-    }
-
     pub(super) fn handle(
         self: &Arc<Self>,
         event: PlatformBoundEvent,
@@ -382,31 +344,9 @@ impl PlatformStateImpl {
                 Ok(())
             },
             PlatformBoundEvent::InitializePostRun => {
-                extern "C" fn application_should_handle_reopen(
-                    _this: &Object,
-                    _cmd: Sel,
-                    _sender: id,
-                    _visible_windows: BOOL,
-                ) -> BOOL {
-                    trace!("application_should_handle_reopen");
-
-                    let proxy = GLOBAL_PROXY.get().unwrap();
-
-                    if let Err(err) = proxy.send_event(Event::WindowEvent {
-                        window_id: DASHBOARD_ID,
-                        window_event: WindowEvent::Show,
-                    }) {
-                        warn!(%err, "Error sending event");
-                    }
-
-                    YES
-                }
-
-                Self::override_app_delegate_method(
-                    sel!(applicationShouldHandleReopen:hasVisibleWindows:),
-                    application_should_handle_reopen as extern "C" fn(&Object, Sel, id, BOOL) -> BOOL,
-                );
-
+                // GPUI registers the macOS app delegate and owns reopen
+                // dispatch. The callback is installed in `gpui_host` once
+                // the desktop event proxy exists.
                 Ok(())
             },
             PlatformBoundEvent::EditBufferChanged => {

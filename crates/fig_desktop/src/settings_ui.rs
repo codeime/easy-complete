@@ -905,6 +905,7 @@ fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> 
 fn behavior_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> impl IntoElement {
     let launch = fig_settings::settings::get_bool_or("app.launchOnStartup", false);
     let silent = fig_settings::settings::get_bool_or("app.silentLaunch", false);
+    let show_menubar_icon = !fig_settings::settings::get_bool_or("app.hideMenubarIcon", false);
     let only_tab = fig_settings::settings::get_bool_or("autocomplete.onlyShowOnTab", false);
     let fuzzy = fig_settings::settings::get_bool_or("autocomplete.fuzzySearch", true);
     let first_token = fig_settings::settings::get_bool_or("autocomplete.firstTokenCompletion", false);
@@ -955,6 +956,23 @@ fn behavior_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> im
                     false,
                     e(&entity),
                     |this, value, cx| this.set_bool("app.silentLaunch", value, cx),
+                ))
+                .child(bool_row(
+                    if zh {
+                        "显示菜单栏图标"
+                    } else {
+                        "Show Menu Bar Icon"
+                    },
+                    Some(if zh {
+                        "隐藏后，再次启动 Easy Complete 可打开设置"
+                    } else {
+                        "When hidden, launch Easy Complete again to open settings"
+                    }),
+                    show_menubar_icon,
+                    chrome,
+                    false,
+                    e(&entity),
+                    |this, value, cx| this.set_bool("app.hideMenubarIcon", !value, cx),
                 ))
                 .child(bool_row(
                     if zh {

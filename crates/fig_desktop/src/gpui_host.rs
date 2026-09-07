@@ -2,6 +2,7 @@
 //! `NSApplication`.
 
 use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc};
 
 use ec_engine::{EngineClient, default_specs_dir};
 use gpui::{App, Application, Entity};
@@ -292,8 +293,22 @@ pub type Setup = Box<dyn FnOnce(&mut App) -> anyhow::Result<(Entity<DesktopHost>
 pub fn start_application(
     setup: impl FnOnce(&mut App) -> anyhow::Result<(Entity<DesktopHost>, flume::Receiver<Event>)> + 'static,
 ) -> anyhow::Result<()> {
-    Application::new().run(move |cx: &mut App| match setup(cx) {
+    let application = Application::new();
+    let reopen_proxy: Rc<RefCell<Option<EventLoopProxy>>> = Rc::new(RefCell::new(None));
+    let reopen_proxy_for_callback = reopen_proxy.clone();
+    application.on_reopen(move |_cx| {
+        if let Some(proxy) = reopen_proxy_for_callback.borrow().as_ref() {
+            proxy
+                .send_event(Event::WindowEvent {
+                    window_id: DASHBOARD_ID,
+                    window_event: WindowEvent::Show,
+                })
+                .ok();
+        }
+    });
+    application.run(move |cx: &mut App| match setup(cx) {
         Ok((host, event_rx)) => {
+            *reopen_proxy.borrow_mut() = Some(host.read(cx).proxy.clone());
             run(host.clone(), event_rx, cx);
             host.update(cx, |host, _cx| {
                 info!("Fig has started");

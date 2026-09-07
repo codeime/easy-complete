@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- feat: add a native settings switch for the menu bar icon and reopen settings when Easy Complete is launched again, including when the icon is hidden.
+
 - fix: keep the settings sidebar and switches at a stable width on every page; refresh navigation, page headings, grouped controls, and completion theme previews.
 - feat: separate the settings interface theme from the completion theme; completion previews now show command suggestions using the popup's actual palette.
 
