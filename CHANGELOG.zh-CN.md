@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 修复：菜单栏图标使用 Retina 资源，应用图标采用一致的透明边距，保留本分支现有图标设计。
+
 - 新增：补全规则升级到 `@chen86860/autocomplete-specs@3.1.0`，增加 19 个命令，并更新 Claude、Codex、Copilot 提示。
 
 - 新增：原生设置支持显示或隐藏菜单栏图标；再次启动 Easy Complete 时打开设置，隐藏图标后也能找回入口。

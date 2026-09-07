@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix: render menu bar icons at Retina resolution and give app icons consistent transparent margins while preserving this fork's artwork.
+
 - feat: update bundled completion specs to `@chen86860/autocomplete-specs@3.1.0`, adding 19 commands and refreshing Claude, Codex, and Copilot suggestions.
 
 - feat: add a native settings switch for the menu bar icon and reopen settings when Easy Complete is launched again, including when the icon is hidden.

@@ -213,6 +213,9 @@ pub fn get_icon(is_logged_in: bool) -> Icon {
                 cfg_if! {
                     if #[cfg(target_os = "linux")] {
                         decode(include_bytes!("../icons/icon-monochrome-light.png"))
+                    } else if #[cfg(target_os = "macos")] {
+                        // tray-icon displays this at 18 pt; provide 36 px for Retina.
+                        decode(include_bytes!("../icons/icon-monochrome@2x.png"))
                     } else {
                         decode(include_bytes!("../icons/icon-monochrome.png"))
                     }
@@ -227,6 +230,8 @@ pub fn get_icon(is_logged_in: bool) -> Icon {
             cfg_if! {
                 if #[cfg(target_os = "linux")] {
                     decode(include_bytes!("../icons/icon-monochrome-light.png"))
+                } else if #[cfg(target_os = "macos")] {
+                    decode(include_bytes!("../icons/not-logged-in@2x.png"))
                 } else {
                     decode(include_bytes!("../icons/not-logged-in.png"))
                 }

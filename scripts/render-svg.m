@@ -86,6 +86,7 @@ int main(int argc, const char *argv[]) {
         [NSGraphicsContext saveGraphicsState];
         [NSGraphicsContext setCurrentContext:context];
         context.imageInterpolation = NSImageInterpolationHigh;
+        context.shouldAntialias = YES;
         [source drawInRect:NSMakeRect(inset, inset, size - inset * 2, size - inset * 2)
                   fromRect:NSZeroRect
                  operation:NSCompositingOperationSourceOver
