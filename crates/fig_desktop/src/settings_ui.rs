@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, MouseButton, SharedString, TitlebarOptions, WindowBounds,
-    WindowHandle, WindowOptions, div, point, px, rgb, size,
+    AnchoredPositionMode, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, MouseButton, ScrollHandle,
+    SharedString, TitlebarOptions, WindowBounds, WindowHandle, WindowOptions, anchored, deferred, div, point, px, rgb,
+    size,
 };
 use tracing::error;
 
@@ -50,146 +51,57 @@ enum Section {
     About,
 }
 
-#[derive(Clone, Copy)]
-struct Chrome {
-    bg: u32,
-    sidebar: u32,
-    sidebar_border: u32,
-    text: u32,
-    muted: u32,
-    card: u32,
-    separator: u32,
-    accent: u32,
-    track_off: u32,
-    selection: u32,
+mod theme;
+#[cfg(test)]
+use theme::ThemeAppearance;
+use theme::{Chrome, THEMES};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThemeTarget {
+    Interface,
+    Completion,
 }
 
-impl Chrome {
-    fn current() -> Self {
-        let theme = fig_settings::settings::get_string_or("dashboard.theme", "system".into());
-        let dark = match theme.as_str() {
-            "light" => false,
-            "dark" => true,
-            _ => ec_gpui::system_appearance_is_dark(),
-        };
-        if dark {
-            Self {
-                bg: 0x1c1c1e,
-                sidebar: 0x161618,
-                sidebar_border: 0x2c2c2e,
-                text: 0xf5f5f7,
-                muted: 0x8e8e93,
-                card: 0x2c2c2e,
-                separator: 0x3a3a3c,
-                accent: 0x0a84ff,
-                track_off: 0x48484a,
-                selection: 0x19364f,
-            }
-        } else {
-            Self {
-                bg: 0xf7f8fa,
-                sidebar: 0xeff1f5,
-                sidebar_border: 0xe0e4eb,
-                text: 0x1d1d1f,
-                muted: 0x6e6e73,
-                card: 0xffffff,
-                separator: 0xe5e5ea,
-                accent: 0x007aff,
-                track_off: 0xd1d1d6,
-                selection: 0xe1edfc,
-            }
+impl ThemeTarget {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Interface => "dashboard.theme",
+            Self::Completion => "autocomplete.theme",
         }
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ThemeAppearance {
-    System,
-    Light,
-    Dark,
+#[derive(Clone, Copy)]
+struct OpenThemeMenu {
+    target: ThemeTarget,
+    highlighted: usize,
 }
 
-struct ThemeSwatch {
-    id: &'static str,
-    label_en: &'static str,
-    label_zh: &'static str,
-    appearance: ThemeAppearance,
+#[derive(Clone)]
+struct ThemeControls {
+    menu: Option<OpenThemeMenu>,
+    focus: [FocusHandle; 2],
+    scroll: ScrollHandle,
 }
 
-const THEMES: &[ThemeSwatch] = &[
-    ThemeSwatch {
-        id: "system",
-        label_en: "System",
-        label_zh: "跟随系统",
-        appearance: ThemeAppearance::System,
-    },
-    ThemeSwatch {
-        id: "light",
-        label_en: "Light",
-        label_zh: "浅色",
-        appearance: ThemeAppearance::Light,
-    },
-    ThemeSwatch {
-        id: "github-light",
-        label_en: "GitHub Light",
-        label_zh: "GitHub Light",
-        appearance: ThemeAppearance::Light,
-    },
-    ThemeSwatch {
-        id: "claude-light",
-        label_en: "Claude Light",
-        label_zh: "Claude Light",
-        appearance: ThemeAppearance::Light,
-    },
-    ThemeSwatch {
-        id: "catppuccin-latte",
-        label_en: "Catppuccin Latte",
-        label_zh: "Catppuccin Latte",
-        appearance: ThemeAppearance::Light,
-    },
-    ThemeSwatch {
-        id: "dark",
-        label_en: "Dark",
-        label_zh: "深色",
-        appearance: ThemeAppearance::Dark,
-    },
-    ThemeSwatch {
-        id: "github-dark",
-        label_en: "GitHub Dark",
-        label_zh: "GitHub Dark",
-        appearance: ThemeAppearance::Dark,
-    },
-    ThemeSwatch {
-        id: "claude-dark",
-        label_en: "Claude Dark",
-        label_zh: "Claude Dark",
-        appearance: ThemeAppearance::Dark,
-    },
-    ThemeSwatch {
-        id: "nord",
-        label_en: "Nord",
-        label_zh: "Nord",
-        appearance: ThemeAppearance::Dark,
-    },
-    ThemeSwatch {
-        id: "gruvbox-dark",
-        label_en: "Gruvbox Dark",
-        label_zh: "Gruvbox Dark",
-        appearance: ThemeAppearance::Dark,
-    },
-    ThemeSwatch {
-        id: "one-dark",
-        label_en: "One Dark",
-        label_zh: "One Dark",
-        appearance: ThemeAppearance::Dark,
-    },
-    ThemeSwatch {
-        id: "tokyo-night",
-        label_en: "Tokyo Night",
-        label_zh: "Tokyo Night",
-        appearance: ThemeAppearance::Dark,
-    },
-];
+impl ThemeControls {
+    fn new(cx: &mut App) -> Self {
+        Self {
+            menu: None,
+            focus: [cx.focus_handle(), cx.focus_handle()],
+            scroll: ScrollHandle::new(),
+        }
+    }
+
+    fn open(&mut self, target: ThemeTarget, current: &str) {
+        let highlighted = THEMES
+            .iter()
+            .position(|theme| theme.id.eq_ignore_ascii_case(current))
+            .unwrap_or(0);
+        self.menu = Some(OpenThemeMenu { target, highlighted });
+        self.scroll.scroll_to_item(highlighted);
+    }
+}
 
 fn shows_permission_gate(gate: &PermissionSnapshot) -> bool {
     !gate.still_checking() && !gate.all_ready()
@@ -203,6 +115,7 @@ pub struct SettingsWindow {
     gate: PermissionSnapshot,
     repairing: Option<PermId>,
     copied_doctor: bool,
+    theme_controls: ThemeControls,
 }
 
 pub type SettingsHandle = WindowHandle<SettingsWindow>;
@@ -239,6 +152,7 @@ impl Render for SettingsWindow {
         let entity = cx.entity();
         let zh = Self::zh();
         let section = self.section;
+        let theme_controls = self.theme_controls.clone();
         let root = div()
             .id("ec-settings")
             .flex()
@@ -249,7 +163,17 @@ impl Render for SettingsWindow {
             .bg(rgb(chrome.bg))
             .text_color(rgb(chrome.text))
             .text_size(px(13.))
-            .font_family(".AppleSystemUIFont");
+            .font_family(".AppleSystemUIFont")
+            .on_key_down(|event, window, cx| {
+                if event.keystroke.key == "tab" {
+                    if event.keystroke.modifiers.shift {
+                        window.focus_prev();
+                    } else {
+                        window.focus_next();
+                    }
+                    cx.stop_propagation();
+                }
+            });
 
         // The old dashboard showed a spinner while permissions were still
         // being checked, and the gate only after a failed result. Treating
@@ -285,7 +209,9 @@ impl Render for SettingsWindow {
                         .mx_auto()
                         .child(page_header(section, zh, chrome))
                         .child(match section {
-                            Section::Appearance => appearance_page(zh, chrome, entity.clone()).into_any_element(),
+                            Section::Appearance => {
+                                appearance_page(zh, chrome, entity.clone(), theme_controls).into_any_element()
+                            },
                             Section::Behavior => behavior_page(zh, chrome, entity).into_any_element(),
                             Section::About => about_page(zh, chrome, entity, self.copied_doctor).into_any_element(),
                         }),
@@ -370,6 +296,7 @@ fn sidebar(section: Section, zh: bool, chrome: Chrome, entity: Entity<SettingsWi
                 .on_mouse_down(MouseButton::Left, move |_e, _w, cx| {
                     entity.update(cx, |this, cx| {
                         this.section = id;
+                        this.theme_controls.menu = None;
                         cx.notify();
                     });
                 }),
@@ -618,101 +545,255 @@ fn select_chips(
     row
 }
 
-fn completion_theme_preview(swatch: &ThemeSwatch) -> impl IntoElement {
-    let theme = crate::overlay::overlay_theme_by_name(swatch.id);
-    let mut list = div()
-        .rounded(px(7.))
+fn theme_label(current: &str, zh: bool) -> String {
+    THEMES
+        .iter()
+        .find(|theme| theme.id.eq_ignore_ascii_case(current))
+        .map_or(current, |theme| if zh { theme.label_zh } else { theme.label_en })
+        .to_string()
+}
+
+fn theme_color_dot(color: u32, border: u32) -> impl IntoElement {
+    div()
+        .size(px(12.))
+        .flex_none()
+        .rounded(px(6.))
         .border_1()
-        .border_color(rgb(theme.border))
-        .bg(rgb(theme.background))
-        .text_color(rgb(theme.text))
+        .border_color(rgb(border))
+        .bg(rgb(color))
+}
+
+fn completion_theme_preview(current: &str, zh: bool) -> impl IntoElement {
+    let palette = crate::overlay::overlay_theme_by_name(current);
+    let mut list = div()
+        .w_full()
+        .max_w(px(360.))
+        .rounded(px(9.))
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.background))
+        .text_color(rgb(palette.text))
         .font_family("Menlo")
-        .text_size(px(10.))
+        .text_size(px(12.))
         .overflow_hidden()
         .child(
             div()
-                .px(px(8.))
-                .py(px(6.))
-                .text_color(rgb(theme.muted))
+                .px(px(12.))
+                .py(px(9.))
+                .text_color(rgb(palette.muted))
+                .border_b_1()
+                .border_color(rgb(palette.border))
                 .child("$ git ch"),
         );
-    for (index, command) in ["checkout", "cherry-pick", "check-ref-format"].iter().enumerate() {
+    for (index, (command, description)) in [
+        ("checkout", if zh { "切换分支" } else { "Switch branches" }),
+        ("cherry-pick", if zh { "应用指定提交" } else { "Apply a commit" }),
+        ("check-ref-format", if zh { "检查引用名称" } else { "Validate a ref" }),
+    ]
+    .iter()
+    .enumerate()
+    {
         let selected = index == 0;
         list = list.child(
             div()
-                .px(px(8.))
-                .py(px(4.))
-                .bg(rgb(if selected { theme.selected } else { theme.background }))
-                .text_color(rgb(if selected { theme.selected_text } else { theme.text }))
-                .child((*command).to_string()),
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
+                .px(px(12.))
+                .py(px(8.))
+                .bg(rgb(if selected { palette.selected } else { palette.background }))
+                .text_color(rgb(if selected { palette.selected_text } else { palette.text }))
+                .child((*command).to_string())
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(if selected { palette.selected_text } else { palette.muted }))
+                        .child((*description).to_string()),
+                ),
         );
     }
     list
 }
 
-fn theme_option(
-    index: u32,
-    swatch: &'static ThemeSwatch,
-    selected: bool,
+fn theme_selector(
+    target: ThemeTarget,
+    current: &str,
+    zh: bool,
+    chrome: Chrome,
+    controls: &ThemeControls,
+    entity: Entity<SettingsWindow>,
+) -> impl IntoElement {
+    let opened = controls.menu.is_some_and(|menu| menu.target == target);
+    let focus = controls.focus[target as usize].clone();
+    let click_entity = entity.clone();
+    let key_entity = entity.clone();
+    let click_current = current.to_string();
+    let key_current = current.to_string();
+    let palette = crate::overlay::overlay_theme_by_name(current);
+    let mut root = div().relative().w(px(220.)).flex_none().child(
+        div()
+            .id(("ec-theme-select", target as u32))
+            .track_focus(&focus)
+            .tab_stop(true)
+            .w_full()
+            .h(px(34.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .rounded(px(7.))
+            .border_1()
+            .border_color(rgb(if opened { chrome.accent } else { chrome.separator }))
+            .bg(rgb(chrome.card))
+            .cursor_pointer()
+            .hover(|style| style.border_color(rgb(chrome.accent)))
+            .focus(|style| style.border_color(rgb(chrome.accent)))
+            .child(theme_color_dot(palette.background, palette.border))
+            .child(div().flex_1().min_w(px(0.)).truncate().child(theme_label(current, zh)))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(chrome.muted))
+                    .child(if opened { "⌃" } else { "⌄" }),
+            )
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                focus.focus(window);
+                click_entity.update(cx, |this, cx| {
+                    if opened {
+                        this.theme_controls.menu = None;
+                    } else {
+                        this.theme_controls.open(target, &click_current);
+                    }
+                    cx.notify();
+                });
+                cx.stop_propagation();
+            })
+            .on_key_down(move |event, window, cx| {
+                let key = event.keystroke.key.as_str();
+                if !matches!(key, "up" | "down" | "enter" | "space" | "escape" | "tab") {
+                    return;
+                }
+                key_entity.update(cx, |this, cx| {
+                    let menu = &mut this.theme_controls.menu;
+                    match (key, *menu) {
+                        ("escape" | "tab", _) => *menu = None,
+                        ("enter" | "space", Some(menu)) if menu.target == target => {
+                            let id = THEMES[menu.highlighted].id;
+                            this.theme_controls.menu = None;
+                            this.set_string(target.key(), id, cx);
+                        },
+                        ("up" | "down", Some(menu)) if menu.target == target => {
+                            let next = if key == "up" {
+                                menu.highlighted.saturating_sub(1)
+                            } else {
+                                (menu.highlighted + 1).min(THEMES.len() - 1)
+                            };
+                            this.theme_controls.menu = Some(OpenThemeMenu {
+                                target,
+                                highlighted: next,
+                            });
+                            this.theme_controls.scroll.scroll_to_item(next);
+                        },
+                        ("up" | "down" | "enter" | "space", _) => this.theme_controls.open(target, &key_current),
+                        _ => {},
+                    }
+                    cx.notify();
+                });
+                if key == "tab" {
+                    if event.keystroke.modifiers.shift {
+                        window.focus_prev();
+                    } else {
+                        window.focus_next();
+                    }
+                }
+                cx.stop_propagation();
+            }),
+    );
+    if let Some(open) = controls.menu.filter(|menu| menu.target == target) {
+        let outside_entity = entity.clone();
+        let mut menu = div()
+            .id(("ec-theme-menu", target as u32))
+            .w(px(240.))
+            .max_h(px(330.))
+            .p(px(5.))
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .rounded(px(9.))
+            .border_1()
+            .border_color(rgb(chrome.separator))
+            .bg(rgb(chrome.card))
+            .shadow_lg()
+            .occlude()
+            .overflow_y_scroll()
+            .track_scroll(&controls.scroll)
+            .on_mouse_down_out(move |_event, _window, cx| {
+                outside_entity.update(cx, |this, cx| {
+                    if this.theme_controls.menu.is_some_and(|menu| menu.target == target) {
+                        this.theme_controls.menu = None;
+                        cx.notify();
+                    }
+                });
+            });
+        for (index, theme) in THEMES.iter().enumerate() {
+            let entity = entity.clone();
+            let id = theme.id;
+            let selected = current.eq_ignore_ascii_case(id);
+            let highlighted = index == open.highlighted;
+            let palette = crate::overlay::overlay_theme_by_name(id);
+            menu = menu.child(
+                div()
+                    .id(("ec-theme-option", index as u32))
+                    .h(px(29.))
+                    .flex_none()
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .rounded(px(5.))
+                    .cursor_pointer()
+                    .bg(rgb(if highlighted { chrome.selection } else { chrome.card }))
+                    .text_color(rgb(chrome.text))
+                    .hover(|style| style.bg(rgb(chrome.selection)))
+                    .child(theme_color_dot(palette.background, palette.border))
+                    .child(div().flex_1().child(if zh { theme.label_zh } else { theme.label_en }))
+                    .child(
+                        div()
+                            .w(px(12.))
+                            .flex_none()
+                            .text_color(rgb(chrome.accent))
+                            .child(if selected { "✓" } else { "" }),
+                    )
+                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.theme_controls.menu = None;
+                            this.set_string(target.key(), id, cx);
+                        });
+                        cx.stop_propagation();
+                    }),
+            );
+        }
+        root = root.child(
+            deferred(
+                anchored()
+                    .position_mode(AnchoredPositionMode::Local)
+                    .position(point(px(0.), px(39.)))
+                    .snap_to_window_with_margin(px(12.))
+                    .child(menu),
+            )
+            .with_priority(1),
+        );
+    }
+    root
+}
+
+fn appearance_page(
     zh: bool,
     chrome: Chrome,
     entity: Entity<SettingsWindow>,
+    controls: ThemeControls,
 ) -> impl IntoElement {
-    let id = swatch.id;
-    let label = if zh { swatch.label_zh } else { swatch.label_en };
-    div()
-        .id(("ec-theme", index))
-        .w(px(164.))
-        .flex_none()
-        .p(px(6.))
-        .rounded(px(10.))
-        .border_1()
-        .border_color(rgb(if selected { chrome.accent } else { chrome.separator }))
-        .bg(rgb(if selected { chrome.selection } else { chrome.card }))
-        .cursor_pointer()
-        .hover(|style| style.border_color(rgb(chrome.accent)))
-        .child(completion_theme_preview(swatch))
-        .child(
-            div()
-                .mt(px(7.))
-                .px(px(2.))
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(4.))
-                .text_size(px(11.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(if selected { chrome.accent } else { chrome.text }))
-                .child(label.to_string())
-                .child(div().w(px(12.)).flex_none().child(if selected { "✓" } else { "" })),
-        )
-        .on_mouse_down(MouseButton::Left, move |_e, _w, cx| {
-            entity.update(cx, |this, cx| this.set_string("autocomplete.theme", id, cx));
-        })
-}
-
-fn theme_picker(zh: bool, chrome: Chrome, current: &str, entity: Entity<SettingsWindow>) -> impl IntoElement {
-    let mut grid = div().w_full().min_w(px(0.)).flex().flex_wrap().gap(px(12.)).p(px(16.));
-    let mut themes: Vec<_> = THEMES.iter().enumerate().collect();
-    themes.sort_by_key(|(_, swatch)| match swatch.appearance {
-        ThemeAppearance::System => 0,
-        ThemeAppearance::Light => 1,
-        ThemeAppearance::Dark => 2,
-    });
-    for (index, swatch) in themes {
-        grid = grid.child(theme_option(
-            index as u32,
-            swatch,
-            current == swatch.id,
-            zh,
-            chrome,
-            entity.clone(),
-        ));
-    }
-    grid
-}
-
-fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> impl IntoElement {
     let lang = fig_settings::settings::get_string_or("dashboard.language", "system".into());
     let interface_theme = fig_settings::settings::get_string_or("dashboard.theme", "system".into());
     let theme = fig_settings::settings::get_string_or("autocomplete.theme", "github-dark".into());
@@ -726,8 +807,6 @@ fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> 
     } else {
         &[("Follow System", "system"), ("English", "en"), ("简体中文", "zh-CN")]
     };
-
-    let theme_grid = theme_picker(zh, chrome, theme.as_str(), entity.clone());
 
     let mut font_options: Vec<(&str, String)> = FONTS.iter().map(|name| (*name, (*name).to_string())).collect();
     if !font.is_empty() && !FONTS.contains(&font.as_str()) {
@@ -765,12 +844,6 @@ fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> 
         );
     }
 
-    let interface_entity = entity.clone();
-    let interface_options: &[(&str, &str)] = if zh {
-        &[("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")]
-    } else {
-        &[("Follow System", "system"), ("Light", "light"), ("Dark", "dark")]
-    };
     let lang_entity = entity.clone();
     let size_entity = entity.clone();
     let width_entity = entity.clone();
@@ -799,34 +872,48 @@ fn appearance_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> 
                     None,
                     chrome,
                     true,
-                    select_chips(
-                        "ec-interface-theme",
-                        interface_options,
-                        interface_theme.as_str(),
+                    theme_selector(
+                        ThemeTarget::Interface,
+                        &interface_theme,
+                        zh,
                         chrome,
-                        move |value, cx| {
-                            interface_entity.update(cx, |this, cx| this.set_string("dashboard.theme", value, cx));
-                        },
+                        &controls,
+                        entity.clone(),
                     ),
                 )),
         ))
         .child(card(
-            if zh { "提示主题" } else { "Completion Theme" },
+            if zh { "补全提示" } else { "Completions" },
             chrome,
             div()
+                .child(row(
+                    if zh { "提示主题" } else { "Completion Theme" },
+                    Some(if zh {
+                        "仅改变终端中的补全提示外观"
+                    } else {
+                        "Appearance of terminal suggestions"
+                    }),
+                    chrome,
+                    false,
+                    theme_selector(ThemeTarget::Completion, &theme, zh, chrome, &controls, entity.clone()),
+                ))
                 .child(
                     div()
-                        .px(px(14.))
-                        .pt(px(12.))
-                        .text_color(rgb(chrome.muted))
-                        .text_size(px(12.))
-                        .child(if zh {
-                            "用于终端中的补全提示列表"
-                        } else {
-                            "Used by the autocomplete popup in your terminal"
-                        }),
-                )
-                .child(theme_grid),
+                        .p(px(16.))
+                        .child(
+                            div()
+                                .mb(px(12.))
+                                .text_size(px(11.))
+                                .text_color(rgb(chrome.muted))
+                                .child(if zh { "预览" } else { "Preview" }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_center()
+                                .child(completion_theme_preview(&theme, zh)),
+                        ),
+                ),
         ))
         .child(card(
             if zh { "字体" } else { "Typography" },
@@ -1334,7 +1421,7 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
                                 .py(px(8.))
                                 .rounded(px(8.))
                                 .bg(rgb(if copied_doctor { chrome.accent } else { chrome.separator }))
-                                .text_color(rgb(if copied_doctor { 0xffffff } else { chrome.text }))
+                                .text_color(rgb(if copied_doctor { chrome.accent_text } else { chrome.text }))
                                 .cursor_pointer()
                                 .child(if copied_doctor {
                                     if zh { "已复制" } else { "Copied" }.to_string()
@@ -1547,7 +1634,7 @@ fn permission_gate_page(
                     .py(px(6.))
                     .rounded(px(9.))
                     .bg(rgb(if enabled { chrome.accent } else { chrome.separator }))
-                    .text_color(rgb(if enabled { 0xffffff } else { chrome.muted }))
+                    .text_color(rgb(if enabled { chrome.accent_text } else { chrome.muted }))
                     .cursor_pointer()
                     .child(if this_busy {
                         if zh { "处理中…" } else { "Working..." }.to_string()
@@ -1654,7 +1741,7 @@ fn permission_gate_page(
                                 .py(px(6.))
                                 .rounded(px(9.))
                                 .bg(rgb(if busy { chrome.separator } else { chrome.accent }))
-                                .text_color(rgb(if busy { chrome.muted } else { 0xffffff }))
+                                .text_color(rgb(if busy { chrome.muted } else { chrome.accent_text }))
                                 .cursor_pointer()
                                 .child(if repairing.is_some() {
                                     if zh { "处理中…" } else { "Working..." }.to_string()
@@ -1840,12 +1927,13 @@ pub fn open_settings_window(cx: &mut App, proxy: EventLoopProxy) -> anyhow::Resu
                     .ok();
                 true
             });
-            cx.new(|_| SettingsWindow {
+            cx.new(|cx| SettingsWindow {
                 section: Section::Appearance,
                 proxy: proxy.clone(),
                 gate: PermissionSnapshot::checking(),
                 repairing: None,
                 copied_doctor: false,
+                theme_controls: ThemeControls::new(cx),
             })
         },
     )?;
@@ -1928,6 +2016,7 @@ pub fn set_settings_section(handle: &SettingsHandle, path: &str, cx: &mut App) {
     handle
         .update(cx, |view, _window, cx| {
             view.section = section;
+            view.theme_controls.menu = None;
             cx.notify();
         })
         .ok();

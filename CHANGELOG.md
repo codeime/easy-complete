@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- feat: replace the completion theme grid with a dropdown and a single live preview; offer the same 12 theme choices for the settings interface and completion popup.
+
 ## v3.0.0
 
 - fix: keep the settings sidebar and switches at a stable width on every page; refresh navigation, page headings, grouped controls, and completion theme previews.
