@@ -1,11 +1,8 @@
 # Changelog
 
-## Unreleased
+## v3.0.0-beta.1
 
 - feat: replace the completion theme grid with a dropdown and a single live preview; offer the same 12 theme choices for the settings interface and completion popup.
-
-## v3.0.0
-
 - fix: keep the settings sidebar and switches at a stable width on every page; refresh navigation, page headings, grouped controls, and completion theme previews.
 - change: move this fork to the independent 3.0 version line and use `codeime/easy-complete` as the default update source, so upstream releases do not replace this build.
 - feat: separate the settings interface theme from the completion theme; completion previews now show command suggestions using the popup's actual palette.
