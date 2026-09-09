@@ -20,6 +20,7 @@ export enum SETTINGS {
   USER_STYLES = "autocomplete.userStyles",
   FONT_FAMILY = "autocomplete.fontFamily",
   FONT_SIZE = "autocomplete.fontSize",
+  OVERFLOW = "autocomplete.overflow",
 
   CACHE_ALL_GENERATORS = "beta.autocomplete.auto-cache",
   // Behavior settings

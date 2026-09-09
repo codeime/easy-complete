@@ -36,6 +36,15 @@ fn integration_unsupported() -> ServerOriginatedSubMessage {
     })
 }
 
+#[cfg(target_os = "macos")]
+fn dashboard_language_zh() -> Option<bool> {
+    match fig_settings::settings::get_string_or("dashboard.language", "system".into()).as_str() {
+        "zh-CN" | "zh" => Some(true),
+        "en" => Some(false),
+        _ => None,
+    }
+}
+
 fn integration_result(result: Result<(), impl Display>) -> ServerOriginatedSubMessage {
     ServerOriginatedSubMessage::InstallResponse(InstallResponse {
         response: Some(Response::Result(match result {
@@ -111,15 +120,10 @@ where
         (InstallComponent::Accessibility, InstallAction::Install) => {
             cfg_if::cfg_if! {
                 if #[cfg(target_os = "macos")] {
-                    use macos_utils::accessibility::{
-                        accessibility_is_enabled,
-                        open_accessibility,
-                        prompt_for_accessibility,
-                    };
+                    use macos_utils::accessibility::{accessibility_is_enabled, begin_accessibility_guide};
 
                     if !accessibility_is_enabled() {
-                        prompt_for_accessibility();
-                        open_accessibility();
+                        begin_accessibility_guide(dashboard_language_zh());
                     }
 
                     integration_result(Ok::<(), &str>(()))

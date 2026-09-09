@@ -1,10 +1,12 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, BoxShadow, Context, Entity, FontWeight, Image, InteractiveElement, IntoElement, ParentElement, Render,
-    Rgba, ScrollStrategy, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div, hsla, point, px,
-    rgb, uniform_list,
+    Animation, AnimationExt as _, AnyElement, BoxShadow, Context, Entity, FontWeight, HighlightStyle, Image,
+    InteractiveElement, IntoElement, ParentElement, Render, Rgba, ScrollStrategy, StatefulInteractiveElement, Styled,
+    StyledText, UnderlineStyle, UniformListScrollHandle, Window, div, hsla, point, px, rgb, uniform_list,
 };
+use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::icons::{history_icon_image_element, identifier_icon_element, named_icon_element, png_icon_element};
 use crate::overlay::OverlayState;
@@ -399,8 +401,126 @@ fn is_fileish(kind: &str) -> bool {
     matches!(kind, "file" | "folder")
 }
 
+/// Strip quotes and backslash-escaped spaces so path titles match the unquoted caret token.
+pub fn unquote_shell_token(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in raw.chars() {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            } else {
+                out.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            _ => out.push(ch),
+        }
+    }
+    if escaped {
+        out.push('\\');
+    }
+    out
+}
+
+/// Directory already typed in the current token (`src/` from `src/m`).
+pub fn typed_directory_prefix(typed: &str) -> &str {
+    if typed.ends_with('/') {
+        typed
+    } else if let Some(slash) = typed.rfind('/') {
+        &typed[..=slash]
+    } else {
+        ""
+    }
+}
+
+/// Drop the already-typed directory so a long `cd` path shows the last component.
+/// `~` is treated as `~/` because the file generator lists `~/Desktop/` while the caret token has no slash.
+pub fn strip_typed_directory_prefix<'a>(name: &'a str, typed: &str) -> &'a str {
+    let prefix = typed_directory_prefix(typed);
+    if !prefix.is_empty()
+        && let Some(rest) = name.strip_prefix(prefix).filter(|rest| !rest.is_empty())
+    {
+        return rest;
+    }
+    if typed == "~"
+        && let Some(rest) = name.strip_prefix("~/").filter(|rest| !rest.is_empty())
+    {
+        return rest;
+    }
+    name
+}
+
+/// File/folder titles hide the typed directory; other rows keep the full name.
+pub fn visible_suggestion_title<'a>(item: &'a SuggestionItem, typed: &str) -> &'a str {
+    let title = item.display_name.as_deref().unwrap_or(&item.name);
+    if is_fileish(&item.kind) {
+        strip_typed_directory_prefix(title, typed)
+    } else {
+        title
+    }
+}
+
+/// Residual overflow after the typed directory is hidden.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TitleOverflow {
+    /// Clip the end of the last component with an ellipsis.
+    Ellipsis,
+    /// Marquee the selected row only. Unselected rows still ellipsize.
+    /// Default: the last component is what the user is choosing.
+    #[default]
+    Scroll,
+}
+
+impl TitleOverflow {
+    pub fn parse(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("ellipsis") || value.eq_ignore_ascii_case("truncate") {
+            Self::Ellipsis
+        } else {
+            Self::Scroll
+        }
+    }
+}
+
+/// Monaco-ish advance: ASCII ≈ 0.6em, everything else a full em.
+pub fn estimated_title_width(text: &str, font_size: f32) -> f32 {
+    text.chars()
+        .map(|ch| if ch.is_ascii() { 0.6 } else { 1.0 })
+        .sum::<f32>()
+        * font_size
+}
+
+/// Pause at each end, then slide the extra width across. `delta` is 0..=1.
+pub fn marquee_offset(delta: f32, extra: f32) -> f32 {
+    let t = if delta < 0.06 {
+        0.0
+    } else if delta > 0.94 {
+        1.0
+    } else {
+        (delta - 0.06) / 0.88
+    };
+    extra * t
+}
+
+pub fn marquee_duration(extra: f32) -> Duration {
+    Duration::from_secs_f32((0.9 + extra / 90.0).clamp(1.2, 4.5))
+}
+
 /// Shared prefix of same-kind rows, matching the old overlay's Tab underline.
-pub fn common_prefix_for(selected: usize, items: &[SuggestionItem]) -> String {
+/// `typed` is the unquoted full token (quotes and escapes already stripped).
+pub fn common_prefix_for(selected: usize, items: &[SuggestionItem], typed: &str) -> String {
     let Some(selected_item) = items.get(selected) else {
         return String::new();
     };
@@ -417,7 +537,7 @@ pub fn common_prefix_for(selected: usize, items: &[SuggestionItem]) -> String {
     let names: Vec<String> = items
         .iter()
         .filter(|item| items_match_for_prefix(item, &type_filter))
-        .map(|item| item.name.to_ascii_lowercase())
+        .map(|item| visible_suggestion_title(item, typed).to_ascii_lowercase())
         .collect();
     if names.len() < 2 {
         return String::new();
@@ -648,7 +768,8 @@ impl Render for SuggestionList {
         let loading = overlay.loading;
         let show_hint = !overlay.always_show_description && !loading;
         let show_dev = overlay.show_dev_banner;
-        let common_prefix = common_prefix_for(selected, &overlay.items);
+        let typed_path = unquote_shell_token(&overlay.search_term);
+        let common_prefix = common_prefix_for(selected, &overlay.items, &typed_path);
         // The bottom Description falls back to currentArg, but the old
         // popout deliberately describes only the selected suggestion.
         let selected_description = selected_item_description(overlay.selected_item());
@@ -725,6 +846,7 @@ impl Render for SuggestionList {
             column = column.child(
                 uniform_list("ec-suggestions", count, {
                     let common_prefix = common_prefix.clone();
+                    let typed_path = typed_path.clone();
                     let state = state.clone();
                     let click = click.clone();
                     let suggestion_font_family = font_family.clone();
@@ -739,6 +861,7 @@ impl Render for SuggestionList {
                                     item,
                                     ix == overlay.selected,
                                     search_term,
+                                    &typed_path,
                                     &overlay.search_term,
                                     fuzzy,
                                     &common_prefix,
@@ -746,6 +869,8 @@ impl Render for SuggestionList {
                                     row_height,
                                     icon_size,
                                     font_size,
+                                    list_width,
+                                    overlay.title_overflow,
                                     corners,
                                     suggestion_font_family.clone(),
                                     state.clone(),
@@ -825,6 +950,7 @@ fn suggestion_row(
     item: &SuggestionItem,
     is_selected: bool,
     search_term: &str,
+    typed: &str,
     insertion_search_term: &str,
     fuzzy: bool,
     common_prefix: &str,
@@ -832,6 +958,8 @@ fn suggestion_row(
     row_height: f32,
     icon_size: f32,
     font_size: f32,
+    list_width: f32,
+    title_overflow: TitleOverflow,
     // Top and bottom radii this row must reproduce to keep the card's corners
     // intact, since GPUI's overflow clip does not follow a border radius.
     corners: (f32, f32),
@@ -866,32 +994,44 @@ fn suggestion_row(
     match_bg.a = 0.8;
     let match_text = brightness(text, 0.95 * 1.25);
     let click_item = item.clone();
+    let title_name = visible_suggestion_title(item, typed);
+    let highlight = if is_fileish(&item.kind) {
+        strip_typed_directory_prefix(search_term, typed)
+    } else {
+        search_term
+    };
+    let runs = name_runs(title_name, highlight, fuzzy, common_prefix);
     let insertion_search_term = insertion_search_term.to_string();
-    let title_name = item.display_name.as_deref().unwrap_or(&item.name);
-    let runs = name_runs(title_name, search_term, fuzzy, common_prefix);
-    let mut title = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .font_family(font_family)
-        .text_color(text);
-    for run in runs {
-        title = title.child(match run.kind {
-            RunKind::Match => div().bg(match_bg).text_color(match_text).child(run.text),
-            RunKind::Prefix => div().underline().text_color(text).child(run.text),
-            RunKind::Text => div().text_color(text).child(run.text),
-        });
-    }
-    if !item.args_hint.is_empty() {
-        title = title.child(
-            div()
-                .text_color(text)
-                .opacity(0.5)
-                .child(format!(" {}", item.args_hint)),
-        );
-    }
+    let (title_text, title_highlights) =
+        suggestion_title_highlights(&runs, &item.args_hint, text, match_text, match_bg);
+    let available = (list_width - row_pad_left(font_size) - icon_size - 5.0).max(1.0);
+    let extra = estimated_title_width(&title_text, font_size) - available;
+    let marquee = is_selected && title_overflow == TitleOverflow::Scroll && extra > 4.0;
+    let styled = StyledText::new(title_text).with_highlights(title_highlights);
+    // One text node so ellipsis can apply. Scroll only the selected overflowing
+    // row; animating every row would keep the main thread painting.
+    let title = if marquee {
+        let duration = marquee_duration(extra);
+        div()
+            .min_w(px(0.))
+            .flex_1()
+            .overflow_hidden()
+            .font_family(font_family)
+            .text_color(text)
+            .child(div().whitespace_nowrap().child(styled).with_animation(
+                ("ec-marquee", ix),
+                Animation::new(duration).repeat(),
+                move |this, delta| this.ml(px(-marquee_offset(delta, extra))),
+            ))
+    } else {
+        div()
+            .min_w(px(0.))
+            .flex_1()
+            .truncate()
+            .font_family(font_family)
+            .text_color(text)
+            .child(styled)
+    };
     let icon = item.icon_png.clone();
     div()
         .id(("ec-suggestion", ix))
@@ -914,7 +1054,14 @@ fn suggestion_row(
             item.icon_identifier.as_deref(),
             icon_size,
         ))
-        .child(div().ml(px(5.)).overflow_hidden().child(title))
+        .child(
+            div()
+                .ml(px(5.))
+                .min_w(px(0.))
+                .flex_1()
+                .overflow_hidden()
+                .child(title),
+        )
         // React's Suggestion uses onClick (mouse-up), not mouse-down. Besides
         // matching the old acceptance timing this avoids accepting a row when
         // the user presses and drags out of it before releasing.
@@ -947,6 +1094,59 @@ fn brightness(mut color: Rgba, factor: f32) -> Rgba {
     color.g = (color.g * factor).clamp(0.0, 1.0);
     color.b = (color.b * factor).clamp(0.0, 1.0);
     color
+}
+
+fn suggestion_title_highlights(
+    runs: &[TextRun],
+    args_hint: &str,
+    text: Rgba,
+    match_text: Rgba,
+    match_bg: Rgba,
+) -> (String, Vec<(Range<usize>, HighlightStyle)>) {
+    let mut title = String::new();
+    let mut highlights = Vec::new();
+    for run in runs {
+        let start = title.len();
+        title.push_str(&run.text);
+        let end = title.len();
+        match run.kind {
+            RunKind::Match => highlights.push((
+                start..end,
+                HighlightStyle {
+                    color: Some(match_text.into()),
+                    background_color: Some(match_bg.into()),
+                    ..HighlightStyle::default()
+                },
+            )),
+            RunKind::Prefix => highlights.push((
+                start..end,
+                HighlightStyle {
+                    color: Some(text.into()),
+                    underline: Some(UnderlineStyle {
+                        thickness: px(1.),
+                        color: Some(text.into()),
+                        wavy: false,
+                    }),
+                    ..HighlightStyle::default()
+                },
+            )),
+            RunKind::Text => {},
+        }
+    }
+    if !args_hint.is_empty() {
+        let start = title.len();
+        title.push(' ');
+        title.push_str(args_hint);
+        highlights.push((
+            start..title.len(),
+            HighlightStyle {
+                color: Some(text.into()),
+                fade_out: Some(0.5),
+                ..HighlightStyle::default()
+            },
+        ));
+    }
+    (title, highlights)
 }
 
 fn click_insert_for(item: &SuggestionItem, raw_search_term: &str) -> ClickInsert {
@@ -1503,7 +1703,7 @@ mod tests {
                 ..SuggestionItem::default()
             },
         ];
-        assert_eq!(common_prefix_for(0, &items), "che");
+        assert_eq!(common_prefix_for(0, &items, ""), "che");
     }
 
     #[test]
@@ -1518,7 +1718,7 @@ mod tests {
             item("checkout", "subcommand"),
             item("cherry-pick", "subcommand"),
         ];
-        assert_eq!(common_prefix_for(0, &items), "che");
+        assert_eq!(common_prefix_for(0, &items, ""), "che");
         // Decoration parity must not turn Tab into execution when multiple
         // rows are present.
         assert_eq!(tab_prefix_insertion(0, &items, "ch"), None);
@@ -1596,6 +1796,152 @@ mod tests {
     }
 
     #[test]
+    fn typed_directory_prefix_is_the_path_up_to_the_last_slash() {
+        assert_eq!(typed_directory_prefix("src/m"), "src/");
+        assert_eq!(typed_directory_prefix("src/"), "src/");
+        assert_eq!(typed_directory_prefix("~/Desktop/foo"), "~/Desktop/");
+        assert_eq!(typed_directory_prefix("src"), "");
+        assert_eq!(typed_directory_prefix(""), "");
+        assert_eq!(typed_directory_prefix("~"), "");
+    }
+
+    #[test]
+    fn unquote_shell_token_strips_quotes_and_backslash_spaces() {
+        assert_eq!(unquote_shell_token("~/De"), "~/De");
+        assert_eq!(unquote_shell_token("'src/foo/"), "src/foo/");
+        assert_eq!(unquote_shell_token(r"my\ dir/foo"), "my dir/foo");
+        assert_eq!(unquote_shell_token(r#""src/foo/""#), "src/foo/");
+        assert_eq!(unquote_shell_token("~"), "~");
+    }
+
+    #[test]
+    fn path_rows_hide_the_already_typed_directory() {
+        let main = item("src/main.rs", "file");
+        let nested = item("src/foo/bar/", "folder");
+        let parent = item("../", "folder");
+        let top = item("src/", "folder");
+        assert_eq!(visible_suggestion_title(&main, "src/m"), "main.rs");
+        assert_eq!(visible_suggestion_title(&nested, "src/foo/"), "bar/");
+        assert_eq!(visible_suggestion_title(&parent, "src/"), "../");
+        assert_eq!(visible_suggestion_title(&top, "s"), "src/");
+        assert_eq!(visible_suggestion_title(&top, ""), "src/");
+        // Callers unquote search_term first. The getQueryTerm tail (`bar` from
+        // `src/foo/bar`) is the highlight, not the directory prefix.
+        assert_eq!(
+            visible_suggestion_title(&nested, &unquote_shell_token("'src/foo/")),
+            "bar/"
+        );
+        let spaced = item("my dir/foo/", "folder");
+        assert_eq!(visible_suggestion_title(&spaced, "my dir/"), "foo/");
+        assert_eq!(
+            visible_suggestion_title(&spaced, &unquote_shell_token(r"my\ dir/")),
+            "foo/"
+        );
+        let home = item("~/Desktop/", "folder");
+        assert_eq!(visible_suggestion_title(&home, "~"), "Desktop/");
+        assert_eq!(visible_suggestion_title(&home, "~/"), "Desktop/");
+        assert_eq!(visible_suggestion_title(&home, "~/De"), "Desktop/");
+        let tilde = item("~", "arg");
+        assert_eq!(visible_suggestion_title(&tilde, "~"), "~");
+        assert_eq!(visible_suggestion_title(&tilde, "~/"), "~");
+    }
+
+    #[test]
+    fn slash_prefix_is_only_hidden_on_file_and_folder_rows() {
+        let branch = item("feat/login", "arg");
+        let history = item("feat/login", "history");
+        let sub = item("merge", "subcommand");
+        assert_eq!(visible_suggestion_title(&branch, "feat/"), "feat/login");
+        assert_eq!(visible_suggestion_title(&history, "feat/"), "feat/login");
+        assert_eq!(visible_suggestion_title(&sub, "mer"), "merge");
+        let branches = vec![item("feat/login", "arg"), item("feat/logout", "arg")];
+        assert_eq!(common_prefix_for(0, &branches, "feat/"), "feat/log");
+        let siblings = vec![item("feat/foo", "arg"), item("feat/bar", "arg")];
+        assert_eq!(common_prefix_for(0, &siblings, "feat/"), "feat/");
+    }
+
+    #[test]
+    fn get_query_term_tail_must_not_be_used_as_the_directory_prefix() {
+        let home = item("~/Desktop/", "folder");
+        // `cd`'s getQueryTerm is "/": match_term is `~` or `De`, not `~/De`.
+        assert_eq!(visible_suggestion_title(&home, "De"), "~/Desktop/");
+        assert_eq!(
+            visible_suggestion_title(&home, &unquote_shell_token("~/De")),
+            "Desktop/"
+        );
+    }
+
+    #[test]
+    fn path_common_prefix_is_computed_on_the_visible_tail() {
+        let items = vec![item("src/main.rs", "file"), item("src/mod.rs", "file")];
+        assert_eq!(common_prefix_for(0, &items, "src/m"), "m");
+        let folders = vec![item("src/foo/", "folder"), item("src/bar/", "folder")];
+        assert_eq!(common_prefix_for(0, &folders, "src/"), "");
+        let home = vec![item("~/Desktop/", "folder"), item("~/Documents/", "folder")];
+        // Underlining `~/` on every home-folder row was the misleading hint.
+        assert_eq!(common_prefix_for(0, &home, "~"), "d");
+        assert_eq!(common_prefix_for(0, &home, "~/"), "d");
+    }
+
+    #[test]
+    fn path_highlight_runs_against_the_visible_tail() {
+        let runs = name_runs("main.rs", "m", false, "m");
+        assert_eq!(runs[0].kind, RunKind::Match);
+        assert_eq!(runs[0].text, "m");
+        assert_eq!(runs[1].kind, RunKind::Text);
+        assert_eq!(runs[1].text, "ain.rs");
+        assert_eq!(strip_typed_directory_prefix("src/m", "src/m"), "m");
+    }
+
+    #[test]
+    fn title_overflow_defaults_to_scroll() {
+        assert_eq!(TitleOverflow::parse(""), TitleOverflow::Scroll);
+        assert_eq!(TitleOverflow::parse("scroll"), TitleOverflow::Scroll);
+        assert_eq!(TitleOverflow::parse("marquee"), TitleOverflow::Scroll);
+        assert_eq!(TitleOverflow::parse("ellipsis"), TitleOverflow::Ellipsis);
+        assert_eq!(TitleOverflow::default(), TitleOverflow::Scroll);
+    }
+
+    #[test]
+    fn marquee_pauses_then_slides_the_overflow() {
+        assert_eq!(marquee_offset(0.0, 100.0), 0.0);
+        assert_eq!(marquee_offset(0.05, 100.0), 0.0);
+        assert!((marquee_offset(0.5, 100.0) - 50.0).abs() < 1.0);
+        assert_eq!(marquee_offset(1.0, 100.0), 100.0);
+        assert!(marquee_duration(10.0) >= Duration::from_millis(1200));
+        assert!(marquee_duration(10.0) < Duration::from_secs(3));
+        assert!(marquee_duration(1000.0) <= Duration::from_millis(4500));
+    }
+
+    #[test]
+    fn ascii_titles_are_narrower_than_wide_glyphs() {
+        let ascii = estimated_title_width("abcdefghij", 10.0);
+        let wide = estimated_title_width("中文目录名", 10.0);
+        assert!(ascii < 70.0, "{ascii}");
+        assert!(wide > 40.0, "{wide}");
+    }
+
+    #[test]
+    fn title_highlights_keep_the_visible_text_in_one_string() {
+        let runs = name_runs("main.rs", "m", false, "m");
+        let (title, highlights) =
+            suggestion_title_highlights(&runs, "<path>", rgb(0x111111), rgb(0x222222), rgb(0x333333));
+        assert_eq!(title, "main.rs <path>");
+        assert_eq!(highlights.len(), 2);
+        assert_eq!(highlights[0].0, 0.."m".len());
+        assert!(highlights[0].1.background_color.is_some());
+        assert_eq!(highlights[1].0, "main.rs".len()..title.len());
+        assert_eq!(highlights[1].1.fade_out, Some(0.5));
+    }
+
+    #[test]
+    fn explicit_display_name_is_also_stripped_when_it_repeats_the_directory() {
+        let mut row = item("src/web", "file");
+        row.display_name = Some("src/web (nginx)".into());
+        assert_eq!(visible_suggestion_title(&row, "src/"), "web (nginx)");
+    }
+
+    #[test]
     fn mouse_payload_keeps_raw_search_for_shell_deletion() {
         let mut suggestion = item("checkout", "subcommand");
         suggestion.query_term = Some("co".into());
@@ -1641,7 +1987,7 @@ mod tests {
             item("scripts/", "folder"),
             item("../", "folder"),
         ];
-        assert_eq!(common_prefix_for(0, &items), "s");
+        assert_eq!(common_prefix_for(0, &items, ""), "s");
         assert_eq!(tab_prefix_insertion(0, &items, "s"), None);
     }
 

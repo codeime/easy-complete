@@ -169,7 +169,31 @@ pub async fn check_all() -> PermissionSnapshot {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn dashboard_language_zh() -> Option<bool> {
+    match fig_settings::settings::get_string_or("dashboard.language", "system".into()).as_str() {
+        "zh-CN" | "zh" => Some(true),
+        "en" => Some(false),
+        _ => None,
+    }
+}
+
 pub async fn repair(id: PermId) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if id == PermId::Accessibility {
+        macos_utils::accessibility::begin_accessibility_guide(dashboard_language_zh());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
+            if macos_utils::accessibility::accessibility_is_enabled() {
+                return Ok(());
+            }
+            if !macos_utils::accessibility::accessibility_guide_is_active() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+        return Ok(());
+    }
     let _ = query(id, InstallAction::Install).await?;
     Ok(())
 }

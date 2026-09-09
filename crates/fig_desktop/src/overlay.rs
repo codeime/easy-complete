@@ -1264,6 +1264,10 @@ fn apply_settings(overlay: &mut OverlayState) {
     overlay.navigate_to_history = fig_settings::settings::get_bool_or("autocomplete.navigateToHistory", false);
     overlay.insert_space_automatically =
         fig_settings::settings::get_bool_or("autocomplete.insertSpaceAutomatically", true);
+    overlay.title_overflow = ec_gpui::TitleOverflow::parse(&fig_settings::settings::get_string_or(
+        "autocomplete.overflow",
+        "scroll".into(),
+    ));
     let was_always_show = overlay.always_show_description;
     overlay.always_show_description = fig_settings::settings::get_bool_or("autocomplete.alwaysShowDescription", false);
     if overlay.always_show_description {
@@ -2297,6 +2301,32 @@ mod tests {
     #[test]
     fn insert_keeps_directory_prefix() {
         assert_eq!(insertion_for("src/main.rs", "src/m"), ("ain.rs".into(), 0));
+    }
+
+    #[test]
+    fn webview_enter_on_tilde_inserts_tilde_and_does_not_execute() {
+        // WebView `getFullInsertion` uses insertValue for non-file rows, else
+        // the matched name. The cd hidden `~` seed and a history suffix `~`
+        // both insert `~` with no slash and no newline. Enter is
+        // `insertSelected` (`fig.json`), not `insertSelectedAndExecute`.
+        // Auto-execute (`\n`) is a separate row, hidden when
+        // `hideAutoExecuteSuggestion` is on.
+        assert_eq!(full_insertion_for_item("~", None, "arg", None, false, true, false), "~");
+        assert_eq!(
+            full_insertion_for_item("~", Some("~"), "history", None, false, true, false),
+            "~"
+        );
+        assert!(!immediate_for_insert(false, "~"));
+        assert!(should_suppress_after_insert(false, "arg", false, "~"));
+        assert_eq!(
+            full_insertion_for_item("~", Some("\n"), "auto-execute", None, false, true, false),
+            "\n"
+        );
+        assert_eq!(
+            full_insertion_for_item("~/Desktop/", None, "folder", None, false, true, false),
+            "~/Desktop/"
+        );
+        assert!(!should_suppress_after_insert(false, "folder", false, "~/Desktop/"));
     }
 
     #[test]

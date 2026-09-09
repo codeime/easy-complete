@@ -151,17 +151,12 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
             });
         },
         ACCESSIBILITY_MENU_ID => {
-            #[cfg(target_os = "macos")]
-            {
-                use macos_utils::accessibility::{open_accessibility, prompt_for_accessibility};
-
-                // `prompt_for_accessibility` only raises the system dialog while macOS still
-                // considers the app un-prompted; once the bundle is listed — even with a stale
-                // entry that no longer grants anything — it returns silently. Always open the
-                // settings pane too so the user has somewhere to go in that case.
-                prompt_for_accessibility();
-                open_accessibility();
-            }
+            proxy
+                .send_event(Event::WindowEvent {
+                    window_id: DASHBOARD_ID.clone(),
+                    window_event: WindowEvent::Batch(vec![WindowEvent::Show]),
+                })
+                .unwrap();
         },
         "user-manual" => {
             if let Err(err) = fig_util::open_url(USER_MANUAL) {
@@ -449,6 +444,29 @@ fn menu(is_logged_in: bool) -> Vec<MenuElement> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tray_accessibility_entry_opens_our_settings_not_system_settings() {
+        let production = include_str!("tray.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        assert!(
+            !production.contains("prompt_for_accessibility"),
+            "tray must not raise the system TCC sheet"
+        );
+        assert!(
+            !production.contains("open_accessibility"),
+            "tray must not open System Settings"
+        );
+        assert!(
+            !production.contains("begin_accessibility_guide"),
+            "tray must not start the Accessibility guide"
+        );
+        assert!(production.contains("ACCESSIBILITY_MENU_ID"));
+        assert!(production.contains("DASHBOARD_ID"));
+        assert!(production.contains("WindowEvent::Show"));
+    }
+
     #[test]
     fn tray_icon_decode_is_cached() {
         let first = super::get_icon(true);

@@ -184,15 +184,7 @@ if [ "${desktop_changed}" -eq 1 ]; then
       info "Accessibility grant did not survive; resetting it..."
       tccutil reset Accessibility "${BUNDLE_ID}" 2>/dev/null || true
       accessibility_reset=1
-      info "Requesting Accessibility permission..."
-      # The probe just reached the desktop process over its local socket, so a
-      # single attempt is enough here.
-      if ec debug prompt-accessibility 2>/dev/null; then
-        warn "Grant '${APP_DISPLAY}' in System Settings → Privacy & Security → Accessibility."
-      else
-        warn "Could not reach the desktop app to prompt for Accessibility. Once it is running, run:"
-        warn "  ec debug prompt-accessibility"
-      fi
+      warn "Open Easy Complete Settings and click Grant Accessibility."
       ;;
     *)
       warn "Could not reach the desktop app to check its Accessibility grant. Once it is running, run:"
@@ -210,6 +202,6 @@ echo "  App:  /Applications/${APP_DISPLAY}.app"
 echo "  CLI:  ${LOCAL_BIN}/ec  ($(ec --version 2>/dev/null || echo 'restart shell to verify'))"
 echo ""
 if [ "${accessibility_reset}" -eq 1 ]; then
-  echo "  If autocomplete does not appear, grant Accessibility to '${APP_DISPLAY}' in"
-  echo "    System Settings → Privacy & Security → Accessibility"
+  echo "  If autocomplete does not appear, open Easy Complete Settings and click"
+  echo "    Grant Accessibility, then drag Easy Complete into the list."
 fi

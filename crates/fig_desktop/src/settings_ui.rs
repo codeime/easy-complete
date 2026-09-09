@@ -801,6 +801,7 @@ fn appearance_page(
     let font_size = fig_settings::settings::get_int_or("autocomplete.fontSize", 13);
     let width = fig_settings::settings::get_int_or("autocomplete.width", 300);
     let height = fig_settings::settings::get_int_or("autocomplete.height", 140);
+    let overflow = fig_settings::settings::get_string_or("autocomplete.overflow", "scroll".into());
 
     let lang_options: &[(&str, &str)] = if zh {
         &[("跟随系统", "system"), ("English", "en"), ("简体中文", "zh-CN")]
@@ -848,6 +849,7 @@ fn appearance_page(
     let size_entity = entity.clone();
     let width_entity = entity.clone();
     let height_entity = entity.clone();
+    let overflow_entity = entity.clone();
 
     div()
         .w_full()
@@ -973,7 +975,7 @@ fn appearance_page(
                     if zh { "最大高度" } else { "Max Height" },
                     None,
                     chrome,
-                    true,
+                    false,
                     stepper(
                         "max-height",
                         height.clamp(80, 600),
@@ -983,6 +985,31 @@ fn appearance_page(
                         chrome,
                         move |value, cx| {
                             height_entity.update(cx, |this, cx| this.set_int("autocomplete.height", value, cx));
+                        },
+                    ),
+                ))
+                .child(stacked_row(
+                    if zh { "超长文本" } else { "Long Text" },
+                    Some(if zh {
+                        "去掉已输入目录后，最后一级仍然超出宽度时：用省略号，或只滚动当前选中行"
+                    } else {
+                        "After hiding the typed directory, overflowing last components use an ellipsis, or scroll the selected row"
+                    }),
+                    chrome,
+                    true,
+                    select_chips(
+                        "ec-overflow",
+                        if zh {
+                            &[("滚动", "scroll"), ("省略", "ellipsis")]
+                        } else {
+                            &[("Scroll", "scroll"), ("Ellipsis", "ellipsis")]
+                        },
+                        overflow.as_str(),
+                        chrome,
+                        move |value, cx| {
+                            overflow_entity.update(cx, |this, cx| {
+                                this.set_string("autocomplete.overflow", value, cx);
+                            });
                         },
                     ),
                 )),
@@ -1490,12 +1517,12 @@ fn perm_label(id: PermId, zh: bool) -> (&'static str, &'static str, &'static str
     match (id, zh) {
         (PermId::Accessibility, true) => (
             "辅助功能权限",
-            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后把 Easy Complete 拖进系统设置的列表。",
+            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置，把 Easy Complete 拖进旁边的列表。",
             "授予辅助功能权限",
         ),
         (PermId::Accessibility, false) => (
             "Accessibility Permission",
-            "Required to read the focused terminal window and position completions. Drag Easy Complete into the system list after clicking.",
+            "Required to read the focused terminal window and position completions. Click to open System Settings, then drag Easy Complete into the list beside the card.",
             "Grant Accessibility",
         ),
         (PermId::Shell, true) => (
@@ -1647,6 +1674,12 @@ fn permission_gate_page(
                                 this.repairing = Some(id);
                                 this.gate.error = None;
                                 cx.notify();
+                                #[cfg(target_os = "macos")]
+                                if id == PermId::Accessibility {
+                                    dispatch::Queue::main().exec_async(move || {
+                                        macos_utils::accessibility::begin_accessibility_guide(Some(zh));
+                                    });
+                                }
                                 permissions::spawn_repair(&this.proxy, id);
                             });
                         })
@@ -1755,6 +1788,10 @@ fn permission_gate_page(
                                         entity_all.update(cx, |this, cx| {
                                             this.repairing = Some(PermId::Accessibility);
                                             cx.notify();
+                                            #[cfg(target_os = "macos")]
+                                            dispatch::Queue::main().exec_async(move || {
+                                                macos_utils::accessibility::begin_accessibility_guide(Some(zh));
+                                            });
                                             permissions::spawn_repair_all(&this.proxy);
                                         });
                                     })
@@ -1960,6 +1997,7 @@ fn start_permission_poller(handle: SettingsHandle, cx: &mut App) {
                     let ax_marked_ready = this.gate.accessibility == PermReady::Ready;
                     if ax_now_ready != ax_marked_ready {
                         this.proxy.send_event(Event::ReloadAccessibility).ok();
+                        permissions::spawn_check(&this.proxy);
                     }
                     true
                 })
@@ -2068,6 +2106,19 @@ mod tests {
             PermReady::Ready,
             PermReady::Ready
         )));
+    }
+
+    #[test]
+    fn grant_button_starts_the_accessibility_guide() {
+        let production = include_str!("settings_ui.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        assert!(production.contains("begin_accessibility_guide"));
+        assert!(production.contains("exec_async"));
+        assert!(production.contains("Grant Accessibility"));
+        assert!(production.contains("授予辅助功能权限"));
+        assert!(!production.contains("prompt_for_accessibility("));
     }
 
     #[test]

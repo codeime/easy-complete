@@ -61,8 +61,8 @@ Install Easy Complete with one command:
 brew install --cask chen86860/tap/easy-complete
 ```
 
-Then launch **Easy Complete** from `/Applications`, grant **Accessibility**
-permission when prompted, and reload your shell:
+Then launch **Easy Complete** from `/Applications`, open Settings, click
+**Grant Accessibility**, drag Easy Complete into the list, and reload your shell:
 
 ```bash
 exec $SHELL
@@ -87,7 +87,7 @@ Then:
 1. Open `Easy-Complete-arm64.dmg`.
 2. Drag **Easy Complete.app** into `/Applications`.
 3. Launch **Easy Complete** from `/Applications`.
-4. Grant **Accessibility** permission when prompted.
+4. Open Easy Complete Settings and click **Grant Accessibility**.
 5. Reload your shell:
 
    ```bash
@@ -118,7 +118,7 @@ The source installer will:
 3. Symlink the `ec` and `ecterm` CLIs into `~/.local/bin`.
 4. Let you enable **Launch at Login** from Settings (a system Login Item on macOS 13+, with a LaunchAgent fallback on macOS 12).
 5. Set up shell integration and register the input method.
-6. **Prompt you to grant Accessibility permission** (required — see below).
+6. Leave Accessibility for you to grant from Easy Complete Settings (required — see below).
 
 When it finishes, reload your shell:
 
@@ -129,13 +129,16 @@ exec $SHELL
 ### Grant Accessibility permission
 
 Easy Complete positions the completion popup relative to your focused terminal
-window, which requires the macOS **Accessibility** permission. The installer triggers
-the system prompt automatically; approve **Easy Complete** in:
+window, which requires the macOS **Accessibility** permission. Open Easy Complete
+Settings and click **Grant Accessibility**. That opens:
 
 > System Settings → Privacy & Security → Accessibility
 
-If completions never appear, this is almost always the cause. Re-trigger the prompt
-with:
+and floats a card you can drag **Easy Complete** from into the list. The app never
+opens that pane on its own.
+
+If completions never appear, this is almost always the cause. Run the same flow
+again from Settings, or with:
 
 ```bash
 ec debug prompt-accessibility

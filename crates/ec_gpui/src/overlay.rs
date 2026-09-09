@@ -18,8 +18,9 @@ pub struct OverlayState {
     pub selected: usize,
     pub items: Vec<crate::list::SuggestionItem>,
     pub search_term: String,
-    /// Normalized token used only for matching/highlighting. `search_term`
-    /// remains the raw shell text so acceptance can delete exact bytes.
+    /// `getQueryTerm` tail used for highlighting (`De` from `~/De`).
+    /// Directory-prefix stripping uses the unquoted `search_term` instead:
+    /// this field is only the last path segment when the spec splits on `/`.
     pub match_term: String,
     /// The parser's current argument is useful even when it produced no rows.
     /// The WebView kept that context visible as a description-only overlay.
@@ -59,6 +60,9 @@ pub struct OverlayState {
     pub scroll_wrap_around: bool,
     pub navigate_to_history: bool,
     pub insert_space_automatically: bool,
+    /// How a still-overflowing last path component is shown after the typed
+    /// directory has been stripped. Scroll only animates the selected row.
+    pub title_overflow: crate::list::TitleOverflow,
     pub show_dev_banner: bool,
     pub suppress_until_shown: bool,
     /// Set after accepting a completion that does not open a new argument.
@@ -109,6 +113,7 @@ impl OverlayState {
             scroll_wrap_around: false,
             navigate_to_history: false,
             insert_space_automatically: true,
+            title_overflow: crate::list::TitleOverflow::Scroll,
             show_dev_banner: false,
             suppress_until_shown: false,
             suppress_next_completion: false,

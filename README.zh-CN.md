@@ -58,8 +58,8 @@ Mac。应用会收集匿名使用统计（打开次数、每日补全次数—�
 brew install --cask chen86860/tap/easy-complete
 ```
 
-安装完成后，从 `/Applications` 启动 **Easy Complete**，按提示授予**辅助功能**权限，
-然后重新加载 shell：
+安装完成后，从 `/Applications` 启动 **Easy Complete**，打开设置并点击**授予辅助功能权限**，
+把 Easy Complete 拖进列表，然后重新加载 shell：
 
 ```bash
 exec $SHELL
@@ -84,7 +84,7 @@ ec doctor
 1. 打开 `Easy-Complete-arm64.dmg`。
 2. 把 **Easy Complete.app** 拖到 `/Applications`。
 3. 从 `/Applications` 启动 **Easy Complete**。
-4. 按提示授予**辅助功能**权限。
+4. 打开 Easy Complete 设置，点击**授予辅助功能权限**。
 5. 重新加载你的 shell：
 
    ```bash
@@ -114,7 +114,7 @@ cd easy-complete
 3. 把 `ec` 和 `ecterm` 两个 CLI 软链到 `~/.local/bin`。
 4. 可在设置中开启**登录时启动**（macOS 13+ 使用系统登录项，macOS 12 回退到 LaunchAgent）。
 5. 配置 shell 集成并注册输入法。
-6. **弹出授予「辅助功能」权限的提示**（必需，见下文）。
+6. **辅助功能**需要你在 Easy Complete 设置里手动授予（必需，见下文）。
 
 完成后，重新加载你的 shell：
 
@@ -125,11 +125,14 @@ exec $SHELL
 ### 授予「辅助功能」权限
 
 Easy Complete 需要把补全浮层定位到你当前聚焦的终端窗口，这依赖 macOS 的**辅助功能
-（Accessibility）**权限。安装脚本会自动触发系统授权弹窗，请在以下位置勾选 **Easy Complete**：
+（Accessibility）**权限。打开 Easy Complete 设置，点击**授予辅助功能权限**。应用会打开：
 
 > 系统设置 → 隐私与安全性 → 辅助功能
 
-**如果补全始终不出现，几乎都是这个权限没授予。** 可用下面的命令重新触发授权弹窗：
+并把一张可拖拽的卡片停在列表旁边，把 **Easy Complete** 拖进去即可。启动、安装和菜单栏
+都不会自动打开系统设置。
+
+**如果补全始终不出现，几乎都是这个权限没授予。** 在设置里再点一次按钮，或运行：
 
 ```bash
 ec debug prompt-accessibility
