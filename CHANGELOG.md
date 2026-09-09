@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.0.0-beta.2
+
+- feat: grant Accessibility from Easy Complete Settings with a drag-to-list card beside the system pane; launch, install, tray, and revoke no longer open System Settings or the TCC sheet
+- fix: file and folder titles hide the already-typed directory (`cd ~/xx/`); branch names keep the full path (`git merge feat/`)
+- feat: settings control for leftover overflow after that strip — scroll the selected row, or ellipsis
+- fix: Enter on `~` inserts `~` and does not execute the command
+
 ## v3.0.0-beta.1
 
 - feat: replace the completion theme grid with a dropdown and a single live preview; offer the same 12 theme choices for the settings interface and completion popup.
