@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.0.0-beta.4
+
+- fix: grant drag preview snapshots the live icon-and-name row from its layer so rounded fill and Retina scale match the card
+
 ## v3.0.0-beta.3
 
 - fix: Grant Accessibility drops a stale System Settings list row so the current binary can be dragged in
