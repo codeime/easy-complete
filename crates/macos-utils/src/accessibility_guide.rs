@@ -4,6 +4,7 @@
 #![allow(unexpected_cfgs)]
 
 use std::ffi::CStr;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
@@ -27,7 +28,7 @@ use tracing::debug;
 
 use crate::accessibility::{accessibility_is_enabled, open_accessibility};
 use crate::applications::running_application_pids;
-use crate::bundle::get_bundle_path;
+use crate::bundle::{get_bundle_identifier, get_bundle_path};
 
 const CARD_WIDTH: f64 = 288.0;
 const CARD_HEIGHT: f64 = 172.0;
@@ -105,6 +106,9 @@ fn start_guide(prefer_zh: Option<bool>) {
     );
     GUIDE_ACTIVE.store(true, Ordering::SeqCst);
     let origin = mouse_location();
+    // A cdhash-stale grant stays in the list with the switch on, but this
+    // process is not trusted. Drop our row so the current binary can be dragged in.
+    clear_stale_accessibility_row();
     open_accessibility();
     present_card_at(origin);
     wait_for_settings(0, None);
@@ -581,6 +585,38 @@ fn begin_url_drag(view: id, path: id, event: id) -> bool {
         let session: id = msg_send![view, beginDraggingSessionWithItems: items event: event source: view];
         !session.is_null()
     })
+}
+
+fn tcc_bundle_id_is_safe(bundle_id: &str) -> bool {
+    !bundle_id.is_empty()
+        && bundle_id.len() <= 128
+        && bundle_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+}
+
+fn tccutil_reset_args(bundle_id: &str) -> Option<[&str; 3]> {
+    tcc_bundle_id_is_safe(bundle_id).then_some(["reset", "Accessibility", bundle_id])
+}
+
+fn clear_stale_accessibility_row() {
+    let Some(bundle_id) = get_bundle_identifier() else {
+        return;
+    };
+    let Some(args) = tccutil_reset_args(&bundle_id) else {
+        return;
+    };
+    match Command::new("/usr/bin/tccutil")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => debug!("cleared stale Accessibility TCC row"),
+        Ok(status) => debug!(?status, "tccutil reset Accessibility returned non-zero"),
+        Err(err) => debug!(%err, "tccutil reset Accessibility failed"),
+    }
 }
 
 extern "C" fn source_operation_mask(_this: &Object, _sel: Sel, _session: id, _context: isize) -> usize {
@@ -1116,5 +1152,37 @@ mod tests {
             .find("accessibility_is_enabled")
             .expect("wait_for_settings checks grant");
         assert!(drag < granted);
+    }
+
+    #[test]
+    fn tccutil_reset_requires_a_safe_bundle_id() {
+        assert_eq!(
+            tccutil_reset_args("dev.emmmm.easy-complete"),
+            Some(["reset", "Accessibility", "dev.emmmm.easy-complete"])
+        );
+        assert_eq!(tccutil_reset_args(""), None);
+        assert_eq!(tccutil_reset_args("foo;rm"), None);
+        assert_eq!(tccutil_reset_args("a b"), None);
+        assert!(tccutil_reset_args("dev.emmmm.easy-complete").unwrap().len() == 3);
+    }
+
+    #[test]
+    fn grant_clears_a_stale_tcc_row_before_opening_settings() {
+        let start = include_str!("accessibility_guide.rs")
+            .split("fn start_guide")
+            .nth(1)
+            .and_then(|rest| rest.split("fn wait_for_settings").next())
+            .expect("start_guide");
+        let enabled = start
+            .find("accessibility_is_enabled")
+            .expect("start_guide bails when already granted");
+        let clear = start
+            .find("clear_stale_accessibility_row")
+            .expect("start_guide must drop a stale list row");
+        assert!(enabled < clear);
+        assert!(
+            start[clear..].contains("open_accessibility"),
+            "reset must run before the first-start open_accessibility"
+        );
     }
 }

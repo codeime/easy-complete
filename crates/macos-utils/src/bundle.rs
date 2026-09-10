@@ -9,6 +9,11 @@ pub fn get_bundle_path() -> Option<PathBuf> {
     Some(path.to_string().into())
 }
 
+pub fn get_bundle_identifier() -> Option<String> {
+    let main = NSBundle::mainBundle();
+    unsafe { main.bundleIdentifier() }.map(|id| id.to_string())
+}
+
 pub fn get_bundle_path_for_executable(executable: &str) -> Option<PathBuf> {
     get_bundle_path().and_then(|path| {
         let full_path = path.join("Contents").join("MacOS").join(executable);

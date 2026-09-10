@@ -1517,12 +1517,12 @@ fn perm_label(id: PermId, zh: bool) -> (&'static str, &'static str, &'static str
     match (id, zh) {
         (PermId::Accessibility, true) => (
             "辅助功能权限",
-            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置，把 Easy Complete 拖进旁边的列表。",
+            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置；列表里失效的旧条目会先被移除，再把 Easy Complete 拖进旁边的列表。",
             "授予辅助功能权限",
         ),
         (PermId::Accessibility, false) => (
             "Accessibility Permission",
-            "Required to read the focused terminal window and position completions. Click to open System Settings, then drag Easy Complete into the list beside the card.",
+            "Required to read the focused terminal window and position completions. Click to open System Settings. A stale list row is removed first, then drag Easy Complete into the list beside the card.",
             "Grant Accessibility",
         ),
         (PermId::Shell, true) => (
