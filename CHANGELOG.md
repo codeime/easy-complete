@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.0.0-beta.3
+
+- fix: Grant Accessibility drops a stale System Settings list row so the current binary can be dragged in
+- fix: the grant drag preview is an icon-and-name chip, with Retina scale and dark-mode contrast
+
 ## v3.0.0-beta.2
 
 - feat: grant Accessibility from Easy Complete Settings with a drag-to-list card beside the system pane; launch, install, tray, and revoke no longer open System Settings or the TCC sheet
