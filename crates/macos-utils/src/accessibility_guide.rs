@@ -15,7 +15,8 @@ use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
-use core_graphics::display::{CGRect, CGWindowListCopyWindowInfo};
+use core_graphics::context::CGContext;
+use core_graphics::display::{CGPoint, CGRect, CGSize, CGWindowListCopyWindowInfo};
 use core_graphics::window::{
     kCGNullWindowID, kCGWindowBounds, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
     kCGWindowOwnerName, kCGWindowOwnerPID,
@@ -38,12 +39,7 @@ const ARC_HEIGHT: f64 = 140.0;
 const ARROW_TAG: isize = 7101;
 const SETTINGS_GONE_TICKS: u8 = 25;
 const NS_DRAG_OPERATION_COPY: usize = 1;
-const NS_COMPOSITE_SOURCE_OVER: u64 = 2;
-const NS_LINE_BREAK_BY_TRUNCATING_TAIL: i64 = 4;
 const DRAG_CHIP_RADIUS: f64 = 10.0;
-const DRAG_ICON: f64 = 36.0;
-const DRAG_ICON_X: f64 = 10.0;
-const DRAG_ICON_Y: f64 = 8.0;
 
 /// Same mask as the overlay: click/drag must not activate Easy Complete.
 const NS_WINDOW_STYLE_NONACTIVATING_PANEL: u64 = 1 << 7;
@@ -429,15 +425,11 @@ fn add_drag_row(parent: id, frame: NSRect) {
         let path = owned_ns_string(&bundle.to_string_lossy());
         (*view).set_ivar("bundlePath", path);
         let _: () = msg_send![view, setWantsLayer: YES];
+        let _: () = msg_send![view, setOpaque: NO];
         let layer: id = msg_send![view, layer];
-        let pill: id = if is_dark_appearance() {
-            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.10f64]
-        } else {
-            msg_send![class!(NSColor), colorWithWhite: 0.0f64 alpha: 0.06f64]
-        };
-        let cg: id = msg_send![pill, CGColor];
-        let _: () = msg_send![layer, setBackgroundColor: cg];
-        let _: () = msg_send![layer, setCornerRadius: 10.0f64];
+        let _: () = msg_send![layer, setCornerRadius: DRAG_CHIP_RADIUS];
+        let _: () = msg_send![layer, setMasksToBounds: YES];
+        style_drag_row_layer(layer, false);
 
         let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
         let icon: id = msg_send![workspace, iconForFile: path];
@@ -446,7 +438,6 @@ fn add_drag_row(parent: id, frame: NSRect) {
         let _: () = msg_send![image_view, setImage: icon];
         let _: () = msg_send![image_view, setFrame: NSRect::new(NSPoint::new(10.0, 8.0), NSSize::new(36.0, 36.0))];
         let _: () = msg_send![image_view, setEditable: NO];
-        let _: () = msg_send![image_view, setEnabled: NO];
         adopt_subview(view, image_view);
 
         add_label(
@@ -580,7 +571,7 @@ fn begin_url_drag(view: id, path: id, event: id) -> bool {
             return false;
         }
         let bounds: NSRect = msg_send![view, bounds];
-        let preview = drag_chip_image(path, &app_display_name(), bounds.size, backing_scale_for_view(view));
+        let preview = drag_preview_image(view);
         if preview.is_null() {
             let _: () = msg_send![item, release];
             return false;
@@ -592,6 +583,40 @@ fn begin_url_drag(view: id, path: id, event: id) -> bool {
         let session: id = msg_send![view, beginDraggingSessionWithItems: items event: event source: view];
         !session.is_null()
     })
+}
+
+fn style_drag_row_layer(layer: id, for_preview: bool) {
+    if layer.is_null() {
+        return;
+    }
+    unsafe {
+        let dark = is_dark_appearance();
+        let fill: id = if for_preview {
+            if dark {
+                msg_send![class!(NSColor), colorWithWhite: 0.22f64 alpha: 0.94f64]
+            } else {
+                msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.94f64]
+            }
+        } else if dark {
+            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.10f64]
+        } else {
+            msg_send![class!(NSColor), colorWithWhite: 0.0f64 alpha: 0.06f64]
+        };
+        let cg: id = msg_send![fill, CGColor];
+        let _: () = msg_send![layer, setBackgroundColor: cg];
+        if for_preview {
+            let stroke: id = if dark {
+                msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.22f64]
+            } else {
+                msg_send![class!(NSColor), colorWithWhite: 0.0f64 alpha: 0.12f64]
+            };
+            let stroke_cg: id = msg_send![stroke, CGColor];
+            let _: () = msg_send![layer, setBorderColor: stroke_cg];
+            let _: () = msg_send![layer, setBorderWidth: 1.0f64];
+        } else {
+            let _: () = msg_send![layer, setBorderWidth: 0.0f64];
+        }
+    }
 }
 
 fn backing_scale_for_view(view: id) -> f64 {
@@ -621,14 +646,33 @@ fn backing_scale_for_view(view: id) -> f64 {
     2.0
 }
 
-/// Opaque icon+name chip used as the drag image (the on-card pill is too faint).
-fn drag_chip_image(path: id, name: &str, size: NSSize, scale: f64) -> id {
-    let scale = scale.max(1.0);
+/// Snapshot the live icon+name row via the layer tree (rounded fill included).
+fn drag_preview_image(view: id) -> id {
+    unsafe {
+        let bounds: NSRect = msg_send![view, bounds];
+        if bounds.size.width < 1.0 || bounds.size.height < 1.0 {
+            return nil;
+        }
+        let layer: id = msg_send![view, layer];
+        if layer.is_null() {
+            return nil;
+        }
+        style_drag_row_layer(layer, true);
+        let _: () = msg_send![view, layoutSubtreeIfNeeded];
+        let _: () = msg_send![class!(CATransaction), flush];
+        let image = render_layer_preview(layer, view, bounds.size);
+        style_drag_row_layer(layer, false);
+        image
+    }
+}
+
+fn render_layer_preview(layer: id, view: id, size: NSSize) -> id {
+    let scale = backing_scale_for_view(view).max(1.0);
     let px_w = (size.width * scale).round().max(1.0) as i64;
     let px_h = (size.height * scale).round().max(1.0) as i64;
     unsafe {
         let rep: id = msg_send![class!(NSBitmapImageRep), alloc];
-        let color_space = ns_string("NSDeviceRGBColorSpace");
+        let color_space = ns_string("NSCalibratedRGBColorSpace");
         let rep: id = msg_send![
             rep,
             initWithBitmapDataPlanes: nil
@@ -645,20 +689,30 @@ fn drag_chip_image(path: id, name: &str, size: NSSize, scale: f64) -> id {
         if rep.is_null() {
             return nil;
         }
-        let _: () = msg_send![rep, setSize: size];
-        let ctx: id = msg_send![class!(NSGraphicsContext), graphicsContextWithBitmapImageRep: rep];
-        if ctx.is_null() {
+        let nsctx: id = msg_send![class!(NSGraphicsContext), graphicsContextWithBitmapImageRep: rep];
+        if nsctx.is_null() {
             let _: () = msg_send![rep, release];
             return nil;
         }
         let _: () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
-        let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: ctx];
-        // Bitmap user space is pixels. Draw in points.
-        let transform: id = msg_send![class!(NSAffineTransform), transform];
-        let _: () = msg_send![transform, scaleXBy: scale yBy: scale];
-        let _: () = msg_send![transform, concat];
-        paint_drag_chip(path, name, size);
+        let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: nsctx];
+        let cg_ptr: core_graphics::sys::CGContextRef = msg_send![nsctx, CGContext];
+        if cg_ptr.is_null() {
+            let _: () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
+            let _: () = msg_send![rep, release];
+            return nil;
+        }
+        let cg = CGContext::from_existing_context_ptr(cg_ptr);
+        cg.clear_rect(CGRect::new(
+            &CGPoint::new(0.0, 0.0),
+            &CGSize::new(px_w as f64, px_h as f64),
+        ));
+        // Bitmap and macOS CALayer are both bottom-left. Map pixels to points; do not Y-flip.
+        cg.scale(scale, scale);
+        let _: () = msg_send![layer, renderInContext: cg_ptr];
+        drop(cg);
         let _: () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
+        let _: () = msg_send![rep, setSize: size];
         let image: id = msg_send![class!(NSImage), alloc];
         let image: id = msg_send![image, initWithSize: size];
         if image.is_null() {
@@ -668,74 +722,6 @@ fn drag_chip_image(path: id, name: &str, size: NSSize, scale: f64) -> id {
         let _: () = msg_send![image, addRepresentation: rep];
         let _: () = msg_send![rep, release];
         image
-    }
-}
-
-fn paint_drag_chip(path: id, name: &str, size: NSSize) {
-    unsafe {
-        let rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
-        let path_shape: id = msg_send![
-            class!(NSBezierPath),
-            bezierPathWithRoundedRect: rect
-            xRadius: DRAG_CHIP_RADIUS
-            yRadius: DRAG_CHIP_RADIUS
-        ];
-        let dark = is_dark_appearance();
-        let fill: id = if dark {
-            msg_send![class!(NSColor), colorWithWhite: 0.22f64 alpha: 0.94f64]
-        } else {
-            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.94f64]
-        };
-        let _: () = msg_send![fill, setFill];
-        let _: () = msg_send![path_shape, fill];
-        let stroke: id = if dark {
-            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.22f64]
-        } else {
-            msg_send![class!(NSColor), colorWithWhite: 0.0f64 alpha: 0.12f64]
-        };
-        let _: () = msg_send![stroke, setStroke];
-        let _: () = msg_send![path_shape, setLineWidth: 1.0f64];
-        let _: () = msg_send![path_shape, stroke];
-
-        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let icon: id = msg_send![workspace, iconForFile: path];
-        if !icon.is_null() {
-            let icon_rect = NSRect::new(NSPoint::new(DRAG_ICON_X, DRAG_ICON_Y), NSSize::new(DRAG_ICON, DRAG_ICON));
-            let _: () = msg_send![
-                icon,
-                drawInRect: icon_rect
-                fromRect: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0))
-                operation: NS_COMPOSITE_SOURCE_OVER
-                fraction: 1.0f64
-            ];
-        }
-
-        let font: id = msg_send![class!(NSFont), systemFontOfSize: 13.0f64 weight: NS_FONT_WEIGHT_SEMIBOLD];
-        // Offscreen bitmaps do not pick up catalog text colors from the app appearance.
-        let color: id = if dark {
-            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 1.0f64]
-        } else {
-            msg_send![class!(NSColor), colorWithWhite: 0.1f64 alpha: 1.0f64]
-        };
-        let para: id = msg_send![class!(NSMutableParagraphStyle), new];
-        let _: () = msg_send![para, setLineBreakMode: NS_LINE_BREAK_BY_TRUNCATING_TAIL];
-        let attrs: id = msg_send![class!(NSMutableDictionary), dictionaryWithCapacity: 3usize];
-        if !font.is_null() {
-            let _: () = msg_send![attrs, setObject: font forKey: ns_string("NSFont")];
-        }
-        if !color.is_null() {
-            let _: () = msg_send![attrs, setObject: color forKey: ns_string("NSColor")];
-        }
-        if !para.is_null() {
-            let _: () = msg_send![attrs, setObject: para forKey: ns_string("NSParagraphStyle")];
-            let _: () = msg_send![para, release];
-        }
-        let title = ns_string(name);
-        let text_rect = NSRect::new(
-            NSPoint::new(54.0, 14.0),
-            NSSize::new((size.width - 64.0).max(8.0), 22.0),
-        );
-        let _: () = msg_send![title, drawInRect: text_rect withAttributes: attrs];
     }
 }
 
@@ -1343,37 +1329,44 @@ mod tests {
         let drag = include_str!("accessibility_guide.rs")
             .split("fn begin_url_drag")
             .nth(1)
-            .and_then(|rest| rest.split("fn backing_scale_for_view").next())
+            .and_then(|rest| rest.split("fn style_drag_row_layer").next())
             .expect("begin_url_drag");
-        assert!(drag.contains("drag_chip_image"));
+        assert!(drag.contains("drag_preview_image"));
         assert!(drag.contains("setDraggingFrame: bounds"));
         assert!(!drag.contains("36.0, 36.0"));
-        assert_eq!(DRAG_ICON, 36.0);
         assert_eq!(DRAG_CHIP_RADIUS, 10.0);
     }
 
     #[test]
-    fn drag_chip_scales_point_drawing_onto_retina_pixels() {
-        let draw = include_str!("accessibility_guide.rs")
-            .split("fn drag_chip_image")
+    fn drag_preview_snapshots_the_live_row() {
+        let src = include_str!("accessibility_guide.rs");
+        let preview = src
+            .split("fn drag_preview_image")
             .nth(1)
-            .and_then(|rest| rest.split("fn paint_drag_chip").next())
-            .expect("drag_chip_image");
-        let ctx = draw.find("setCurrentContext").expect("bitmap context");
-        let scale = draw.find("scaleXBy").expect("CTM must map points onto pixels");
-        let paint = draw.find("paint_drag_chip").expect("paint");
-        assert!(ctx < scale);
-        assert!(scale < paint);
-    }
-
-    #[test]
-    fn drag_chip_ink_does_not_use_offscreen_label_color() {
-        let paint = include_str!("accessibility_guide.rs")
-            .split("fn paint_drag_chip")
+            .and_then(|rest| rest.split("fn render_layer_preview").next())
+            .expect("drag_preview_image");
+        let solid = preview
+            .find("style_drag_row_layer(layer, true)")
+            .expect("solid for snapshot");
+        let flush = preview.find("CATransaction").expect("flush layer style");
+        let rest = preview
+            .find("style_drag_row_layer(layer, false)")
+            .expect("restore rest style");
+        assert!(solid < flush);
+        assert!(flush < rest);
+        assert!(preview.contains("flush"));
+        let render = src
+            .split("fn render_layer_preview")
             .nth(1)
             .and_then(|rest| rest.split("fn tcc_bundle_id_is_safe").next())
-            .expect("paint_drag_chip");
-        assert!(!paint.contains("labelColor"));
-        assert!(paint.contains("is_dark_appearance"));
+            .expect("render_layer_preview");
+        assert!(render.contains("renderInContext"));
+        assert!(render.contains("clear_rect"));
+        assert!(!render.contains("cacheDisplayInRect"));
+        assert!(!render.contains("mainScreen"));
+        assert!(!render.contains("scale(1.0, -1.0)"));
+        let scale = render.find("cg.scale(scale, scale)").expect("point mapping");
+        let paint = render.find("renderInContext").expect("paint");
+        assert!(scale < paint);
     }
 }
