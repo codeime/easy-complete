@@ -38,6 +38,12 @@ const ARC_HEIGHT: f64 = 140.0;
 const ARROW_TAG: isize = 7101;
 const SETTINGS_GONE_TICKS: u8 = 25;
 const NS_DRAG_OPERATION_COPY: usize = 1;
+const NS_COMPOSITE_SOURCE_OVER: u64 = 2;
+const NS_LINE_BREAK_BY_TRUNCATING_TAIL: i64 = 4;
+const DRAG_CHIP_RADIUS: f64 = 10.0;
+const DRAG_ICON: f64 = 36.0;
+const DRAG_ICON_X: f64 = 10.0;
+const DRAG_ICON_Y: f64 = 8.0;
 
 /// Same mask as the overlay: click/drag must not activate Easy Complete.
 const NS_WINDOW_STYLE_NONACTIVATING_PANEL: u64 = 1 << 7;
@@ -573,18 +579,164 @@ fn begin_url_drag(view: id, path: id, event: id) -> bool {
         if item.is_null() {
             return false;
         }
-        let icon_frame = NSRect::new(NSPoint::new(10.0, 8.0), NSSize::new(36.0, 36.0));
-        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let icon: id = msg_send![workspace, iconForFile: path];
-        if !icon.is_null() {
-            let _: () = msg_send![icon, setSize: NSSize::new(36.0, 36.0)];
+        let bounds: NSRect = msg_send![view, bounds];
+        let preview = drag_chip_image(path, &app_display_name(), bounds.size, backing_scale_for_view(view));
+        if preview.is_null() {
+            let _: () = msg_send![item, release];
+            return false;
         }
-        let _: () = msg_send![item, setDraggingFrame: icon_frame contents: icon];
+        let _: () = msg_send![item, setDraggingFrame: bounds contents: preview];
+        let _: () = msg_send![preview, release];
         let items: id = msg_send![class!(NSArray), arrayWithObject: item];
         let _: () = msg_send![item, release];
         let session: id = msg_send![view, beginDraggingSessionWithItems: items event: event source: view];
         !session.is_null()
     })
+}
+
+fn backing_scale_for_view(view: id) -> f64 {
+    unsafe {
+        let window: id = msg_send![view, window];
+        if !window.is_null() {
+            let screen: id = msg_send![window, screen];
+            if !screen.is_null() {
+                let scale: f64 = msg_send![screen, backingScaleFactor];
+                if scale > 0.0 {
+                    return scale;
+                }
+            }
+        }
+        let screens: id = msg_send![class!(NSScreen), screens];
+        if !screens.is_null() {
+            let count: usize = msg_send![screens, count];
+            if count > 0 {
+                let screen: id = msg_send![screens, objectAtIndex: 0usize];
+                let scale: f64 = msg_send![screen, backingScaleFactor];
+                if scale > 0.0 {
+                    return scale;
+                }
+            }
+        }
+    }
+    2.0
+}
+
+/// Opaque icon+name chip used as the drag image (the on-card pill is too faint).
+fn drag_chip_image(path: id, name: &str, size: NSSize, scale: f64) -> id {
+    let scale = scale.max(1.0);
+    let px_w = (size.width * scale).round().max(1.0) as i64;
+    let px_h = (size.height * scale).round().max(1.0) as i64;
+    unsafe {
+        let rep: id = msg_send![class!(NSBitmapImageRep), alloc];
+        let color_space = ns_string("NSDeviceRGBColorSpace");
+        let rep: id = msg_send![
+            rep,
+            initWithBitmapDataPlanes: nil
+            pixelsWide: px_w
+            pixelsHigh: px_h
+            bitsPerSample: 8i64
+            samplesPerPixel: 4i64
+            hasAlpha: YES
+            isPlanar: NO
+            colorSpaceName: color_space
+            bytesPerRow: 0i64
+            bitsPerPixel: 0i64
+        ];
+        if rep.is_null() {
+            return nil;
+        }
+        let _: () = msg_send![rep, setSize: size];
+        let ctx: id = msg_send![class!(NSGraphicsContext), graphicsContextWithBitmapImageRep: rep];
+        if ctx.is_null() {
+            let _: () = msg_send![rep, release];
+            return nil;
+        }
+        let _: () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
+        let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: ctx];
+        // Bitmap user space is pixels. Draw in points.
+        let transform: id = msg_send![class!(NSAffineTransform), transform];
+        let _: () = msg_send![transform, scaleXBy: scale yBy: scale];
+        let _: () = msg_send![transform, concat];
+        paint_drag_chip(path, name, size);
+        let _: () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
+        let image: id = msg_send![class!(NSImage), alloc];
+        let image: id = msg_send![image, initWithSize: size];
+        if image.is_null() {
+            let _: () = msg_send![rep, release];
+            return nil;
+        }
+        let _: () = msg_send![image, addRepresentation: rep];
+        let _: () = msg_send![rep, release];
+        image
+    }
+}
+
+fn paint_drag_chip(path: id, name: &str, size: NSSize) {
+    unsafe {
+        let rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
+        let path_shape: id = msg_send![
+            class!(NSBezierPath),
+            bezierPathWithRoundedRect: rect
+            xRadius: DRAG_CHIP_RADIUS
+            yRadius: DRAG_CHIP_RADIUS
+        ];
+        let dark = is_dark_appearance();
+        let fill: id = if dark {
+            msg_send![class!(NSColor), colorWithWhite: 0.22f64 alpha: 0.94f64]
+        } else {
+            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.94f64]
+        };
+        let _: () = msg_send![fill, setFill];
+        let _: () = msg_send![path_shape, fill];
+        let stroke: id = if dark {
+            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 0.22f64]
+        } else {
+            msg_send![class!(NSColor), colorWithWhite: 0.0f64 alpha: 0.12f64]
+        };
+        let _: () = msg_send![stroke, setStroke];
+        let _: () = msg_send![path_shape, setLineWidth: 1.0f64];
+        let _: () = msg_send![path_shape, stroke];
+
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let icon: id = msg_send![workspace, iconForFile: path];
+        if !icon.is_null() {
+            let icon_rect = NSRect::new(NSPoint::new(DRAG_ICON_X, DRAG_ICON_Y), NSSize::new(DRAG_ICON, DRAG_ICON));
+            let _: () = msg_send![
+                icon,
+                drawInRect: icon_rect
+                fromRect: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0))
+                operation: NS_COMPOSITE_SOURCE_OVER
+                fraction: 1.0f64
+            ];
+        }
+
+        let font: id = msg_send![class!(NSFont), systemFontOfSize: 13.0f64 weight: NS_FONT_WEIGHT_SEMIBOLD];
+        // Offscreen bitmaps do not pick up catalog text colors from the app appearance.
+        let color: id = if dark {
+            msg_send![class!(NSColor), colorWithWhite: 1.0f64 alpha: 1.0f64]
+        } else {
+            msg_send![class!(NSColor), colorWithWhite: 0.1f64 alpha: 1.0f64]
+        };
+        let para: id = msg_send![class!(NSMutableParagraphStyle), new];
+        let _: () = msg_send![para, setLineBreakMode: NS_LINE_BREAK_BY_TRUNCATING_TAIL];
+        let attrs: id = msg_send![class!(NSMutableDictionary), dictionaryWithCapacity: 3usize];
+        if !font.is_null() {
+            let _: () = msg_send![attrs, setObject: font forKey: ns_string("NSFont")];
+        }
+        if !color.is_null() {
+            let _: () = msg_send![attrs, setObject: color forKey: ns_string("NSColor")];
+        }
+        if !para.is_null() {
+            let _: () = msg_send![attrs, setObject: para forKey: ns_string("NSParagraphStyle")];
+            let _: () = msg_send![para, release];
+        }
+        let title = ns_string(name);
+        let text_rect = NSRect::new(
+            NSPoint::new(54.0, 14.0),
+            NSSize::new((size.width - 64.0).max(8.0), 22.0),
+        );
+        let _: () = msg_send![title, drawInRect: text_rect withAttributes: attrs];
+    }
 }
 
 fn tcc_bundle_id_is_safe(bundle_id: &str) -> bool {
@@ -1184,5 +1336,44 @@ mod tests {
             start[clear..].contains("open_accessibility"),
             "reset must run before the first-start open_accessibility"
         );
+    }
+
+    #[test]
+    fn drag_preview_is_the_icon_and_name_chip() {
+        let drag = include_str!("accessibility_guide.rs")
+            .split("fn begin_url_drag")
+            .nth(1)
+            .and_then(|rest| rest.split("fn backing_scale_for_view").next())
+            .expect("begin_url_drag");
+        assert!(drag.contains("drag_chip_image"));
+        assert!(drag.contains("setDraggingFrame: bounds"));
+        assert!(!drag.contains("36.0, 36.0"));
+        assert_eq!(DRAG_ICON, 36.0);
+        assert_eq!(DRAG_CHIP_RADIUS, 10.0);
+    }
+
+    #[test]
+    fn drag_chip_scales_point_drawing_onto_retina_pixels() {
+        let draw = include_str!("accessibility_guide.rs")
+            .split("fn drag_chip_image")
+            .nth(1)
+            .and_then(|rest| rest.split("fn paint_drag_chip").next())
+            .expect("drag_chip_image");
+        let ctx = draw.find("setCurrentContext").expect("bitmap context");
+        let scale = draw.find("scaleXBy").expect("CTM must map points onto pixels");
+        let paint = draw.find("paint_drag_chip").expect("paint");
+        assert!(ctx < scale);
+        assert!(scale < paint);
+    }
+
+    #[test]
+    fn drag_chip_ink_does_not_use_offscreen_label_color() {
+        let paint = include_str!("accessibility_guide.rs")
+            .split("fn paint_drag_chip")
+            .nth(1)
+            .and_then(|rest| rest.split("fn tcc_bundle_id_is_safe").next())
+            .expect("paint_drag_chip");
+        assert!(!paint.contains("labelColor"));
+        assert!(paint.contains("is_dark_appearance"));
     }
 }
