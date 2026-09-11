@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.0.0-beta.5
+
+- fix: show the Accessibility grant card only after System Settings has a stable window; ignore repeat Grant while waiting
+
 ## v3.0.0-beta.4
 
 - fix: grant drag preview snapshots the live icon-and-name row from its layer so rounded fill and Retina scale match the card
