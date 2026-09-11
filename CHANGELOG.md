@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v3.0.0-beta.6
 
 - change: Grant Accessibility copy names the macOS 27 System Settings list Device Control and Data Access; macOS 26 still uses Accessibility, and the deep link stays `Privacy_Accessibility`
 - change: check required permissions before showing settings, keep Input Method optional, and stop Fix All / first-run from opening the Keyboard input-method pane
