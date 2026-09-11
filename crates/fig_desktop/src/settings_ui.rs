@@ -1332,7 +1332,7 @@ fn optional_input_method_card(
                             } else {
                                 chrome.muted
                             }))
-                            .child(perm_status_label(ime, zh).to_string()),
+                            .child(perm_status_label(PermId::InputMethod, ime, zh).to_string()),
                     ),
             )
             .child(
@@ -1634,19 +1634,29 @@ fn perm_label(id: PermId, zh: bool) -> (&'static str, &'static str, &'static str
             "Install Shell Hooks",
         ),
         (PermId::InputMethod, true) => (
-            "输入法集成（可选）",
+            "输入法集成",
             "仅用于 Kitty、Alacritty、Zed、Ghostty、WezTerm 和 Otty 的光标跟踪，不是打开设置所必需的。",
             "安装输入法",
         ),
         (PermId::InputMethod, false) => (
-            "Input Method (optional)",
+            "Input Method",
             "Only for cursor tracking in Kitty, Alacritty, Zed, Ghostty, WezTerm, and Otty. Not required to open settings.",
             "Install Input Method",
         ),
     }
 }
 
-fn perm_status_label(state: PermReady, zh: bool) -> &'static str {
+fn perm_status_label(id: PermId, state: PermReady, zh: bool) -> &'static str {
+    if id == PermId::InputMethod {
+        return match (state, zh) {
+            (PermReady::Checking, true) => "检查中",
+            (PermReady::Checking, false) => "Checking",
+            (PermReady::Ready, true) => "已就绪",
+            (PermReady::Ready, false) => "Ready",
+            (_, true) => "未安装",
+            (_, false) => "Not installed",
+        };
+    }
     match (state, zh) {
         (PermReady::Checking, true) => "检查中",
         (PermReady::Checking, false) => "Checking",
@@ -1682,7 +1692,11 @@ fn permission_gate_page(
     repairing: Option<PermId>,
     entity: Entity<SettingsWindow>,
 ) -> impl IntoElement {
-    let rows = [(PermId::Accessibility, gate.accessibility), (PermId::Shell, gate.shell)];
+    let rows = [
+        (PermId::Accessibility, gate.accessibility),
+        (PermId::Shell, gate.shell),
+        (PermId::InputMethod, gate.input_method),
+    ];
     let busy = repairing.is_some();
     let ax_ready = gate.accessibility == PermReady::Ready;
 
@@ -1730,15 +1744,39 @@ fn permission_gate_page(
                                     .text_size(px(14.))
                                     .child(title.to_string()),
                             )
+                            .when(id == PermId::InputMethod, |this| {
+                                this.child(
+                                    div()
+                                        .px(px(8.))
+                                        .py(px(3.))
+                                        .rounded(px(999.))
+                                        .bg(rgb(chrome.separator))
+                                        .text_color(rgb(chrome.muted))
+                                        .text_size(px(12.))
+                                        .child(if zh { "非必选" } else { "Optional" }.to_string()),
+                                )
+                            })
                             .child(
                                 div()
                                     .px(px(8.))
                                     .py(px(3.))
                                     .rounded(px(999.))
-                                    .bg(rgb(if state == PermReady::Ready { 0x1c3d2a } else { 0x3d2e16 }))
-                                    .text_color(rgb(if state == PermReady::Ready { 0x30d158 } else { 0xff9f0a }))
+                                    .bg(rgb(if state == PermReady::Ready {
+                                        0x1c3d2a
+                                    } else if id == PermId::InputMethod {
+                                        chrome.separator
+                                    } else {
+                                        0x3d2e16
+                                    }))
+                                    .text_color(rgb(if state == PermReady::Ready {
+                                        0x30d158
+                                    } else if id == PermId::InputMethod {
+                                        chrome.muted
+                                    } else {
+                                        0xff9f0a
+                                    }))
                                     .text_size(px(12.))
-                                    .child(perm_status_label(state, zh).to_string()),
+                                    .child(perm_status_label(id, state, zh).to_string()),
                             ),
                     )
                     .child(
@@ -1828,9 +1866,9 @@ fn permission_gate_page(
                                 .text_size(px(13.))
                                 .text_color(rgb(chrome.muted))
                                 .child(if zh {
-                                    "使用设置前需要辅助功能和 Shell 集成。部分终端的输入法可在设置 → 行为里稍后安装。"
+                                    "使用设置前需要辅助功能和 Shell 集成。输入法为非必选，仅部分终端需要。"
                                 } else {
-                                    "Accessibility and Shell integration are required before settings can be used. The optional input method can be installed later from Settings → Behavior."
+                                    "Accessibility and Shell integration are required before settings can be used. The input method is optional."
                                 }),
                         ),
                 )
@@ -2225,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_setup_does_not_offer_input_method() {
+    fn finish_setup_marks_input_method_optional() {
         let production = include_str!("settings_ui.rs")
             .rsplit_once("mod tests {")
             .map(|(src, _)| src)
@@ -2238,9 +2276,17 @@ mod tests {
         assert!(body.contains("PermId::Accessibility"));
         assert!(body.contains("PermId::Shell"));
         assert!(
-            !body.contains("PermId::InputMethod"),
-            "Finish Setup must not install the optional input method"
+            body.contains("PermId::InputMethod"),
+            "Finish Setup still lists the input method"
         );
+        assert!(body.contains("非必选"));
+        assert!(body.contains("Optional"));
+        let rows = body
+            .split("let rows = [")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .expect("rows");
+        assert!(rows.contains("PermId::InputMethod"));
     }
 
     #[test]

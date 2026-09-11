@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 变更：完成设置页保留输入法一项，并标明非必选
+
 ## v3.0.0-beta.6
 
 - 变更：macOS 27 上授予辅助功能的文案改为系统设置里的「设备控制和数据访问」；macOS 26 仍用「辅助功能」，深链继续走 `Privacy_Accessibility`
