@@ -1783,7 +1783,14 @@ mod tests {
         let elsewhere = script_cache_fallback("kubectl", &["get".into(), "pods".into()], "/other");
         assert_ne!(pods, nodes);
         assert_ne!(pods, elsewhere);
-        assert_eq!(pods, r#"{"args":["get","pods"],"command":"kubectl","cwd":"/repo"}"#);
+        // `json!` map order follows serde_json's Map backend. gpui enables
+        // `preserve_order` when the workspace is built together, so compare
+        // the object, not the string.
+        let value: JsonValue = serde_json::from_str(&pods).expect("script cache key json");
+        assert_eq!(
+            value,
+            serde_json::json!({ "command": "kubectl", "args": ["get", "pods"], "cwd": "/repo" })
+        );
     }
 
     #[test]

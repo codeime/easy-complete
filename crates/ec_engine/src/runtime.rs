@@ -1342,12 +1342,14 @@ mod tests {
             })
             .expect("complete");
         assert!(result.suggestions.iter().all(|s| s.name != "checkout"));
+        // An exact match may also get an auto-execute wrapper; that follows
+        // `autocomplete.hideAutoExecuteSuggestion` on disk, so look at the
+        // command row itself.
         let git = result
             .suggestions
             .iter()
-            .find(|s| s.name == "git")
+            .find(|s| s.name == "git" && s.kind == "arg")
             .expect("first-token command row");
-        assert_eq!(git.kind, "arg");
         assert_eq!(git.insert_value.as_deref(), Some("git"));
         assert!(!git.should_add_space);
         assert_eq!(result.search_term, "git");
