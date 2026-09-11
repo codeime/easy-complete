@@ -8,6 +8,7 @@ import {
   GuidePage,
   RelatedGuides,
 } from "../components/GuidePage.tsx";
+import { AX_SETTINGS_PANE_EN, AX_SETTINGS_PANE_EN_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
 const TITLE = "Ghostty Autocomplete on macOS — Easy Complete";
@@ -63,8 +64,12 @@ function GhosttyPage() {
 
         <GuideCallout>
           Ghostty requires the input-method integration because it bypasses part
-          of the standard PTY path used for cursor tracking. Easy Complete
-          registers it automatically during installation.
+          of the standard PTY path used for cursor tracking. Install it from
+          Settings → Behavior, or with{" "}
+          <code className="font-mono text-[#cdd6e0]">
+            ec integrations install input-method
+          </code>
+          .
         </GuideCallout>
 
         <h2 className={GUIDE_HEADING}>Set up Ghostty autocomplete</h2>
@@ -96,8 +101,8 @@ ec doctor`}</pre>
         </p>
         <pre className={GUIDE_CODE}>ec integrations install input-method</pre>
         <p className={GUIDE_PARAGRAPH}>
-          Also confirm that Easy Complete remains enabled under System Settings
-          → Privacy &amp; Security → Accessibility.
+          Also confirm that Easy Complete remains enabled under{" "}
+          {AX_SETTINGS_PANE_EN} ({AX_SETTINGS_PANE_EN_LEGACY}).
         </p>
 
         <h2 className={GUIDE_HEADING}>Keyboard controls</h2>

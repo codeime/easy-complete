@@ -33,10 +33,11 @@ export interface TerminalGuide {
 const INPUT_METHOD_SETUP: TerminalGuideSection = {
   heading: "Set it up",
   body: [
-    "Install Easy Complete and approve Accessibility, then quit the terminal completely — macOS loads input methods when a process starts, so a reopened window is not enough.",
+    "Install Easy Complete, approve Accessibility, then install the optional input method from Settings → Behavior or `ec integrations install input-method`.",
+    "Quit the terminal completely after that — macOS loads input methods when a process starts, so a reopened window is not enough.",
     "`ec doctor` reports the shell hook and the input method separately, so it tells you which half is missing.",
   ],
-  code: "exec $SHELL\nec doctor",
+  code: "ec integrations install input-method\nexec $SHELL\nec doctor",
 };
 
 export const terminalGuides: TerminalGuide[] = [
@@ -235,7 +236,7 @@ export const terminalGuides: TerminalGuide[] = [
       {
         heading: "Set it up",
         body: [
-          "Install Easy Complete, approve it under System Settings → Privacy & Security → Accessibility, then reload your shell. iTerm2 needs no further integration.",
+          "Install Easy Complete, approve it under System Settings → Privacy & Security → Device Control and Data Access (Accessibility on macOS 26 and earlier), then reload your shell. iTerm2 needs no further integration.",
           "If the permission prompt never appeared, trigger it again from the CLI.",
         ],
         code: "ec debug prompt-accessibility\nexec $SHELL",

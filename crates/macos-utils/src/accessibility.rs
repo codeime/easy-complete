@@ -14,6 +14,11 @@ static ACCESSIBILITY_SETTINGS_URL: &str =
 static ACCESSIBILITY_SETTINGS_URL_LEGACY: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
+/// macOS 27 renamed the Privacy list that holds the Accessibility TCC toggle.
+/// The deep-link query stays `Privacy_Accessibility` — that is the TCC service
+/// id, not the sidebar label.
+pub const ACCESSIBILITY_PANE_RENAME_MAJOR: isize = 27;
+
 pub fn open_accessibility() -> bool {
     let primary = accessibility_settings_url(crate::os::OperatingSystemVersion::get().major());
     let secondary = if primary == ACCESSIBILITY_SETTINGS_URL {
@@ -32,6 +37,47 @@ pub(crate) fn accessibility_settings_url(major: isize) -> &'static str {
         ACCESSIBILITY_SETTINGS_URL
     } else {
         ACCESSIBILITY_SETTINGS_URL_LEGACY
+    }
+}
+
+pub fn accessibility_settings_pane_name(major: isize, zh: bool) -> &'static str {
+    if major >= ACCESSIBILITY_PANE_RENAME_MAJOR {
+        if zh {
+            "设备控制和数据访问"
+        } else {
+            "Device Control and Data Access"
+        }
+    } else if zh {
+        "辅助功能"
+    } else {
+        "Accessibility"
+    }
+}
+
+pub fn accessibility_settings_parent_name(major: isize, zh: bool) -> &'static str {
+    if !zh {
+        "Privacy & Security"
+    } else if major >= ACCESSIBILITY_PANE_RENAME_MAJOR {
+        "隐私与安全"
+    } else {
+        "隐私与安全性"
+    }
+}
+
+pub fn accessibility_permission_hint(major: isize, zh: bool) -> &'static str {
+    match (major >= ACCESSIBILITY_PANE_RENAME_MAJOR, zh) {
+        (true, false) => {
+            "Required to read the focused terminal window and position completions. Click to open System Settings → Privacy & Security → Device Control and Data Access. A stale list row is removed first, then drag Easy Complete into the list beside the card."
+        },
+        (false, false) => {
+            "Required to read the focused terminal window and position completions. Click to open System Settings → Privacy & Security → Accessibility. A stale list row is removed first, then drag Easy Complete into the list beside the card."
+        },
+        (true, true) => {
+            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置 → 隐私与安全 → 设备控制和数据访问；列表里失效的旧条目会先被移除，再把 Easy Complete 拖进旁边的列表。"
+        },
+        (false, true) => {
+            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置 → 隐私与安全性 → 辅助功能；列表里失效的旧条目会先被移除，再把 Easy Complete 拖进旁边的列表。"
+        },
     }
 }
 
@@ -69,5 +115,22 @@ mod tests {
         assert_eq!(accessibility_settings_url(12), ACCESSIBILITY_SETTINGS_URL_LEGACY);
         assert_eq!(accessibility_settings_url(13), ACCESSIBILITY_SETTINGS_URL);
         assert_eq!(accessibility_settings_url(26), ACCESSIBILITY_SETTINGS_URL);
+        assert_eq!(accessibility_settings_url(27), ACCESSIBILITY_SETTINGS_URL);
+    }
+
+    #[test]
+    fn pane_label_renames_on_macos_27_without_changing_the_url() {
+        assert_eq!(accessibility_settings_pane_name(26, false), "Accessibility");
+        assert_eq!(
+            accessibility_settings_pane_name(27, false),
+            "Device Control and Data Access"
+        );
+        assert_eq!(accessibility_settings_pane_name(26, true), "辅助功能");
+        assert_eq!(accessibility_settings_pane_name(27, true), "设备控制和数据访问");
+        assert_eq!(accessibility_settings_parent_name(26, true), "隐私与安全性");
+        assert_eq!(accessibility_settings_parent_name(27, true), "隐私与安全");
+        assert!(accessibility_permission_hint(26, false).contains("→ Accessibility"));
+        assert!(accessibility_permission_hint(27, false).contains("→ Device Control and Data Access"));
+        assert!(!accessibility_settings_url(27).contains("DeviceControl"));
     }
 }

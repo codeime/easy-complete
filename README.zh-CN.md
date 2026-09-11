@@ -65,8 +65,9 @@ brew install --cask chen86860/tap/easy-complete
 exec $SHELL
 ```
 
-首次启动时，Easy Complete 会设置随附的 CLI 二进制、shell 集成、输入法和登录启动项。可以
-运行下面的命令确认安装状态：
+首次启动时，Easy Complete 会设置随附的 CLI 二进制、shell 集成和登录启动项。输入法是可选项，
+可在设置 → 行为里安装，或运行 `ec integrations install input-method`，供 Ghostty、Kitty、
+WezTerm、Zed、Alacritty 和 Otty 使用。可以运行下面的命令确认安装状态：
 
 ```bash
 ec doctor
@@ -113,7 +114,7 @@ cd easy-complete
 2. 组装出 `Easy Complete.app` 并复制到 `/Applications`。
 3. 把 `ec` 和 `ecterm` 两个 CLI 软链到 `~/.local/bin`。
 4. 可在设置中开启**登录时启动**（macOS 13+ 使用系统登录项，macOS 12 回退到 LaunchAgent）。
-5. 配置 shell 集成并注册输入法。
+5. 配置 shell 集成。`./install.sh` 还会注册可选输入法（Homebrew / DMG 首次启动不会）。
 6. **辅助功能**需要你在 Easy Complete 设置里手动授予（必需，见下文）。
 
 完成后，重新加载你的 shell：
@@ -127,7 +128,9 @@ exec $SHELL
 Easy Complete 需要把补全浮层定位到你当前聚焦的终端窗口，这依赖 macOS 的**辅助功能
 （Accessibility）**权限。打开 Easy Complete 设置，点击**授予辅助功能权限**。应用会打开：
 
-> 系统设置 → 隐私与安全性 → 辅助功能
+> 系统设置 → 隐私与安全 → 设备控制和数据访问
+>
+> macOS 26 及更早，同一列表名为**辅助功能**。授予按钮仍会打开它。
 
 并把一张可拖拽的卡片停在列表旁边，把 **Easy Complete** 拖进去即可。启动、安装和菜单栏
 都不会自动打开系统设置。
@@ -166,8 +169,8 @@ ec settings <key> <value>       # 修改某项设置
 
 大多数终端通过 PTY 集成开箱即用——包括 iTerm2、Apple Terminal、VS Code、Cursor、
 ChatGPT（Codex）以及 JetBrains IDE 终端。少数绕过标准 PTY 路径的终端（**Ghostty、Kitty、
-WezTerm、Zed、Alacritty、Otty**）还需要依赖随附的输入法来追踪光标位置——这一项会在安装时
-自动注册。
+WezTerm、Zed、Alacritty、Otty**）还需要依赖随附的输入法来追踪光标位置。可在设置 → 行为里
+安装，或运行 `ec integrations install input-method`。
 
 ---
 

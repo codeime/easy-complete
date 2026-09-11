@@ -8,6 +8,7 @@ import {
   GuidePage,
   RelatedGuides,
 } from "../components/GuidePage.tsx";
+import { AX_SETTINGS_PANE_ZH, AX_SETTINGS_PANE_ZH_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
 const TITLE = "修复 macOS 终端自动补全问题 — Easy Complete";
@@ -58,7 +59,9 @@ function ZhTroubleshootingPage() {
         <h2 className={GUIDE_HEADING}>完全没有建议</h2>
         <GuideList>
           <li>确认 Easy Complete 正在菜单栏中运行。</li>
-          <li>在「系统设置 → 隐私与安全性 → 辅助功能」中启用它。</li>
+          <li>
+            在「{AX_SETTINGS_PANE_ZH}」中启用它（{AX_SETTINGS_PANE_ZH_LEGACY}）。
+          </li>
           <li>
             运行 <code className="font-mono text-[#cdd6e0]">exec $SHELL</code>
             重载 Shell。

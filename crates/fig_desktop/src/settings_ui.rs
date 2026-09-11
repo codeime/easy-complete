@@ -175,9 +175,9 @@ impl Render for SettingsWindow {
                 }
             });
 
-        // The old dashboard showed a spinner while permissions were still
-        // being checked, and the gate only after a failed result. Treating
-        // `Checking` as "not ready" flashes the permission page on every open.
+        if self.gate.still_checking() {
+            return root.child(permission_checking_page(zh, chrome));
+        }
         if shows_permission_gate(&self.gate) {
             return root.child(permission_gate_page(
                 zh,
@@ -212,7 +212,10 @@ impl Render for SettingsWindow {
                             Section::Appearance => {
                                 appearance_page(zh, chrome, entity.clone(), theme_controls).into_any_element()
                             },
-                            Section::Behavior => behavior_page(zh, chrome, entity).into_any_element(),
+                            Section::Behavior => {
+                                behavior_page(zh, chrome, entity, self.gate.input_method, self.repairing)
+                                    .into_any_element()
+                            },
                             Section::About => about_page(zh, chrome, entity, self.copied_doctor).into_any_element(),
                         }),
                 ),
@@ -1016,7 +1019,13 @@ fn appearance_page(
         ))
 }
 
-fn behavior_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> impl IntoElement {
+fn behavior_page(
+    zh: bool,
+    chrome: Chrome,
+    entity: Entity<SettingsWindow>,
+    ime: PermReady,
+    repairing: Option<PermId>,
+) -> impl IntoElement {
     let launch = fig_settings::settings::get_bool_or("app.launchOnStartup", false);
     let silent = fig_settings::settings::get_bool_or("app.silentLaunch", false);
     let show_menubar_icon = !fig_settings::settings::get_bool_or("app.hideMenubarIcon", false);
@@ -1231,6 +1240,7 @@ fn behavior_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> im
                     }
                 }),
         ))
+        .child(optional_input_method_card(zh, chrome, e(&entity), ime, repairing))
         .child(card(
             if zh { "历史记录" } else { "History" },
             chrome,
@@ -1279,6 +1289,80 @@ fn behavior_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>) -> im
                     |this, value, cx| this.set_bool("beta.history.allShells", value, cx),
                 )),
         ))
+}
+
+fn optional_input_method_card(
+    zh: bool,
+    chrome: Chrome,
+    entity: Entity<SettingsWindow>,
+    ime: PermReady,
+    repairing: Option<PermId>,
+) -> impl IntoElement {
+    let (title, description, repair_label) = perm_label(PermId::InputMethod, zh);
+    let busy = repairing == Some(PermId::InputMethod);
+    let can_repair = matches!(ime, PermReady::Missing | PermReady::Error);
+    let enabled = can_repair && !busy;
+    card(
+        title,
+        chrome,
+        div()
+            .px(px(16.))
+            .py(px(14.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(chrome.muted))
+                            .child(description.to_string()),
+                    )
+                    .child(
+                        div()
+                            .mt(px(6.))
+                            .text_size(px(12.))
+                            .text_color(rgb(if ime == PermReady::Ready {
+                                0x30d158
+                            } else {
+                                chrome.muted
+                            }))
+                            .child(perm_status_label(ime, zh).to_string()),
+                    ),
+            )
+            .child(
+                div()
+                    .id("ec-ime-install")
+                    .min_w(px(130.))
+                    .px(px(12.))
+                    .py(px(6.))
+                    .rounded(px(9.))
+                    .bg(rgb(if enabled { chrome.accent } else { chrome.separator }))
+                    .text_color(rgb(if enabled { chrome.accent_text } else { chrome.muted }))
+                    .when(enabled, |this| this.cursor_pointer())
+                    .child(if busy {
+                        if zh { "处理中…" } else { "Working..." }.to_string()
+                    } else if ime == PermReady::Ready {
+                        if zh { "已安装" } else { "Installed" }.to_string()
+                    } else {
+                        repair_label.to_string()
+                    })
+                    .when(enabled, |this| {
+                        this.on_mouse_down(MouseButton::Left, move |_e, _w, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.repairing = Some(PermId::InputMethod);
+                                cx.notify();
+                                permissions::spawn_repair(&this.proxy, PermId::InputMethod);
+                            });
+                        })
+                    }),
+            ),
+    )
 }
 
 fn bool_row(
@@ -1513,16 +1597,30 @@ fn copy_doctor(entity: &Entity<SettingsWindow>, cx: &mut App) {
     .detach();
 }
 
+fn accessibility_hint(zh: bool) -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        macos_utils::accessibility::accessibility_permission_hint(
+            macos_utils::os::OperatingSystemVersion::get().major(),
+            zh,
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if zh {
+            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置；列表里失效的旧条目会先被移除，再把 Easy Complete 拖进旁边的列表。"
+        } else {
+            "Required to read the focused terminal window and position completions. Click to open System Settings. A stale list row is removed first, then drag Easy Complete into the list beside the card."
+        }
+    }
+}
+
 fn perm_label(id: PermId, zh: bool) -> (&'static str, &'static str, &'static str) {
     match (id, zh) {
-        (PermId::Accessibility, true) => (
-            "辅助功能权限",
-            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置；列表里失效的旧条目会先被移除，再把 Easy Complete 拖进旁边的列表。",
-            "授予辅助功能权限",
-        ),
+        (PermId::Accessibility, true) => ("辅助功能权限", accessibility_hint(true), "授予辅助功能权限"),
         (PermId::Accessibility, false) => (
             "Accessibility Permission",
-            "Required to read the focused terminal window and position completions. Click to open System Settings. A stale list row is removed first, then drag Easy Complete into the list beside the card.",
+            accessibility_hint(false),
             "Grant Accessibility",
         ),
         (PermId::Shell, true) => (
@@ -1536,13 +1634,13 @@ fn perm_label(id: PermId, zh: bool) -> (&'static str, &'static str, &'static str
             "Install Shell Hooks",
         ),
         (PermId::InputMethod, true) => (
-            "输入法集成",
-            "用于在 Kitty、Alacritty、Zed、Ghostty 和 WezTerm 中跟踪光标位置。",
+            "输入法集成（可选）",
+            "仅用于 Kitty、Alacritty、Zed、Ghostty、WezTerm 和 Otty 的光标跟踪，不是打开设置所必需的。",
             "安装输入法",
         ),
         (PermId::InputMethod, false) => (
-            "Input Method Integration",
-            "Required for cursor tracking in Kitty, Alacritty, Zed, Ghostty, and WezTerm.",
+            "Input Method (optional)",
+            "Only for cursor tracking in Kitty, Alacritty, Zed, Ghostty, WezTerm, and Otty. Not required to open settings.",
             "Install Input Method",
         ),
     }
@@ -1561,6 +1659,22 @@ fn perm_status_label(state: PermReady, zh: bool) -> &'static str {
     }
 }
 
+fn permission_checking_page(zh: bool, chrome: Chrome) -> impl IntoElement {
+    div()
+        .id("ec-permission-checking")
+        .flex()
+        .flex_1()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .px(px(40.))
+        .child(div().text_size(px(15.)).text_color(rgb(chrome.muted)).child(if zh {
+            "正在检查权限…"
+        } else {
+            "Checking permissions…"
+        }))
+}
+
 fn permission_gate_page(
     zh: bool,
     chrome: Chrome,
@@ -1568,13 +1682,8 @@ fn permission_gate_page(
     repairing: Option<PermId>,
     entity: Entity<SettingsWindow>,
 ) -> impl IntoElement {
-    let rows = [
-        (PermId::Accessibility, gate.accessibility),
-        (PermId::Shell, gate.shell),
-        (PermId::InputMethod, gate.input_method),
-    ];
-    let checking = gate.still_checking();
-    let busy = repairing.is_some() || checking;
+    let rows = [(PermId::Accessibility, gate.accessibility), (PermId::Shell, gate.shell)];
+    let busy = repairing.is_some();
     let ax_ready = gate.accessibility == PermReady::Ready;
 
     let mut list = div()
@@ -1719,9 +1828,9 @@ fn permission_gate_page(
                                 .text_size(px(13.))
                                 .text_color(rgb(chrome.muted))
                                 .child(if zh {
-                                    "使用设置前，Easy Complete 需要以下权限。"
+                                    "使用设置前需要辅助功能和 Shell 集成。部分终端的输入法可在设置 → 行为里稍后安装。"
                                 } else {
-                                    "Easy Complete needs these permissions before settings can be used."
+                                    "Accessibility and Shell integration are required before settings can be used. The optional input method can be installed later from Settings → Behavior."
                                 }),
                         ),
                 )
@@ -1750,9 +1859,7 @@ fn permission_gate_page(
                                 .rounded(px(9.))
                                 .bg(rgb(chrome.separator))
                                 .cursor_pointer()
-                                .child(if checking {
-                                    if zh { "检查中…" } else { "Checking..." }.to_string()
-                                } else if zh {
+                                .child(if zh {
                                     "重新检查".to_string()
                                 } else {
                                     "Check Again".to_string()
@@ -1788,10 +1895,6 @@ fn permission_gate_page(
                                         entity_all.update(cx, |this, cx| {
                                             this.repairing = Some(PermId::Accessibility);
                                             cx.notify();
-                                            #[cfg(target_os = "macos")]
-                                            dispatch::Queue::main().exec_async(move || {
-                                                macos_utils::accessibility::begin_accessibility_guide(Some(zh));
-                                            });
                                             permissions::spawn_repair_all(&this.proxy);
                                         });
                                     })
@@ -2013,11 +2116,23 @@ fn start_permission_poller(handle: SettingsHandle, cx: &mut App) {
     .detach();
 }
 
+fn merge_permission_snapshot(
+    gate: &mut PermissionSnapshot,
+    repairing: &mut Option<PermId>,
+    snapshot: PermissionSnapshot,
+) {
+    if repairing.is_some() && !snapshot.completes_repair {
+        gate.input_method = snapshot.input_method;
+        return;
+    }
+    *gate = snapshot;
+    *repairing = None;
+}
+
 pub fn apply_permission_snapshot(handle: &SettingsHandle, snapshot: PermissionSnapshot, cx: &mut App) {
     handle
         .update(cx, |view, _window, cx| {
-            view.gate = snapshot;
-            view.repairing = None;
+            merge_permission_snapshot(&mut view.gate, &mut view.repairing, snapshot);
             cx.notify();
         })
         .ok();
@@ -2081,31 +2196,90 @@ mod tests {
             shell,
             input_method,
             error: None,
+            completes_repair: false,
         }
     }
 
     #[test]
     fn settings_do_not_show_the_gate_while_permissions_are_checking() {
+        assert!(PermissionSnapshot::checking().still_checking());
         assert!(!shows_permission_gate(&PermissionSnapshot::checking()));
-        assert!(!shows_permission_gate(&snapshot(
-            PermReady::Ready,
-            PermReady::Checking,
-            PermReady::Ready
-        )));
+        assert!(snapshot(PermReady::Ready, PermReady::Checking, PermReady::Ready).still_checking());
+        assert!(!snapshot(PermReady::Ready, PermReady::Ready, PermReady::Checking).still_checking());
     }
 
     #[test]
-    fn settings_show_the_gate_only_after_a_failed_check() {
+    fn late_ime_snapshot_does_not_clear_in_flight_repair() {
+        let mut gate = snapshot(PermReady::Missing, PermReady::Ready, PermReady::Checking);
+        let mut repairing = Some(PermId::Accessibility);
+        let mut ime_fill = snapshot(PermReady::Missing, PermReady::Ready, PermReady::Missing);
+        merge_permission_snapshot(&mut gate, &mut repairing, ime_fill.clone());
+        assert_eq!(repairing, Some(PermId::Accessibility));
+        assert_eq!(gate.input_method, PermReady::Missing);
+
+        ime_fill.completes_repair = true;
+        ime_fill.accessibility = PermReady::Ready;
+        merge_permission_snapshot(&mut gate, &mut repairing, ime_fill);
+        assert_eq!(repairing, None);
+        assert_eq!(gate.accessibility, PermReady::Ready);
+    }
+
+    #[test]
+    fn finish_setup_does_not_offer_input_method() {
+        let production = include_str!("settings_ui.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        let start = production.find("fn permission_gate_page").expect("gate");
+        let body = production[start..]
+            .split("fn optional_input_method_card")
+            .next()
+            .expect("gate body");
+        assert!(body.contains("PermId::Accessibility"));
+        assert!(body.contains("PermId::Shell"));
+        assert!(
+            !body.contains("PermId::InputMethod"),
+            "Finish Setup must not install the optional input method"
+        );
+    }
+
+    #[test]
+    fn settings_show_the_gate_only_after_a_required_check_fails() {
         assert!(shows_permission_gate(&snapshot(
             PermReady::Missing,
             PermReady::Ready,
             PermReady::Ready
         )));
+        assert!(shows_permission_gate(&snapshot(
+            PermReady::Ready,
+            PermReady::Missing,
+            PermReady::Ready
+        )));
         assert!(!shows_permission_gate(&snapshot(
             PermReady::Ready,
             PermReady::Ready,
             PermReady::Ready
         )));
+        assert!(
+            !shows_permission_gate(&snapshot(PermReady::Ready, PermReady::Ready, PermReady::Missing)),
+            "optional input method must not send the user to the grant page"
+        );
+    }
+
+    #[test]
+    fn fix_all_does_not_open_system_settings_before_the_accessibility_check() {
+        let production = include_str!("settings_ui.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        let start = production.find("ec-perm-fix-all").expect("Fix All");
+        let end = (start + 1600).min(production.len());
+        let body = &production[start..end];
+        assert!(
+            !body.contains("begin_accessibility_guide"),
+            "Fix All must let repair() check Accessibility before opening System Settings"
+        );
+        assert!(body.contains("spawn_repair_all"));
     }
 
     #[test]
@@ -2118,6 +2292,7 @@ mod tests {
         assert!(production.contains("exec_async"));
         assert!(production.contains("Grant Accessibility"));
         assert!(production.contains("授予辅助功能权限"));
+        assert!(production.contains("accessibility_permission_hint"));
         assert!(!production.contains("prompt_for_accessibility("));
     }
 

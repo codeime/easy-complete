@@ -8,6 +8,7 @@ import {
   GuidePage,
   RelatedGuides,
 } from "../components/GuidePage.tsx";
+import { AX_SETTINGS_PANE_EN, AX_SETTINGS_PANE_EN_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
 const TITLE = "Fix macOS Terminal Autocomplete — Easy Complete";
@@ -56,8 +57,8 @@ function TroubleshootingPage() {
         <GuideList>
           <li>Confirm Easy Complete is running from the menu bar.</li>
           <li>
-            Enable it under System Settings → Privacy &amp; Security →
-            Accessibility.
+            Enable it under {AX_SETTINGS_PANE_EN} ({AX_SETTINGS_PANE_EN_LEGACY}
+            ).
           </li>
           <li>
             Reload your shell with{" "}

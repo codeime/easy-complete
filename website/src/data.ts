@@ -2,6 +2,16 @@
 
 export const GITHUB_URL = "https://github.com/chen86860/easy-complete";
 
+/** System Settings list for the Accessibility TCC toggle. macOS 27 renamed it. */
+export const AX_SETTINGS_PANE_EN =
+  "System Settings → Privacy & Security → Device Control and Data Access";
+export const AX_SETTINGS_PANE_EN_LEGACY =
+  "macOS 26 and earlier: Privacy & Security → Accessibility";
+export const AX_SETTINGS_PANE_ZH =
+  "系统设置 → 隐私与安全 → 设备控制和数据访问";
+export const AX_SETTINGS_PANE_ZH_LEGACY =
+  "macOS 26 及更早：隐私与安全性 → 辅助功能";
+
 export interface Feature {
   glyph: string;
   title: string;
@@ -107,38 +117,38 @@ export const terminalSupport: TerminalSupport[] = [
     name: "Ghostty",
     slug: "ghostty",
     integration: "input-method",
-    note: "Bundled input method registered at install.",
+    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
   },
   {
     name: "Otty",
     slug: "otty",
     integration: "input-method",
-    note: "Input-method cursor tracking, and Easy Complete leaves Otty's own shell-integration block at the end of your rc file alone.",
+    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`. Easy Complete leaves Otty's own shell-integration block at the end of your rc file alone.",
     isNew: true,
   },
   {
     name: "Kitty",
     slug: "kitty",
     integration: "input-method",
-    note: "Bundled input method registered at install.",
+    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
   },
   {
     name: "WezTerm",
     slug: "wezterm",
     integration: "input-method",
-    note: "Bundled input method registered at install.",
+    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
   },
   {
     name: "Alacritty",
     slug: "alacritty",
     integration: "input-method",
-    note: "Bundled input method registered at install.",
+    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
   },
   {
     name: "Zed",
     slug: "zed",
     integration: "input-method",
-    note: "Terminal panel, via the bundled input method.",
+    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
   },
   {
     name: "JetBrains IDEs",

@@ -26,7 +26,8 @@ function inlineCode(text: string): ReactNode {
 }
 
 const TRACKING_EXPLAINER: Record<TerminalGuide["integration"], string> = {
-  "input-method": "Bundled macOS input method, registered during installation",
+  "input-method":
+    "Optional macOS input method — Settings → Behavior, or `ec integrations install input-method`",
   xterm: "xterm.js caret detection inside the Electron host",
   accessibility: "macOS Accessibility API",
 };

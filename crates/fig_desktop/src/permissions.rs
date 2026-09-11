@@ -37,6 +37,9 @@ pub struct PermissionSnapshot {
     pub shell: PermReady,
     pub input_method: PermReady,
     pub error: Option<String>,
+    /// Set on the post-repair required snapshot so a late IME fill-in cannot
+    /// clear an in-flight Grant / Fix All.
+    pub completes_repair: bool,
 }
 
 impl Default for PermReady {
@@ -52,19 +55,17 @@ impl PermissionSnapshot {
             shell: PermReady::Checking,
             input_method: PermReady::Checking,
             error: None,
+            completes_repair: false,
         }
     }
 
+    /// Accessibility and Shell. Input Method is optional and does not block settings.
     pub fn all_ready(&self) -> bool {
-        self.accessibility == PermReady::Ready
-            && self.shell == PermReady::Ready
-            && self.input_method == PermReady::Ready
+        self.accessibility == PermReady::Ready && self.shell == PermReady::Ready
     }
 
     pub fn still_checking(&self) -> bool {
-        matches!(self.accessibility, PermReady::Checking)
-            || matches!(self.shell, PermReady::Checking)
-            || matches!(self.input_method, PermReady::Checking)
+        matches!(self.accessibility, PermReady::Checking) || matches!(self.shell, PermReady::Checking)
     }
 }
 
@@ -156,17 +157,25 @@ fn ready_from(result: Result<bool, String>) -> (PermReady, Option<String>) {
     }
 }
 
-pub async fn check_all() -> PermissionSnapshot {
+async fn check_required() -> PermissionSnapshot {
     let (ax, ax_err) = ready_from(query(PermId::Accessibility, InstallAction::Status).await);
     let (shell, shell_err) = ready_from(query(PermId::Shell, InstallAction::Status).await);
-    let (ime, ime_err) = ready_from(query(PermId::InputMethod, InstallAction::Status).await);
-    let error = ax_err.or(shell_err).or(ime_err);
     PermissionSnapshot {
         accessibility: ax,
         shell,
-        input_method: ime,
-        error,
+        input_method: PermReady::Checking,
+        error: ax_err.or(shell_err),
+        completes_repair: false,
     }
+}
+
+async fn with_input_method(mut snapshot: PermissionSnapshot) -> PermissionSnapshot {
+    let (ime, ime_err) = ready_from(query(PermId::InputMethod, InstallAction::Status).await);
+    snapshot.input_method = ime;
+    if snapshot.error.is_none() {
+        snapshot.error = ime_err;
+    }
+    snapshot
 }
 
 #[cfg(target_os = "macos")]
@@ -181,7 +190,23 @@ fn dashboard_language_zh() -> Option<bool> {
 pub async fn repair(id: PermId) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     if id == PermId::Accessibility {
+        if macos_utils::accessibility::accessibility_is_enabled() {
+            return Ok(());
+        }
         macos_utils::accessibility::begin_accessibility_guide(dashboard_language_zh());
+        let start_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if macos_utils::accessibility::accessibility_is_enabled() {
+                return Ok(());
+            }
+            if macos_utils::accessibility::accessibility_guide_is_active() {
+                break;
+            }
+            if std::time::Instant::now() >= start_deadline {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while std::time::Instant::now() < deadline {
             if macos_utils::accessibility::accessibility_is_enabled() {
@@ -199,7 +224,7 @@ pub async fn repair(id: PermId) -> Result<(), String> {
 }
 
 pub async fn repair_all() -> Result<(), String> {
-    for id in [PermId::Accessibility, PermId::Shell, PermId::InputMethod] {
+    for id in [PermId::Accessibility, PermId::Shell] {
         if let Err(err) = repair(id).await {
             warn!(?id, %err, "permission repair failed");
             return Err(err);
@@ -211,11 +236,22 @@ pub async fn repair_all() -> Result<(), String> {
 pub fn spawn_check(proxy: &EventLoopProxy) {
     let proxy = proxy.clone();
     tokio::spawn(async move {
-        let snapshot = check_all().await;
-        if proxy.send_event(Event::PermissionSnapshot(snapshot)).is_err() {
-            warn!("failed to deliver permission snapshot");
-        }
+        publish_check(&proxy, false).await;
     });
+}
+
+async fn publish_check(proxy: &EventLoopProxy, completes_repair: bool) {
+    let mut required = check_required().await;
+    required.completes_repair = completes_repair;
+    if proxy.send_event(Event::PermissionSnapshot(required.clone())).is_err() {
+        warn!("failed to deliver permission snapshot");
+        return;
+    }
+    let mut snapshot = with_input_method(required).await;
+    snapshot.completes_repair = false;
+    if proxy.send_event(Event::PermissionSnapshot(snapshot)).is_err() {
+        warn!("failed to deliver permission snapshot");
+    }
 }
 
 pub fn spawn_repair(proxy: &EventLoopProxy, id: PermId) {
@@ -224,8 +260,7 @@ pub fn spawn_repair(proxy: &EventLoopProxy, id: PermId) {
         if let Err(err) = repair(id).await {
             warn!(?id, %err, "permission repair failed");
         }
-        let snapshot = check_all().await;
-        proxy.send_event(Event::PermissionSnapshot(snapshot)).ok();
+        publish_check(&proxy, true).await;
         proxy.send_event(Event::ReloadAccessibility).ok();
     });
 }
@@ -236,8 +271,7 @@ pub fn spawn_repair_all(proxy: &EventLoopProxy) {
         if let Err(err) = repair_all().await {
             warn!(%err, "permission repair-all failed");
         }
-        let snapshot = check_all().await;
-        proxy.send_event(Event::PermissionSnapshot(snapshot)).ok();
+        publish_check(&proxy, true).await;
         proxy.send_event(Event::ReloadAccessibility).ok();
     });
 }
@@ -250,5 +284,115 @@ pub fn accessibility_is_missing() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(accessibility: PermReady, shell: PermReady, input_method: PermReady) -> PermissionSnapshot {
+        PermissionSnapshot {
+            accessibility,
+            shell,
+            input_method,
+            error: None,
+            completes_repair: false,
+        }
+    }
+
+    #[test]
+    fn input_method_does_not_block_settings() {
+        assert!(snapshot(PermReady::Ready, PermReady::Ready, PermReady::Missing).all_ready());
+        assert!(snapshot(PermReady::Ready, PermReady::Ready, PermReady::Checking).all_ready());
+        assert!(!snapshot(PermReady::Ready, PermReady::Ready, PermReady::Checking).still_checking());
+        assert!(!snapshot(PermReady::Missing, PermReady::Ready, PermReady::Ready).all_ready());
+        assert!(!snapshot(PermReady::Ready, PermReady::Missing, PermReady::Ready).all_ready());
+    }
+
+    #[test]
+    fn repair_all_skips_optional_input_method() {
+        let production = include_str!("permissions.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        let start = production.find("pub async fn repair_all").expect("repair_all");
+        let body = production[start..]
+            .split("pub fn spawn_check")
+            .next()
+            .expect("repair_all body");
+        assert!(body.contains("PermId::Accessibility"));
+        assert!(body.contains("PermId::Shell"));
+        assert!(
+            !body.contains("PermId::InputMethod"),
+            "Fix All must not install the optional input method"
+        );
+    }
+
+    #[test]
+    fn accessibility_repair_checks_trust_before_opening_settings() {
+        let production = include_str!("permissions.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        let start = production.find("pub async fn repair(").expect("repair");
+        let body = production[start..]
+            .split("pub async fn repair_all")
+            .next()
+            .expect("repair body");
+        let guide = body.find("begin_accessibility_guide").expect("guide");
+        assert!(
+            body[..guide].contains("accessibility_is_enabled"),
+            "must not open System Settings until Accessibility is known to be missing"
+        );
+        let after = &body[guide..];
+        let wait_for_start = after
+            .find("accessibility_guide_is_active()")
+            .expect("wait until the guide has started");
+        let treat_as_dismissed = after
+            .find("!macos_utils::accessibility::accessibility_guide_is_active()")
+            .expect("dismissed only after start");
+        assert!(
+            wait_for_start < treat_as_dismissed,
+            "Fix All must not treat a guide that has not started yet as dismissed"
+        );
+    }
+
+    #[test]
+    fn required_check_does_not_query_input_method() {
+        let production = include_str!("permissions.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        let start = production.find("async fn check_required").expect("check_required");
+        let body = production[start..]
+            .split("async fn with_input_method")
+            .next()
+            .expect("check_required body");
+        assert!(body.contains("PermId::Accessibility"));
+        assert!(body.contains("PermId::Shell"));
+        assert!(
+            !body.contains("PermId::InputMethod"),
+            "the settings spinner must not wait on optional IME status"
+        );
+    }
+
+    #[test]
+    fn spawn_check_publishes_required_permissions_before_input_method() {
+        let production = include_str!("permissions.rs")
+            .rsplit_once("mod tests {")
+            .map(|(src, _)| src)
+            .expect("production source");
+        let start = production.find("async fn publish_check").expect("publish_check");
+        let body = production[start..]
+            .split("pub fn spawn_repair")
+            .next()
+            .expect("publish_check body");
+        let first = body.find("send_event").expect("first snapshot");
+        let ime = body.find("with_input_method").expect("IME fill-in");
+        assert!(
+            first < ime,
+            "required Accessibility/Shell snapshot must reach the UI before the IME probe"
+        );
     }
 }

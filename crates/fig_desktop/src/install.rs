@@ -87,20 +87,6 @@ fn reconcile_accessibility_permission() {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn run_macos_post_install_permission_tasks() {
-    use fig_integrations::Integration;
-    use fig_integrations::input_method::InputMethod;
-    use tracing::warn;
-
-    tokio::spawn(async {
-        let input_method = InputMethod::default();
-        if let Err(err) = input_method.install().await {
-            warn!(%err, "Failed to install input method during post-install permission setup");
-        }
-    });
-}
-
 /// Run items at launch
 #[allow(unused_variables)]
 pub async fn run_install(
@@ -132,7 +118,6 @@ pub async fn run_install(
 
     #[cfg(target_os = "macos")]
     if should_run_macos_install {
-        run_macos_post_install_permission_tasks();
         // First run (no previous_version) = fresh install; otherwise = update.
         if previous_version().is_none() {
             fig_telemetry::track("app_installed");
@@ -769,6 +754,10 @@ mod test {
         assert!(
             !production.contains("begin_accessibility_guide"),
             "launch must not start the Accessibility guide"
+        );
+        assert!(
+            !production.contains("input_method.install"),
+            "launch must not install the optional input method or open Keyboard settings"
         );
     }
 

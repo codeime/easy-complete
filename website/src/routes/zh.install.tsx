@@ -8,6 +8,10 @@ import {
   GuidePage,
   RelatedGuides,
 } from "../components/GuidePage.tsx";
+import {
+  AX_SETTINGS_PANE_ZH,
+  AX_SETTINGS_PANE_ZH_LEGACY,
+} from "../data.ts";
 import { DOWNLOAD_URL } from "../download.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
@@ -85,7 +89,12 @@ function ZhInstallPage() {
             打开 Easy Complete。
           </li>
           <li>
-            首次启动会安装随附的命令行工具、Shell 集成和终端输入法。
+            首次启动会安装随附的命令行工具和 Shell 集成。输入法是可选项，可稍后在「设置
+            → 行为」里安装，或运行{" "}
+            <code className="font-mono text-[#cdd6e0]">
+              ec integrations install input-method
+            </code>
+            ，供 Ghostty、Kitty、WezTerm、Zed、Alacritty 和 Otty 使用。
           </li>
           <li>
             如果希望开机自启,可以在菜单栏图标里打开「设置」进行配置。
@@ -97,7 +106,9 @@ function ZhInstallPage() {
           macOS 的辅助功能权限让 Easy Complete
           能把原生建议窗口摆在终端光标旁边。请在这里勾选 Easy Complete:
         </p>
-        <pre className={GUIDE_CODE}>系统设置 → 隐私与安全性 → 辅助功能</pre>
+        <pre className={GUIDE_CODE}>
+          {`${AX_SETTINGS_PANE_ZH}\n${AX_SETTINGS_PANE_ZH_LEGACY}`}
+        </pre>
         <p className={GUIDE_PARAGRAPH}>如果没有弹出授权提示,可以从终端再次触发:</p>
         <pre className={GUIDE_CODE}>ec debug prompt-accessibility</pre>
 

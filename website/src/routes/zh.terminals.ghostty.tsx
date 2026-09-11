@@ -8,6 +8,7 @@ import {
   GuidePage,
   RelatedGuides,
 } from "../components/GuidePage.tsx";
+import { AX_SETTINGS_PANE_ZH, AX_SETTINGS_PANE_ZH_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
 const TITLE = "在 macOS 上为 Ghostty 启用自动补全 — Easy Complete";
@@ -60,8 +61,12 @@ function ZhGhosttyPage() {
         </GuideList>
 
         <GuideCallout>
-          Ghostty 绕过了标准 PTY 光标跟踪路径的一部分，因此需要输入法集成。Easy
-          Complete 会在安装过程中自动注册它。
+          Ghostty 绕过了标准 PTY 光标跟踪路径的一部分，因此需要输入法集成。可在「设置
+          → 行为」里安装，或运行{" "}
+          <code className="font-mono text-[#cdd6e0]">
+            ec integrations install input-method
+          </code>
+          。
         </GuideCallout>
 
         <h2 className={GUIDE_HEADING}>设置 Ghostty 自动补全</h2>
@@ -89,8 +94,8 @@ function ZhGhosttyPage() {
         </p>
         <pre className={GUIDE_CODE}>ec integrations install input-method</pre>
         <p className={GUIDE_PARAGRAPH}>
-          还要确认「系统设置 → 隐私与安全性 → 辅助功能」中仍然启用了 Easy
-          Complete。
+          还要确认「{AX_SETTINGS_PANE_ZH}」中仍然启用了 Easy Complete（
+          {AX_SETTINGS_PANE_ZH_LEGACY}）。
         </p>
 
         <h2 className={GUIDE_HEADING}>键盘操作</h2>

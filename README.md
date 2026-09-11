@@ -69,7 +69,9 @@ exec $SHELL
 ```
 
 On first launch, Easy Complete sets up the bundled CLI binaries, shell integration,
-input method, and login startup entries. To verify the installation, run:
+and login startup entries. The input method is optional — install it from Settings →
+Behavior, or with `ec integrations install input-method`, for Ghostty, Kitty,
+WezTerm, Zed, Alacritty, and Otty. To verify the installation, run:
 
 ```bash
 ec doctor
@@ -117,7 +119,7 @@ The source installer will:
 2. Assemble `Easy Complete.app` and copy it to `/Applications`.
 3. Symlink the `ec` and `ecterm` CLIs into `~/.local/bin`.
 4. Let you enable **Launch at Login** from Settings (a system Login Item on macOS 13+, with a LaunchAgent fallback on macOS 12).
-5. Set up shell integration and register the input method.
+5. Set up shell integration. `./install.sh` also registers the optional input method (Homebrew / DMG first launch does not).
 6. Leave Accessibility for you to grant from Easy Complete Settings (required — see below).
 
 When it finishes, reload your shell:
@@ -132,7 +134,10 @@ Easy Complete positions the completion popup relative to your focused terminal
 window, which requires the macOS **Accessibility** permission. Open Easy Complete
 Settings and click **Grant Accessibility**. That opens:
 
-> System Settings → Privacy & Security → Accessibility
+> System Settings → Privacy & Security → Device Control and Data Access
+>
+> On macOS 26 and earlier the same list is named **Accessibility**. Grant still
+> opens it.
 
 and floats a card you can drag **Easy Complete** from into the list. The app never
 opens that pane on its own.
@@ -175,8 +180,8 @@ ec settings <key> <value>       # change a setting
 Most terminals work out of the box via the PTY integration — including iTerm2, Apple
 Terminal, VS Code, Cursor, ChatGPT (Codex), and JetBrains IDE terminals. Terminals that
 bypass the standard PTY path (**Ghostty, Kitty, WezTerm, Zed, Alacritty, Otty**)
-additionally rely on the bundled input method for cursor tracking — this is registered
-automatically during install.
+additionally rely on the bundled input method for cursor tracking. Install it from
+Settings → Behavior, or with `ec integrations install input-method`.
 
 ---
 

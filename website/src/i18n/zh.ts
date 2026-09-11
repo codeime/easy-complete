@@ -125,12 +125,12 @@ const processesZh: Process[] = [
 ];
 
 const NOTE_ZH: Record<string, string> = {
-  Ghostty: "安装时自动注册随附输入法",
-  Otty: "输入法光标跟踪;并且 Easy Complete 会保留 Otty 自己写在 rc 文件末尾的集成块",
-  Kitty: "安装时自动注册随附输入法",
-  WezTerm: "安装时自动注册随附输入法",
-  Alacritty: "安装时自动注册随附输入法",
-  Zed: "终端面板,通过随附输入法跟踪光标",
+  Ghostty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
+  Otty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`；并且 Easy Complete 会保留 Otty 自己写在 rc 文件末尾的集成块",
+  Kitty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
+  WezTerm: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
+  Alacritty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
+  Zed: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
   "JetBrains IDEs": "覆盖 JetBrains 全系 IDE 的内置终端",
   "ChatGPT (Codex)": "ChatGPT.app 里的 Codex 终端会话,通过 xterm.js 光标定位",
   "VS Code": "内置终端,含 Cursor、Windsurf 与 Trae",

@@ -8,6 +8,10 @@ import {
   GuidePage,
   RelatedGuides,
 } from "../components/GuidePage.tsx";
+import {
+  AX_SETTINGS_PANE_EN,
+  AX_SETTINGS_PANE_EN_LEGACY,
+} from "../data.ts";
 import { DOWNLOAD_URL } from "../download.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
@@ -83,8 +87,13 @@ function InstallPage() {
             <code className="font-mono text-[#cdd6e0]">/Applications</code>.
           </li>
           <li>
-            The first launch installs the bundled CLI, shell integration, and
-            terminal input method.
+            The first launch installs the bundled CLI and shell integration.
+            The input method is optional — install it later from Settings →
+            Behavior, or with{" "}
+            <code className="font-mono text-[#cdd6e0]">
+              ec integrations install input-method
+            </code>
+            , for Ghostty, Kitty, WezTerm, Zed, Alacritty, and Otty.
           </li>
           <li>
             Open Settings from the menu bar icon if you want Easy Complete to
@@ -99,7 +108,7 @@ function InstallPage() {
           at:
         </p>
         <pre className={GUIDE_CODE}>
-          System Settings → Privacy &amp; Security → Accessibility
+          {`${AX_SETTINGS_PANE_EN}\n${AX_SETTINGS_PANE_EN_LEGACY}`}
         </pre>
         <p className={GUIDE_PARAGRAPH}>
           If the prompt did not appear, trigger it again from Terminal:
