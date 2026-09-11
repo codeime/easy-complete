@@ -102,7 +102,7 @@ const faqsZh: Faq[] = [
   {
     question: "如何安装 Easy Complete?",
     answer:
-      "从本仓库的 GitHub Releases 下载 Native ARM64 DMG，并按安装指南操作。Homebrew cask 是原 WebView 项目（chen86860/easy-complete），不是这条 Native 线",
+      "从本仓库的 GitHub Releases 下载 Native ARM64 DMG，并按安装指南操作",
   },
 ];
 
@@ -153,7 +153,7 @@ const docSectionsZh: DocSection[] = [
         href: "/zh/install",
         label: "在 macOS 上安装",
         description:
-          "Homebrew 或 DMG、辅助功能权限、重载 Shell,以及用 ec doctor 验证",
+          "DMG、辅助功能权限、重载 Shell,以及用 ec doctor 验证",
       },
       {
         href: "/zh/troubleshooting",
@@ -220,11 +220,6 @@ export const homeCopyZh: HomeCopy = {
     "为数百种命令行工具提供 fish 风格的补全建议——git、npm、docker、cargo。原生 GPUI（不是 WebView）、快速，而且完全在本机运行",
   downloadCta: "下载 DMG",
   githubCta: "在 GitHub 查看",
-  brewDivider: "原 WebView 项目（不是这条 Native 线）",
-  copyLabel: "复制",
-  copiedLabel: "已复制",
-  copyErrorLabel: "重试",
-  copyAriaLabel: (command) => `复制 Homebrew 安装命令:${command}`,
 
   marqueeLabel: "在你惯用的终端里运行",
   featuresLabel: "功能",

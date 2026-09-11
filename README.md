@@ -44,45 +44,14 @@ for the full list of what is and isn't collected.
 
 ## Native
 
-This repository is **Easy Complete (Native)** — an independent 3.x line at
-[`codeime/easy-complete`](https://github.com/codeime/easy-complete). It is not a
-pull request back to the WebView project.
-
 The completion popup and the settings window are GPUI views (Zed's UI toolkit).
 Completions never enter a web view: `ec_engine` looks up JSON IR compiled at
 build time, and QuickJS runs only when a spec hook needs it (`postProcess`,
 `script`, `custom`, `generateSpec`).
 
-The WebView line is the fork source:
-[`chen86860/easy-complete`](https://github.com/chen86860/easy-complete). Fig and
-Amazon Q also used a WebView overlay.
-
-## Performance
-
-Native numbers are `phys_footprint` (the same figure Activity Monitor shows),
-via `./scripts/memory-usage.sh`. The WebView column is the upstream project
-([`chen86860/easy-complete`](https://github.com/chen86860/easy-complete)), not
-this repo. Fig / Amazon Q sizes were not measured here.
-
-| | Easy Complete (Native) | [WebView](https://github.com/chen86860/easy-complete) | Fig / Amazon Q |
-| --- | --- | --- | --- |
-| Overlay | Native GPUI window | WKWebView | WebView |
-| Settings | Native GPUI window | React dashboard in WKWebView | Cloud dashboard |
-| Completion engine | Local Rust + JSON IR | JavaScript inside the WebView | Cloud / account |
-| Completions leave your Mac | No | No | Fig / Q required an account |
-| Desktop memory | ~50 MB, stable | WebKit process + page | — |
-| Installed app | ~81 MB | ~109 MB (includes unused specs) | — |
-| DMG | ~22 MB | ~25 MB | — |
-
-Native stays near 50 MB in a typical session. Most of the package drop is from
-not shipping the unused `bundle/specs` tree (the engine reads `specs-ir` only).
-A session also keeps one `ecterm` per terminal tab (~10–17 MB) and an idle
-input-method helper (~7 MB).
-
 ## Contents
 
 - [Native](#native)
-- [Performance](#performance)
 - [Install](#-install)
 - [Usage](#-usage)
 - [Uninstall](#-uninstall)
@@ -94,7 +63,7 @@ input-method helper (~7 MB).
 
 ## ⚡️ Install
 
-### Download the DMG (recommended)
+### Download the DMG
 
 Native builds are the Apple Silicon DMGs from this repository:
 
@@ -120,16 +89,6 @@ WezTerm, Zed, Alacritty, and Otty. To verify the installation, run:
 
 ```bash
 ec doctor
-```
-
-### Homebrew (original WebView project)
-
-The published cask is the fork source,
-[chen86860/easy-complete](https://github.com/chen86860/easy-complete), not this
-Native line:
-
-```bash
-brew install --cask chen86860/tap/easy-complete
 ```
 
 ### Build from source

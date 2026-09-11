@@ -128,7 +128,7 @@ function publisherSchema() {
     email: "help@emmmm.dev",
     sameAs: [
       "https://easy-complete.emmmm.dev/",
-      "https://github.com/chen86860",
+      "https://github.com/codeime/easy-complete",
       "https://x.com/chen86860",
     ],
   };

@@ -120,7 +120,7 @@ function ZhGhosttyPage() {
             {
               href: "/zh/install",
               label: "在 macOS 上安装",
-              description: "通过 DMG 或 Homebrew 安装、授权、重载并验证。",
+              description: "通过 DMG 安装、授权、重载并验证。",
             },
             {
               href: "/zh/troubleshooting",

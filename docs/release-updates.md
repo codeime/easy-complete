@@ -97,7 +97,7 @@ Generate appcast locally:
 cp dist/Easy-Complete-arm64.dmg dist/Easy-Complete-2.0.6-arm64.dmg
 
 SPARKLE_PRIVATE_ED_KEY="..." \
-SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/chen86860/easy-complete/releases/download/v2.0.6/" \
+SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/codeime/easy-complete/releases/download/v2.0.6/" \
 SPARKLE_BUNDLE_VERSION="2.0.6" \
 ./scripts/generate-sparkle-appcast.sh dist/Easy-Complete-2.0.6-arm64.dmg
 ```
@@ -111,7 +111,7 @@ cp path/to/Easy-Complete-2.0.5-arm64.dmg dist/sparkle/
 cp dist/Easy-Complete-arm64.dmg dist/Easy-Complete-2.0.6-arm64.dmg
 
 SPARKLE_PRIVATE_ED_KEY="..." \
-SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/chen86860/easy-complete/releases/download/v2.0.6/" \
+SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/codeime/easy-complete/releases/download/v2.0.6/" \
 SPARKLE_BUNDLE_VERSION="2.0.6" \
 SPARKLE_MAXIMUM_VERSIONS=1 \
 SPARKLE_MAXIMUM_DELTAS=8 \

@@ -17,7 +17,7 @@ import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
 const TITLE = "Install Easy Complete on macOS — Terminal Autocomplete";
 const DESCRIPTION =
-  "Install Easy Complete with Homebrew on Apple Silicon macOS, grant Accessibility permission, reload your shell, and verify it with ec doctor.";
+  "Install Easy Complete with the ARM64 DMG on Apple Silicon macOS, grant Accessibility permission, reload your shell, and verify it with ec doctor.";
 
 const ALTERNATES = [
   { locale: "en" as const, path: "/install" },
@@ -73,19 +73,6 @@ function InstallPage() {
             Download the ARM64 DMG
           </a>
         </p>
-        <p className={GUIDE_PARAGRAPH}>
-          The Homebrew cask is the original WebView project,{" "}
-          <a
-            href="https://github.com/chen86860/easy-complete"
-            className="text-(--accent) underline decoration-(--accent-line) underline-offset-2"
-          >
-            chen86860/easy-complete
-          </a>
-          , not this Native line:
-        </p>
-        <pre className={GUIDE_CODE}>
-          brew install --cask chen86860/tap/easy-complete
-        </pre>
 
         <h2 className={GUIDE_HEADING}>2. Launch Easy Complete</h2>
         <GuideList>

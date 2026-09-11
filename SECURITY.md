@@ -17,7 +17,7 @@ Please do not disclose suspected vulnerabilities in a public issue, discussion,
 or pull request.
 
 Report them privately through
-[GitHub Private Vulnerability Reporting](https://github.com/chen86860/easy-complete/security/advisories/new).
+[GitHub Private Vulnerability Reporting](https://github.com/codeime/easy-complete/security/advisories/new).
 Include, when possible:
 
 - A description of the vulnerability and its potential impact.
@@ -40,4 +40,4 @@ in scope. Vulnerabilities in third-party dependencies are also welcome when they
 have a demonstrated impact on Easy Complete.
 
 General bugs, feature requests, and support questions should be filed through
-[GitHub Issues](https://github.com/chen86860/easy-complete/issues).
+[GitHub Issues](https://github.com/codeime/easy-complete/issues).

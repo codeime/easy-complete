@@ -41,42 +41,13 @@ Mac。应用会收集匿名使用统计（打开次数、每日补全次数—�
 
 ## Native
 
-本仓库是 **Easy Complete (Native)**——独立的 3.x 线，在
-[`codeime/easy-complete`](https://github.com/codeime/easy-complete)。
-不会作为 PR 合回 WebView 那个项目。
-
 补全浮层和设置窗口是 GPUI 视图（Zed 的 UI 工具包）。补全本身从不进 WebView：
 `ec_engine` 查的是构建期编好的 JSON IR，QuickJS 只在 spec hook 需要时运行
 （`postProcess`、`script`、`custom`、`generateSpec`）。
 
-WebView 那条线是 fork 源：
-[`chen86860/easy-complete`](https://github.com/chen86860/easy-complete)。
-Fig 和 Amazon Q 的浮层也是 WebView。
-
-## 性能
-
-Native 内存是 `phys_footprint`（和活动监视器同一项），用
-`./scripts/memory-usage.sh` 测。WebView 一列是上游项目
-（[`chen86860/easy-complete`](https://github.com/chen86860/easy-complete)），
-不是本仓库。Fig / Amazon Q 的体积这里没有测。
-
-| | Easy Complete (Native) | [WebView](https://github.com/chen86860/easy-complete) | Fig / Amazon Q |
-| --- | --- | --- | --- |
-| 补全浮层 | 原生 GPUI 窗口 | WKWebView | WebView |
-| 设置 | 原生 GPUI 窗口 | WKWebView 里的 React 面板 | 云端控制台 |
-| 补全引擎 | 本地 Rust + JSON IR | WebView 里的 JavaScript | 云端 / 账号 |
-| 补全是否离机 | 否 | 否 | Fig / Q 需要账号 |
-| 桌面进程内存 | 约 50 MB，稳定 | WebKit 进程 + 页面 | — |
-| 安装体积 | 约 81 MB | 约 109 MB（含用不到的 specs） | — |
-| DMG | 约 22 MB | 约 25 MB | — |
-
-Native 典型会话停在约 50 MB。安装包变小主要是因为不再打包用不到的 `bundle/specs`
-（引擎只读 `specs-ir`）。每个终端标签还有一个 `ecterm`（约 10–17 MB），空闲输入法约 7 MB。
-
 ## 目录
 
 - [Native](#native)
-- [性能](#性能)
 - [安装](#-安装)
 - [使用](#-使用)
 - [卸载](#-卸载)
@@ -88,7 +59,7 @@ Native 典型会话停在约 50 MB。安装包变小主要是因为不再打包�
 
 ## ⚡️ 安装
 
-### 下载 DMG（推荐）
+### 下载 DMG
 
 Native 构建是本仓库的 Apple Silicon DMG：
 
@@ -113,15 +84,6 @@ WezTerm、Zed、Alacritty 和 Otty 使用。可以运行下面的命令确认安
 
 ```bash
 ec doctor
-```
-
-### Homebrew（原 WebView 项目）
-
-这个 cask 是 fork 源
-[chen86860/easy-complete](https://github.com/chen86860/easy-complete)，不是这条 Native 线：
-
-```bash
-brew install --cask chen86860/tap/easy-complete
 ```
 
 ### 从源码构建

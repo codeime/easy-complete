@@ -43,11 +43,6 @@ export interface HomeCopy {
   heroSubheading: string;
   downloadCta: string;
   githubCta: string;
-  brewDivider: string;
-  copyLabel: string;
-  copiedLabel: string;
-  copyErrorLabel: string;
-  copyAriaLabel: (command: string) => string;
 
   marqueeLabel: string;
   featuresLabel: string;

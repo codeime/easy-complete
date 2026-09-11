@@ -220,7 +220,7 @@ export const faqs: Faq[] = [
   {
     question: "How do I install Easy Complete?",
     answer:
-      "Download the Native ARM64 DMG from this repository's GitHub Releases and follow the install guide. The Homebrew cask is the original WebView project (chen86860/easy-complete), not this Native line.",
+      "Download the Native ARM64 DMG from this repository's GitHub Releases and follow the install guide.",
   },
 ];
 
@@ -249,7 +249,7 @@ export const docSections: DocSection[] = [
         href: "/install",
         label: "Install on macOS",
         description:
-          "Homebrew or DMG, Accessibility permission, shell reload, and verification with ec doctor.",
+          "DMG, Accessibility permission, shell reload, and verification with ec doctor.",
       },
       {
         href: "/troubleshooting",

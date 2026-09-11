@@ -16,11 +16,6 @@ export const homeCopyEn: HomeCopy = {
     "Fish-shell-style suggestions for hundreds of CLIs — git, npm, docker, cargo. Native GPUI (not a WebView), fast, and entirely on-device.",
   downloadCta: "Download DMG",
   githubCta: "View on GitHub",
-  brewDivider: "Original WebView project (not this Native line)",
-  copyLabel: "Copy",
-  copiedLabel: "Copied",
-  copyErrorLabel: "Try again",
-  copyAriaLabel: (command) => `Copy Homebrew install command: ${command}`,
 
   marqueeLabel: "Runs in the terminal you already use",
   featuresLabel: "Features",
