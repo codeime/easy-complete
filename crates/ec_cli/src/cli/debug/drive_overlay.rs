@@ -73,9 +73,10 @@ pub async fn execute(args: &DriveOverlayArgs) -> Result<ExitCode> {
         bail!("Easy Complete is not running (missing {remote_path:?} or {desktop_path:?})");
     }
 
-    let cwd = args.cwd.clone().unwrap_or_else(|| {
-        std::env::current_dir().map_or_else(|_err| "/".into(), |path| path.display().to_string())
-    });
+    let cwd = args
+        .cwd
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().map_or_else(|_err| "/".into(), |path| path.display().to_string()));
     let frames = frames_for(&args.scenario, args.buffer.as_deref());
     let delay = Duration::from_millis(args.delay_ms);
     let hold = Duration::from_millis(args.hold_ms);
@@ -226,7 +227,10 @@ mod tests {
 
     #[test]
     fn types_one_character_at_a_time() {
-        assert_eq!(typed_prefixes("git ch"), vec!["g", "gi", "git", "git ", "git c", "git ch"]);
+        assert_eq!(
+            typed_prefixes("git ch"),
+            vec!["g", "gi", "git", "git ", "git c", "git ch"]
+        );
         assert_eq!(typed_prefixes(""), Vec::<String>::new());
     }
 

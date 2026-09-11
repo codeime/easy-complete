@@ -410,7 +410,14 @@ mod test {
     fn test_debug_drive_overlay() {
         use debug::{DriveOverlayArgs, OverlayDriveScenario};
         assert_parse!(
-            ["debug", "drive-overlay", "--buffer", "python ", "--scenario", "backspace"],
+            [
+                "debug",
+                "drive-overlay",
+                "--buffer",
+                "python ",
+                "--scenario",
+                "backspace"
+            ],
             CliRootCommands::Debug(debug::DebugSubcommand::DriveOverlay(DriveOverlayArgs {
                 buffer: Some("python ".into()),
                 scenario: OverlayDriveScenario::Backspace,

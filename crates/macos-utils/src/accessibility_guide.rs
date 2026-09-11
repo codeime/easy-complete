@@ -181,7 +181,9 @@ fn present_card_at(origin: NSPoint) {
 
     let screen = screen_containing(origin.x, origin.y);
     let x = origin.x.clamp(screen.0 + 12.0, screen.0 + screen.2 - CARD_WIDTH - 12.0);
-    let y = origin.y.clamp(screen.1 + 12.0, screen.1 + screen.3 - CARD_HEIGHT - 12.0);
+    let y = origin
+        .y
+        .clamp(screen.1 + 12.0, screen.1 + screen.3 - CARD_HEIGHT - 12.0);
     let start = NSRect::new(NSPoint::new(x, y), NSSize::new(CARD_WIDTH, CARD_HEIGHT));
 
     let Some(cls) = Class::get("ECAccessibilityGuidePanel") else {

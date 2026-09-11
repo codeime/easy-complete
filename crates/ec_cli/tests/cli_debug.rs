@@ -10,10 +10,7 @@ fn debug_root() -> Result<()> {
 
 #[test]
 fn debug_drive_overlay_help() -> Result<()> {
-    cli()
-        .args(["debug", "drive-overlay", "--help"])
-        .assert()
-        .success();
+    cli().args(["debug", "drive-overlay", "--help"]).assert().success();
     Ok(())
 }
 
