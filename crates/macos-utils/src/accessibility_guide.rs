@@ -34,7 +34,6 @@ use crate::bundle::{get_bundle_identifier, get_bundle_path};
 const CARD_WIDTH: f64 = 288.0;
 const CARD_HEIGHT: f64 = 172.0;
 const CARD_GAP: f64 = 20.0;
-const ARC_HEIGHT: f64 = 140.0;
 const ARROW_TAG: isize = 7101;
 const SETTINGS_GONE_TICKS: u8 = 25;
 const NS_DRAG_OPERATION_COPY: usize = 1;
@@ -1022,12 +1021,6 @@ fn card_is_left_of(settings: (f64, f64, f64, f64), docked: (f64, f64, f64, f64))
     docked.0 + docked.2 / 2.0 < settings.0 + settings.2 / 2.0
 }
 
-fn clamp_to_screen(x: f64, y: f64, screen: (f64, f64, f64, f64)) -> (f64, f64) {
-    let max_x = (screen.0 + screen.2 - CARD_WIDTH - 8.0).max(screen.0 + 8.0);
-    let max_y = (screen.1 + screen.3 - CARD_HEIGHT - 8.0).max(screen.1 + 8.0);
-    (x.clamp(screen.0 + 8.0, max_x), y.clamp(screen.1 + 8.0, max_y))
-}
-
 pub(crate) fn quartz_to_cocoa(bounds: CGRect, primary_h: f64) -> (f64, f64, f64, f64) {
     (
         bounds.origin.x,
@@ -1035,21 +1028,6 @@ pub(crate) fn quartz_to_cocoa(bounds: CGRect, primary_h: f64) -> (f64, f64, f64,
         bounds.size.width,
         bounds.size.height,
     )
-}
-
-pub(crate) fn bezier_point(start: (f64, f64), end: (f64, f64), t: f64) -> (f64, f64) {
-    let t = t.clamp(0.0, 1.0);
-    let control = ((start.0 + end.0) * 0.5, start.1.max(end.1) + ARC_HEIGHT);
-    let mt = 1.0 - t;
-    (
-        mt * mt * start.0 + 2.0 * mt * t * control.0 + t * t * end.0,
-        mt * mt * start.1 + 2.0 * mt * t * control.1 + t * t * end.1,
-    )
-}
-
-pub(crate) fn ease_in_out(t: f64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 /// `hitTest:` receives a point in the superview. Subtract the view's frame
@@ -1180,39 +1158,12 @@ mod tests {
     }
 
     #[test]
-    fn bezier_starts_and_ends_on_the_anchors() {
-        let start = (10.0, 20.0);
-        let end = (400.0, 300.0);
-        assert_eq!(bezier_point(start, end, 0.0), start);
-        assert_eq!(bezier_point(start, end, 1.0), end);
-        let peak = bezier_point(start, end, 0.75);
-        assert!(peak.1 > start.1.max(end.1));
-    }
-
-    #[test]
-    fn ease_in_out_is_clamped_and_symmetric() {
-        assert_eq!(ease_in_out(0.0), 0.0);
-        assert_eq!(ease_in_out(1.0), 1.0);
-        assert!((ease_in_out(0.5) - 0.5).abs() < 1e-9);
-        assert!(ease_in_out(-1.0) == 0.0);
-        assert!(ease_in_out(2.0) == 1.0);
-    }
-
-    #[test]
     fn drag_pill_right_edge_hits_after_converting_out_of_superview() {
         let frame = (20.0, 16.0, 248.0, 52.0);
         let click = (260.0, 40.0);
         assert!(!point_in_size(click, (frame.2, frame.3)));
         let local = local_point_from_superview(click, frame);
         assert!(point_in_size(local, (frame.2, frame.3)));
-    }
-
-    #[test]
-    fn flight_stays_inside_a_small_display() {
-        let (x, y) = clamp_to_screen(-40.0, 2000.0, (0.0, 0.0, 800.0, 500.0));
-        assert!(x >= 8.0);
-        assert!(x + CARD_WIDTH <= 800.0 - 8.0 + 0.1);
-        assert!(y + CARD_HEIGHT <= 500.0 - 8.0 + 0.1);
     }
 
     #[test]
