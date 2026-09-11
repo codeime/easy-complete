@@ -7,7 +7,7 @@ use std::ffi::CStr;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cocoa::base::{NO, YES, id, nil};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -34,7 +34,6 @@ use crate::bundle::{get_bundle_identifier, get_bundle_path};
 const CARD_WIDTH: f64 = 288.0;
 const CARD_HEIGHT: f64 = 172.0;
 const CARD_GAP: f64 = 20.0;
-const FLIGHT_MS: f64 = 480.0;
 const ARC_HEIGHT: f64 = 140.0;
 const ARROW_TAG: isize = 7101;
 const SETTINGS_GONE_TICKS: u8 = 25;
@@ -56,7 +55,6 @@ const NS_FONT_WEIGHT_SEMIBOLD: f64 = 0.3;
 const NS_FONT_WEIGHT_REGULAR: f64 = 0.0;
 
 static GUIDE_ACTIVE: AtomicBool = AtomicBool::new(false);
-static FLYING: AtomicBool = AtomicBool::new(false);
 static DRAGGING: AtomicBool = AtomicBool::new(false);
 static SETTINGS_MISSING: AtomicU8 = AtomicU8::new(0);
 /// -1 system locale, 0 English, 1 Chinese.
@@ -87,9 +85,6 @@ fn start_guide(prefer_zh: Option<bool>) {
         return;
     }
     if GUIDE_ACTIVE.load(Ordering::SeqCst) {
-        if settings_window_cocoa().is_none() {
-            open_accessibility();
-        }
         if let Some(panel) = panel_ptr() {
             unsafe {
                 let _: () = msg_send![panel, orderFrontRegardless];
@@ -107,12 +102,10 @@ fn start_guide(prefer_zh: Option<bool>) {
         Ordering::SeqCst,
     );
     GUIDE_ACTIVE.store(true, Ordering::SeqCst);
-    let origin = mouse_location();
     // A cdhash-stale grant stays in the list with the switch on, but this
     // process is not trusted. Drop our row so the current binary can be dragged in.
     clear_stale_accessibility_row();
     open_accessibility();
-    present_card_at(origin);
     wait_for_settings(0, None);
 }
 
@@ -131,13 +124,12 @@ fn wait_for_settings(attempt: u8, last: Option<(f64, f64, f64, f64)>) {
         return;
     }
     let current = settings_window_cocoa();
-    let stable = match (last, current) {
-        (Some(previous), Some(now)) => frames_close(previous, now),
-        _ => false,
-    };
-    if stable || attempt >= 60 {
-        let settings = current.or(last).unwrap_or_else(fallback_settings_frame);
-        fly_to_docked(settings);
+    if let Some(settings) = settings_ready_to_dock(current, last, attempt) {
+        show_card_beside_settings(settings);
+        return;
+    }
+    if current.is_none() && last.is_none() && attempt >= 120 {
+        dismiss_guide();
         return;
     }
     dispatch::Queue::main().exec_after(Duration::from_millis(50), move || {
@@ -145,58 +137,37 @@ fn wait_for_settings(attempt: u8, last: Option<(f64, f64, f64, f64)>) {
     });
 }
 
-fn fly_to_docked(settings: (f64, f64, f64, f64)) {
-    let Some(panel) = panel_ptr() else {
-        return;
-    };
-    let start = unsafe {
-        let frame: NSRect = msg_send![panel, frame];
-        (frame.origin.x, frame.origin.y)
-    };
-    FLYING.store(true, Ordering::SeqCst);
-    fly_step(start, settings, Instant::now());
+fn settings_ready_to_dock(
+    current: Option<(f64, f64, f64, f64)>,
+    last: Option<(f64, f64, f64, f64)>,
+    attempt: u8,
+) -> Option<(f64, f64, f64, f64)> {
+    if let Some(now) = current {
+        let stable = last.is_some_and(|previous| frames_close(previous, now));
+        if stable || (attempt >= 60 && last.is_some()) {
+            return Some(now);
+        }
+        return None;
+    }
+    if attempt >= 120 { last } else { None }
 }
 
-fn fly_step(start: (f64, f64), last_settings: (f64, f64, f64, f64), started: Instant) {
+fn show_card_beside_settings(settings: (f64, f64, f64, f64)) {
     if !GUIDE_ACTIVE.load(Ordering::SeqCst) {
-        FLYING.store(false, Ordering::SeqCst);
         return;
     }
-    // Moving the source window (or releasing it) cancels an async drag.
-    if DRAGGING.load(Ordering::SeqCst) {
-        FLYING.store(false, Ordering::SeqCst);
-        schedule_tick();
-        return;
-    }
-    if accessibility_is_enabled() {
-        dismiss_guide();
-        return;
-    }
-
-    let settings = settings_window_cocoa().unwrap_or(last_settings);
     let screen = screen_containing(settings.0 + settings.2 / 2.0, settings.1 + settings.3 / 2.0);
     let docked = docked_card_frame(settings, screen);
-    let linear = (started.elapsed().as_secs_f64() * 1000.0 / FLIGHT_MS).clamp(0.0, 1.0);
-    let t = ease_in_out(linear);
-    let (x, y) = bezier_point(start, (docked.0, docked.1), t);
-    let (x, y) = clamp_to_screen(x, y, screen);
-
-    if let Some(panel) = panel_ptr() {
-        let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(CARD_WIDTH, CARD_HEIGHT));
+    if panel_ptr().is_none() {
+        present_card_at(NSPoint::new(docked.0, docked.1));
+    } else if let Some(panel) = panel_ptr() {
+        let frame = NSRect::new(NSPoint::new(docked.0, docked.1), NSSize::new(CARD_WIDTH, CARD_HEIGHT));
         unsafe {
             let _: () = msg_send![panel, setFrame: frame display: YES];
         }
     }
-
-    if linear >= 1.0 {
-        FLYING.store(false, Ordering::SeqCst);
-        update_arrow(card_is_left_of(settings, docked));
-        schedule_tick();
-        return;
-    }
-    dispatch::Queue::main().exec_after(Duration::from_millis(16), move || {
-        fly_step(start, settings, started);
-    });
+    update_arrow(card_is_left_of(settings, docked));
+    schedule_tick();
 }
 
 fn present_card_at(origin: NSPoint) {
@@ -209,8 +180,8 @@ fn present_card_at(origin: NSPoint) {
     register_classes();
 
     let screen = screen_containing(origin.x, origin.y);
-    let x = (origin.x - CARD_WIDTH / 2.0).clamp(screen.0 + 12.0, screen.0 + screen.2 - CARD_WIDTH - 12.0);
-    let y = (origin.y - CARD_HEIGHT / 2.0).clamp(screen.1 + 12.0, screen.1 + screen.3 - CARD_HEIGHT - 12.0);
+    let x = origin.x.clamp(screen.0 + 12.0, screen.0 + screen.2 - CARD_WIDTH - 12.0);
+    let y = origin.y.clamp(screen.1 + 12.0, screen.1 + screen.3 - CARD_HEIGHT - 12.0);
     let start = NSRect::new(NSPoint::new(x, y), NSSize::new(CARD_WIDTH, CARD_HEIGHT));
 
     let Some(cls) = Class::get("ECAccessibilityGuidePanel") else {
@@ -841,7 +812,7 @@ fn schedule_tick() {
             return;
         }
         match settings_window_cocoa() {
-            Some(settings) if !FLYING.load(Ordering::SeqCst) => {
+            Some(settings) => {
                 SETTINGS_MISSING.store(0, Ordering::SeqCst);
                 let screen = screen_containing(settings.0 + settings.2 / 2.0, settings.1 + settings.3 / 2.0);
                 let docked = docked_card_frame(settings, screen);
@@ -856,7 +827,6 @@ fn schedule_tick() {
                     }
                 }
             },
-            Some(_) => SETTINGS_MISSING.store(0, Ordering::SeqCst),
             None => {
                 let gone = SETTINGS_MISSING.fetch_add(1, Ordering::SeqCst).saturating_add(1);
                 if gone >= SETTINGS_GONE_TICKS {
@@ -871,7 +841,6 @@ fn schedule_tick() {
 
 fn dismiss_guide() {
     GUIDE_ACTIVE.store(false, Ordering::SeqCst);
-    FLYING.store(false, Ordering::SeqCst);
     DRAGGING.store(false, Ordering::SeqCst);
     SETTINGS_MISSING.store(0, Ordering::SeqCst);
     dismiss_panel_only();
@@ -891,10 +860,6 @@ fn dismiss_panel_only() {
 
 fn panel_ptr() -> Option<id> {
     (*PANEL.lock().unwrap_or_else(|err| err.into_inner())).map(|ptr| ptr as id)
-}
-
-fn mouse_location() -> NSPoint {
-    unsafe { msg_send![class!(NSEvent), mouseLocation] }
 }
 
 fn on_main_thread() -> bool {
@@ -1032,16 +997,6 @@ fn settings_window_cocoa() -> Option<(f64, f64, f64, f64)> {
         }
     }
     best.map(|(_, bounds)| quartz_to_cocoa(bounds, primary_h))
-}
-
-fn fallback_settings_frame() -> (f64, f64, f64, f64) {
-    let screen = primary_screen_frame();
-    (
-        screen.0 + (screen.2 - 780.0).max(40.0) / 2.0,
-        screen.1 + (screen.3 - 640.0).max(40.0) / 2.0,
-        780.0,
-        640.0,
-    )
 }
 
 pub(crate) fn docked_card_frame(settings: (f64, f64, f64, f64), screen: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
@@ -1262,14 +1217,6 @@ mod tests {
     fn grant_card_is_nonactivating_and_holds_still_during_drag() {
         assert_eq!(NS_WINDOW_STYLE_NONACTIVATING_PANEL, 1 << 7);
         let src = include_str!("accessibility_guide.rs");
-        let fly = src
-            .split("fn fly_step")
-            .nth(1)
-            .and_then(|rest| rest.split("fn present_card_at").next())
-            .expect("fly_step");
-        let drag = fly.find("DRAGGING").expect("fly_step must honor DRAGGING");
-        let frame = fly.find("setFrame").expect("fly_step sets the frame");
-        assert!(drag < frame);
         let tick = src
             .split("fn schedule_tick")
             .nth(1)
@@ -1283,13 +1230,63 @@ mod tests {
         let wait = src
             .split("fn wait_for_settings")
             .nth(1)
-            .and_then(|rest| rest.split("fn fly_to_docked").next())
+            .and_then(|rest| rest.split("fn show_card_beside_settings").next())
             .expect("wait_for_settings");
         let drag = wait.find("DRAGGING").expect("wait_for_settings must honor DRAGGING");
         let granted = wait
             .find("accessibility_is_enabled")
             .expect("wait_for_settings checks grant");
         assert!(drag < granted);
+    }
+
+    #[test]
+    fn grant_card_waits_for_settings_and_ignores_repeat_clicks() {
+        let src = include_str!("accessibility_guide.rs");
+        let start = src
+            .split("fn start_guide")
+            .nth(1)
+            .and_then(|rest| rest.split("fn wait_for_settings").next())
+            .expect("start_guide");
+        assert!(
+            !start.contains("present_card_at") && !start.contains("show_card_beside_settings"),
+            "card must not appear until Settings has loaded"
+        );
+        assert!(start.contains("wait_for_settings"));
+        let reentry = start
+            .split("GUIDE_ACTIVE")
+            .nth(1)
+            .and_then(|rest| rest.split("PREFER_ZH").next())
+            .expect("already-active path");
+        assert!(
+            !reentry.contains("open_accessibility"),
+            "repeat Grant while waiting must not reopen Settings"
+        );
+        let wait = src
+            .split("fn wait_for_settings")
+            .nth(1)
+            .and_then(|rest| rest.split("fn show_card_beside_settings").next())
+            .expect("wait_for_settings");
+        let window = wait.find("settings_window_cocoa").expect("waits for the pane");
+        let show = wait.find("show_card_beside_settings").expect("then shows the card");
+        assert!(window < show);
+        assert!(
+            !wait.contains("fallback_settings_frame"),
+            "must not flash a guessed frame when Settings never appeared"
+        );
+    }
+
+    #[test]
+    fn settings_ready_to_dock_needs_a_stable_or_previously_seen_window() {
+        let frame = (100.0, 80.0, 700.0, 600.0);
+        let moved = (120.0, 80.0, 700.0, 600.0);
+        assert_eq!(settings_ready_to_dock(None, None, 0), None);
+        assert_eq!(settings_ready_to_dock(Some(frame), None, 0), None);
+        assert_eq!(settings_ready_to_dock(Some(frame), None, 60), None);
+        assert_eq!(settings_ready_to_dock(Some(frame), Some(frame), 2), Some(frame));
+        assert_eq!(settings_ready_to_dock(Some(moved), Some(frame), 60), Some(moved));
+        assert_eq!(settings_ready_to_dock(None, None, 120), None);
+        assert_eq!(settings_ready_to_dock(None, Some(frame), 120), Some(frame));
+        assert_eq!(settings_ready_to_dock(None, Some(frame), 10), None);
     }
 
     #[test]
