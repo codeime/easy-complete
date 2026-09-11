@@ -10,9 +10,9 @@ const HREFLANG: Record<Locale, string> = {
 export const SITE_NAME = "Easy Complete";
 /** Keep in sync with the workspace `Cargo.toml` version on each release. */
 export const APP_VERSION = "3.0.0-beta.7";
-export const HOME_TITLE = "Easy Complete — macOS Terminal Autocomplete";
+export const HOME_TITLE = "Easy Complete (Native) — macOS Terminal Autocomplete";
 export const HOME_DESCRIPTION =
-  "Easy Complete adds IDE-style inline autocomplete to your macOS terminal. Fast, local, open source, and built for git, npm, docker, cargo, and more.";
+  "Easy Complete (Native) adds IDE-style inline autocomplete to your macOS terminal. Native GPUI overlay — not a WebView. Fast, local, open source.";
 
 export function siteOrigin(): string {
   if (typeof window !== "undefined") {
@@ -163,10 +163,10 @@ export function homeSchema(locale: Locale = "en") {
         screenshot: `${origin}/og-image.png`,
         softwareVersion: APP_VERSION,
         releaseNotes:
-          "https://github.com/chen86860/easy-complete/blob/main/CHANGELOG.md",
+          "https://github.com/codeime/easy-complete/blob/main/CHANGELOG.md",
         downloadUrl:
-          "https://github.com/chen86860/easy-complete/releases/latest/download/Easy-Complete-arm64.dmg",
-        codeRepository: "https://github.com/chen86860/easy-complete",
+          "https://github.com/codeime/easy-complete/releases/latest/download/Easy-Complete-arm64.dmg",
+        codeRepository: "https://github.com/codeime/easy-complete",
         softwareRequirements: "macOS 12 or later; Apple Silicon (ARM64)",
         license: "https://opensource.org/license/mit",
         publisher: { "@id": PUBLISHER_ID },

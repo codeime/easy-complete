@@ -58,27 +58,34 @@ function InstallPage() {
           Mac (M1 or newer). The published DMG is ARM64 only.
         </GuideCallout>
 
-        <h2 className={GUIDE_HEADING}>1. Install with Homebrew</h2>
+        <h2 className={GUIDE_HEADING}>1. Download the Native DMG</h2>
         <p className={GUIDE_PARAGRAPH}>
-          Install the signed and notarized app with one Homebrew command. The
-          Easy Complete tap is added automatically:
-        </p>
-        <pre className={GUIDE_CODE}>
-          brew install --cask chen86860/tap/easy-complete
-        </pre>
-        <p className={GUIDE_PARAGRAPH}>
-          Prefer to install manually? Download the latest signed DMG, open it,
-          and drag <strong className="text-[#d6dee8]">Easy Complete.app</strong>{" "}
-          into your Applications folder.
+          Easy Complete (Native) is this repository&apos;s ARM64 DMG. Open it
+          and drag{" "}
+          <strong className="text-[#d6dee8]">Easy Complete.app</strong> into
+          your Applications folder.
         </p>
         <p className="mb-8">
           <a
             href={DOWNLOAD_URL}
             className="inline-flex rounded-[10px] bg-(--accent) px-5 py-3 font-semibold text-[#06140a] transition hover:brightness-110"
           >
-            Download the ARM64 DMG instead
+            Download the ARM64 DMG
           </a>
         </p>
+        <p className={GUIDE_PARAGRAPH}>
+          The Homebrew cask is the original WebView project,{" "}
+          <a
+            href="https://github.com/chen86860/easy-complete"
+            className="text-(--accent) underline decoration-(--accent-line) underline-offset-2"
+          >
+            chen86860/easy-complete
+          </a>
+          , not this Native line:
+        </p>
+        <pre className={GUIDE_CODE}>
+          brew install --cask chen86860/tap/easy-complete
+        </pre>
 
         <h2 className={GUIDE_HEADING}>2. Launch Easy Complete</h2>
         <GuideList>
@@ -138,7 +145,7 @@ function InstallPage() {
         </p>
         <pre
           className={GUIDE_CODE}
-        >{`git clone https://github.com/chen86860/easy-complete.git
+        >{`git clone https://github.com/codeime/easy-complete.git
 cd easy-complete
 ./install.sh`}</pre>
 

@@ -79,6 +79,7 @@ function ZhFigAlternativePage() {
             <tbody className="text-[#9aa4b0]">
               {[
                 ["自动补全引擎", "本地运行的原生 macOS 应用"],
+                ["浮层与设置", "原生 GPUI，不是 WKWebView"],
                 ["云端账号", "不需要"],
                 ["AI 或云端补全", "无"],
                 ["源代码", "开源"],

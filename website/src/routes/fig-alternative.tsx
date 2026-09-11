@@ -82,6 +82,7 @@ function FigAlternativePage() {
             <tbody className="text-[#9aa4b0]">
               {[
                 ["Autocomplete engine", "Local, native macOS app"],
+                ["Overlay & settings", "Native GPUI — not WKWebView"],
                 ["Cloud account", "Not required"],
                 ["AI or cloud completions", "None"],
                 ["Source code", "Open source"],

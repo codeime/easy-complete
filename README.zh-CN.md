@@ -2,28 +2,30 @@
   <img src="./assets/logo.png" alt="Easy Complete" width="140px">
 </p>
 
-<h1 align="center">Easy Complete</h1>
+<h1 align="center">Easy Complete (Native)</h1>
 
 <p align="center">
-  <b>为 macOS 终端打造的 IDE 风格行内自动补全。</b><br/>
+  <b>为 macOS 终端打造的 IDE 风格行内自动补全——原生 GPUI，不是 WebView。</b><br/>
   一款开源、纯本地、Fig 风格的命令行补全引擎，支持 <code>zsh</code>、<code>bash</code> 与 <code>fish</code>。
 </p>
 
 <p align="center">
-  <a href="https://github.com/chen86860/easy-complete/releases"><img alt="Release" src="https://img.shields.io/github/v/release/chen86860/easy-complete?color=brightgreen"></a>
+  <a href="https://github.com/codeime/easy-complete/releases"><img alt="Release" src="https://img.shields.io/github/v/release/codeime/easy-complete?color=brightgreen"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS-lightgrey">
   <img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-orange">
+  <img alt="Native GPUI" src="https://img.shields.io/badge/UI-native%20GPUI-8A2BE2">
   <a href="#-许可证"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <a href="https://github.com/chen86860/easy-complete/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/chen86860/easy-complete?style=social"></a>
+  <a href="https://github.com/codeime/easy-complete/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/codeime/easy-complete?style=social"></a>
 </p>
 
 <p align="center">
   <a href="./README.md">English</a> · <b>简体中文</b>
 </p>
 
-**Easy Complete** 是一款 macOS 终端自动补全应用——以原生浮层窗口跟随光标，为你的 shell
-提供 IDE 风格的行内补全。它只专注于终端自动补全这一件事——是一款轻量、完全本地、
-开源的 Fig 替代品。
+**Easy Complete (Native)** 是一款 macOS 终端自动补全应用——以原生 GPUI 浮层跟随光标，
+为你的 shell 提供 IDE 风格的行内补全。补全列表和设置窗口都是真正的原生视图，不是
+WKWebView。补全引擎在本地 Rust 里运行。它只专注于终端自动补全这一件事——是一款轻量、
+完全本地、开源的 Fig 替代品。
 
 你会在输入 `git`、`npm`、`docker`、`cargo` 等数百种命令行工具时，获得类似 fish shell 的
 建议：参数、子命令、文件路径、选项，边打边补。
@@ -37,8 +39,44 @@ Mac。应用会收集匿名使用统计（打开次数、每日补全次数—�
 
 > **平台：** 仅支持 macOS。当前发布的 DMG 仅支持 Apple Silicon / ARM64。
 
+## Native
+
+本仓库是 **Easy Complete (Native)**——独立的 3.x 线，在
+[`codeime/easy-complete`](https://github.com/codeime/easy-complete)。
+不会作为 PR 合回 WebView 那个项目。
+
+补全浮层和设置窗口是 GPUI 视图（Zed 的 UI 工具包）。补全本身从不进 WebView：
+`ec_engine` 查的是构建期编好的 JSON IR，QuickJS 只在 spec hook 需要时运行
+（`postProcess`、`script`、`custom`、`generateSpec`）。
+
+WebView 那条线是 fork 源：
+[`chen86860/easy-complete`](https://github.com/chen86860/easy-complete)。
+Fig 和 Amazon Q 的浮层也是 WebView。
+
+## 性能
+
+Native 内存是 `phys_footprint`（和活动监视器同一项），用
+`./scripts/memory-usage.sh` 测。WebView 一列是上游项目
+（[`chen86860/easy-complete`](https://github.com/chen86860/easy-complete)），
+不是本仓库。Fig / Amazon Q 的体积这里没有测。
+
+| | Easy Complete (Native) | [WebView](https://github.com/chen86860/easy-complete) | Fig / Amazon Q |
+| --- | --- | --- | --- |
+| 补全浮层 | 原生 GPUI 窗口 | WKWebView | WebView |
+| 设置 | 原生 GPUI 窗口 | WKWebView 里的 React 面板 | 云端控制台 |
+| 补全引擎 | 本地 Rust + JSON IR | WebView 里的 JavaScript | 云端 / 账号 |
+| 补全是否离机 | 否 | 否 | Fig / Q 需要账号 |
+| 桌面进程内存 | 约 50 MB，稳定 | WebKit 进程 + 页面 | — |
+| 安装体积 | 约 81 MB | 约 109 MB（含用不到的 specs） | — |
+| DMG | 约 22 MB | 约 25 MB | — |
+
+Native 典型会话停在约 50 MB。安装包变小主要是因为不再打包用不到的 `bundle/specs`
+（引擎只读 `specs-ir`）。每个终端标签还有一个 `ecterm`（约 10–17 MB），空闲输入法约 7 MB。
+
 ## 目录
 
+- [Native](#native)
+- [性能](#性能)
 - [安装](#-安装)
 - [使用](#-使用)
 - [卸载](#-卸载)
@@ -50,35 +88,12 @@ Mac。应用会收集匿名使用统计（打开次数、每日补全次数—�
 
 ## ⚡️ 安装
 
-### Homebrew（推荐）
+### 下载 DMG（推荐）
 
-使用一条命令安装 Easy Complete：
+Native 构建是本仓库的 Apple Silicon DMG：
 
-```bash
-brew install --cask chen86860/tap/easy-complete
-```
-
-安装完成后，从 `/Applications` 启动 **Easy Complete**，打开设置并点击**授予辅助功能权限**，
-把 Easy Complete 拖进列表，然后重新加载 shell：
-
-```bash
-exec $SHELL
-```
-
-首次启动时，Easy Complete 会设置随附的 CLI 二进制、shell 集成和登录启动项。输入法是可选项，
-可在设置 → 行为里安装，或运行 `ec integrations install input-method`，供 Ghostty、Kitty、
-WezTerm、Zed、Alacritty 和 Otty 使用。可以运行下面的命令确认安装状态：
-
-```bash
-ec doctor
-```
-
-### 手动下载 DMG
-
-下载最新的 Apple Silicon DMG：
-
-[下载最新版 DMG](https://github.com/chen86860/easy-complete/releases/latest/download/Easy-Complete-arm64.dmg) ·
-[所有 Releases](https://github.com/chen86860/easy-complete/releases)
+[下载最新版 DMG](https://github.com/codeime/easy-complete/releases/latest/download/Easy-Complete-arm64.dmg) ·
+[所有 Releases](https://github.com/codeime/easy-complete/releases)
 
 然后：
 
@@ -92,10 +107,21 @@ ec doctor
    exec $SHELL
    ```
 
-可以运行下面的命令确认安装状态：
+首次启动时，Easy Complete 会设置随附的 CLI 二进制、shell 集成和登录启动项。输入法是可选项，
+可在设置 → 行为里安装，或运行 `ec integrations install input-method`，供 Ghostty、Kitty、
+WezTerm、Zed、Alacritty 和 Otty 使用。可以运行下面的命令确认安装状态：
 
 ```bash
 ec doctor
+```
+
+### Homebrew（原 WebView 项目）
+
+这个 cask 是 fork 源
+[chen86860/easy-complete](https://github.com/chen86860/easy-complete)，不是这条 Native 线：
+
+```bash
+brew install --cask chen86860/tap/easy-complete
 ```
 
 ### 从源码构建
@@ -103,18 +129,18 @@ ec doctor
 如果你要做开发，或需要在本机自行构建，可以克隆仓库并运行安装脚本：
 
 ```bash
-git clone https://github.com/chen86860/easy-complete.git
+git clone https://github.com/codeime/easy-complete.git
 cd easy-complete
 ./install.sh
 ```
 
 源码安装脚本会：
 
-1. 构建 Rust 二进制和 TypeScript 前端。
+1. 构建 Rust 二进制，并编译打包的补全 spec。
 2. 组装出 `Easy Complete.app` 并复制到 `/Applications`。
 3. 把 `ec` 和 `ecterm` 两个 CLI 软链到 `~/.local/bin`。
 4. 可在设置中开启**登录时启动**（macOS 13+ 使用系统登录项，macOS 12 回退到 LaunchAgent）。
-5. 配置 shell 集成。`./install.sh` 还会注册可选输入法（Homebrew / DMG 首次启动不会）。
+5. 配置 shell 集成。`./install.sh` 还会注册可选输入法（DMG 首次启动不会）。
 6. **辅助功能**需要你在 Easy Complete 设置里手动授予（必需，见下文）。
 
 完成后，重新加载你的 shell：
@@ -153,7 +179,7 @@ ec debug prompt-accessibility
 | `⇥` (Tab) / `→` | 采用高亮的建议 |
 | `Esc`           | 关闭补全浮层   |
 
-设置与引导面板（dashboard）可从**菜单栏的 Easy Complete 图标**打开。
+原生设置窗口可从**菜单栏的 Easy Complete 图标**打开。
 
 常用 CLI 命令：
 
@@ -191,7 +217,7 @@ Easy Complete 由三个相互协作的原生进程组成，通过 Unix 域套接
 
 | 二进制          | Crate         | 职责                                                                                           |
 | --------------- | ------------- | ---------------------------------------------------------------------------------------------- |
-| `easy-complete` | `fig_desktop` | 原生应用宿主——GPUI 补全浮层与设置窗口、补全引擎工作线程、系统托盘、窗口管理 |
+| `easy-complete` | `fig_desktop` | 原生应用宿主——GPUI 补全浮层与设置窗口（不是 WKWebView）、补全引擎工作线程、系统托盘、窗口管理 |
 | `ecterm`        | `figterm`     | 介于 shell 与终端模拟器之间的伪终端；拦截 shell 编辑缓冲区以驱动补全                           |
 | `ec`            | `ec_cli`      | CLI 入口——`setup`、`integrations`、`diagnostic`、`settings` 等                                 |
 

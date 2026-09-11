@@ -13,10 +13,10 @@ export const homeCopyEn: HomeCopy = {
   badge: "macOS · 100% local · open source",
   heroHeading: "Autocomplete for your macOS terminal",
   heroSubheading:
-    "Fish-shell-style suggestions for hundreds of CLIs — git, npm, docker, cargo. Native, fast, and entirely on-device.",
+    "Fish-shell-style suggestions for hundreds of CLIs — git, npm, docker, cargo. Native GPUI (not a WebView), fast, and entirely on-device.",
   downloadCta: "Download DMG",
   githubCta: "View on GitHub",
-  brewDivider: "Or install with Homebrew",
+  brewDivider: "Original WebView project (not this Native line)",
   copyLabel: "Copy",
   copiedLabel: "Copied",
   copyErrorLabel: "Try again",
@@ -44,7 +44,7 @@ export const homeCopyEn: HomeCopy = {
   howLabel: "How it works",
   howHeading: "Three processes, talking over sockets.",
   howSubheading:
-    "Native and lightweight, built in Rust. Each process owns one job and they coordinate over Unix domain sockets with Protobuf messages.",
+    "Native GPUI (not a WebView), built in Rust. Each process owns one job and they coordinate over Unix domain sockets with Protobuf messages.",
   crateLabel: "crate",
   flowShellHooks: "shell hooks → CWD · command text · cursor",
   flowInputMethod: "input-method helper → caret position (macOS)",
@@ -77,7 +77,7 @@ export const docsCopyEn: DocsCopy = {
   eyebrow: "Documentation",
   heading: "Install it, wire up your terminal, keep it working.",
   intro:
-    "Everything Easy Complete needs from you is on this page — one install command, one macOS permission, and a support list so you know which path your terminal takes.",
+    "Everything Easy Complete needs from you is on this page — the Native ARM64 DMG, one macOS permission, and a support list so you know which path your terminal takes.",
   quickStart: "Quick start",
   installGuideCta: "Full install guide",
   downloadCta: "Download DMG",

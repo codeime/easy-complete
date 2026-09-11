@@ -22,7 +22,7 @@ const featureDataZh: Array<Omit<Feature, "glyph">> = [
   },
   {
     title: "原生浮层",
-    desc: "紧贴光标的轻量原生窗口,不是靠转义序列在提示符里硬画出来的",
+    desc: "紧贴光标的 GPUI 窗口——不是 WKWebView，也不是往提示符里塞转义序列",
   },
   {
     title: "快且轻",
@@ -64,7 +64,7 @@ const reasonsZh: Reason[] = [
   {
     num: "02",
     title: "原生应用,不是插件",
-    desc: "一个真正的 macOS 应用和真正的浮层窗口,而不是往提示符里塞一串转义字符",
+    desc: "真正的 macOS 应用，GPUI 浮层和设置窗口——不是 WKWebView，也不是往提示符里塞转义字符",
   },
   {
     num: "03",
@@ -102,7 +102,7 @@ const faqsZh: Faq[] = [
   {
     question: "如何安装 Easy Complete?",
     answer:
-      "用 Easy Complete 的 Homebrew Cask 安装,或从 GitHub Releases 下载最新的 macOS DMG 并按安装指南操作",
+      "从本仓库的 GitHub Releases 下载 Native ARM64 DMG，并按安装指南操作。Homebrew cask 是原 WebView 项目（chen86860/easy-complete），不是这条 Native 线",
   },
 ];
 
@@ -110,7 +110,7 @@ const processesZh: Process[] = [
   {
     bin: "easy-complete",
     crate: "fig_desktop",
-    role: "原生应用宿主——承载补全浮层与设置面板(运行在 wry WebView 里的 React 应用)、系统托盘和窗口管理",
+    role: "原生应用宿主——GPUI 补全浮层与设置窗口（不是 WKWebView）、补全引擎工作线程、系统托盘和窗口管理",
   },
   {
     bin: "ecterm",
@@ -119,7 +119,7 @@ const processesZh: Process[] = [
   },
   {
     bin: "ec",
-    crate: "q_cli",
+    crate: "ec_cli",
     role: "命令行入口——setup、integrations、diagnostic、settings 等子命令",
   },
 ];
@@ -217,10 +217,10 @@ export const homeCopyZh: HomeCopy = {
   badge: "macOS · 100% 本地 · 开源",
   heroHeading: "为 macOS 终端而生的自动补全",
   heroSubheading:
-    "为数百种命令行工具提供 fish 风格的补全建议——git、npm、docker、cargo。原生、快速，而且完全在本机运行",
+    "为数百种命令行工具提供 fish 风格的补全建议——git、npm、docker、cargo。原生 GPUI（不是 WebView）、快速，而且完全在本机运行",
   downloadCta: "下载 DMG",
   githubCta: "在 GitHub 查看",
-  brewDivider: "或用 Homebrew 安装",
+  brewDivider: "原 WebView 项目（不是这条 Native 线）",
   copyLabel: "复制",
   copiedLabel: "已复制",
   copyErrorLabel: "重试",
@@ -246,7 +246,7 @@ export const homeCopyZh: HomeCopy = {
   howLabel: "工作原理",
   howHeading: "三个进程,通过套接字通信",
   howSubheading:
-    "用 Rust 编写,原生而轻量。每个进程只负责一件事,彼此通过 Unix 域套接字上的 Protobuf 消息协作",
+    "用 Rust 编写,原生 GPUI、轻量。每个进程只负责一件事,彼此通过 Unix 域套接字上的 Protobuf 消息协作",
   crateLabel: "crate",
   flowShellHooks: "Shell 钩子 → 当前目录 · 命令文本 · 光标",
   flowInputMethod: "输入法助手 → 光标位置(macOS)",
@@ -277,7 +277,7 @@ export const docsCopyZh: DocsCopy = {
   eyebrow: "文档",
   heading: "装好它,接上终端,让它一直好用",
   intro:
-    "Easy Complete 需要你做的事都在这一页:一条安装命令、一项 macOS 权限,以及一份支持列表,让你知道自己的终端走的是哪条路径",
+    "Easy Complete 需要你做的事都在这一页:Native ARM64 DMG、一项 macOS 权限,以及一份支持列表,让你知道自己的终端走的是哪条路径",
   quickStart: "快速开始",
   installGuideCta: "完整安装指南",
   downloadCta: "下载 DMG",

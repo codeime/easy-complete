@@ -12,7 +12,8 @@ import { DOWNLOAD_URL } from "../download.ts";
 import { LOCALE_PREFIX, type Locale } from "../i18n/types.ts";
 import type { DocsCopy } from "../i18n/types.ts";
 
-const BREW_INSTALL_COMMAND = "brew install --cask chen86860/tap/easy-complete";
+const NATIVE_QUICK_START =
+  "# Native ARM64 DMG — GitHub Releases (this repo)";
 
 function DocCard({ link }: { link: DocLink }) {
   return (
@@ -114,7 +115,7 @@ export function DocsPageView({
                 {copy.quickStart}
               </p>
               <pre className="m-0 mb-4 overflow-x-auto rounded-xl border border-[#1c232d] bg-[#0b0f15] p-3.5 font-mono text-[12.5px] leading-[1.7] text-[#cdd6e0]">
-                {BREW_INSTALL_COMMAND}
+                {NATIVE_QUICK_START}
               </pre>
               <div className="flex flex-wrap gap-3">
                 <a

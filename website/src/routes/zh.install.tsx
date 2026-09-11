@@ -60,16 +60,9 @@ function ZhInstallPage() {
           机型(M1 及以上)。发布的 DMG 仅提供 ARM64 版本。
         </GuideCallout>
 
-        <h2 className={GUIDE_HEADING}>1. 用 Homebrew 安装</h2>
+        <h2 className={GUIDE_HEADING}>1. 下载 Native DMG</h2>
         <p className={GUIDE_PARAGRAPH}>
-          一条 Homebrew 命令即可安装已签名并公证的应用,Easy Complete 的 tap
-          会自动添加:
-        </p>
-        <pre className={GUIDE_CODE}>
-          brew install --cask chen86860/tap/easy-complete
-        </pre>
-        <p className={GUIDE_PARAGRAPH}>
-          想手动安装?下载最新的签名 DMG,打开后把{" "}
+          Easy Complete (Native) 是本仓库的 ARM64 DMG。打开后把{" "}
           <strong className="text-[#d6dee8]">Easy Complete.app</strong>{" "}
           拖入「应用程序」文件夹即可。
         </p>
@@ -78,9 +71,22 @@ function ZhInstallPage() {
             href={DOWNLOAD_URL}
             className="inline-flex rounded-[10px] bg-(--accent) px-5 py-3 font-semibold text-[#06140a] transition hover:brightness-110"
           >
-            改为下载 ARM64 版 DMG
+            下载 ARM64 版 DMG
           </a>
         </p>
+        <p className={GUIDE_PARAGRAPH}>
+          Homebrew cask 是原 WebView 项目{" "}
+          <a
+            href="https://github.com/chen86860/easy-complete"
+            className="text-(--accent) underline decoration-(--accent-line) underline-offset-2"
+          >
+            chen86860/easy-complete
+          </a>
+          ，不是这条 Native 线:
+        </p>
+        <pre className={GUIDE_CODE}>
+          brew install --cask chen86860/tap/easy-complete
+        </pre>
 
         <h2 className={GUIDE_HEADING}>2. 启动 Easy Complete</h2>
         <GuideList>
@@ -133,7 +139,7 @@ function ZhInstallPage() {
         </p>
         <pre
           className={GUIDE_CODE}
-        >{`git clone https://github.com/chen86860/easy-complete.git
+        >{`git clone https://github.com/codeime/easy-complete.git
 cd easy-complete
 ./install.sh`}</pre>
 

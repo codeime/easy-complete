@@ -1,6 +1,6 @@
 // Page content, ported verbatim from the Claude Design source (Easy Complete.dc.html).
 
-export const GITHUB_URL = "https://github.com/chen86860/easy-complete";
+export const GITHUB_URL = "https://github.com/codeime/easy-complete";
 
 /** System Settings list for the Accessibility TCC toggle. macOS 27 renamed it. */
 export const AX_SETTINGS_PANE_EN =
@@ -31,7 +31,7 @@ const featureData: Omit<Feature, "glyph">[] = [
   },
   {
     title: "Native overlay",
-    desc: "A lightweight native window that floats right at your cursor — not a clunky shell hack.",
+    desc: "A GPUI window that floats at your cursor — not WKWebView, not escape codes painted into the prompt.",
   },
   {
     title: "Fast & lightweight",
@@ -79,7 +79,7 @@ export const reasons: Reason[] = [
   {
     num: "02",
     title: "Native, not a plugin",
-    desc: "A real macOS app with a true overlay window, not a string of escape codes painted into your prompt.",
+    desc: "A real macOS app with a GPUI overlay and settings window — not WKWebView, not escape codes painted into your prompt.",
   },
   {
     num: "03",
@@ -220,7 +220,7 @@ export const faqs: Faq[] = [
   {
     question: "How do I install Easy Complete?",
     answer:
-      "Install it with the Easy Complete Homebrew Cask, or download the latest macOS DMG from GitHub Releases and follow the install guide.",
+      "Download the Native ARM64 DMG from this repository's GitHub Releases and follow the install guide. The Homebrew cask is the original WebView project (chen86860/easy-complete), not this Native line.",
   },
 ];
 
@@ -348,7 +348,7 @@ export const processes: Process[] = [
   {
     bin: "easy-complete",
     crate: "fig_desktop",
-    role: "Native app host — owns the autocomplete overlay and dashboard (React apps in wry WebViews), system tray and window management.",
+    role: "Native app host — GPUI overlay and settings (not WKWebView), completion engine worker, system tray and window management.",
   },
   {
     bin: "ecterm",
@@ -357,7 +357,7 @@ export const processes: Process[] = [
   },
   {
     bin: "ec",
-    crate: "q_cli",
+    crate: "ec_cli",
     role: "CLI entry point — setup, integrations, diagnostic, settings and more.",
   },
 ];
