@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v3.0.0-beta.7
 
 - 变更：完成设置页保留输入法一项，并标明非必选
 

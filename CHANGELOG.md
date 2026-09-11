@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v3.0.0-beta.7
 
 - change: Finish Setup keeps the Input Method row and labels it optional
 
