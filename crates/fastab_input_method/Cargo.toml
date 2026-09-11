@@ -1,0 +1,62 @@
+[package]
+name = "fastab_input_method"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+publish.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.bundle]
+bundle_name = "EasyCompleteInputMethod"
+bundle_identifier = "app.fastab.inputmethod"
+input_source_identifier = "app.fastab.inputmethod"
+invisible_in_system_ui = true
+input_method_type = "palette"
+
+[build-dependencies]
+plist = "1.7.1"
+serde.workspace = true
+toml.workspace = true
+apple-bundle = "0.1.4"
+
+# Kept deliberately small. This process exists to answer one caret query per
+# keystroke and must stay resident for as long as a terminal holds an IMK
+# connection to it, so it links no part of the desktop stack: `fastab_ipc`,
+# `fastab_proto`, `fastab_log`, `fastab_util` and `macos-utils` between them pull tokio,
+# prost, tracing-subscriber, regex and sysinfo. The pieces actually needed —
+# the socket path, the caret frame, the terminal list and a log file — are
+# reimplemented here and pinned to their originals by tests in `dev-dependencies`.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = { workspace = true }
+# A leaf crate over CoreFoundation, which this process already links for TIS.
+# Shared with `fastab_integrations` so the HIToolbox palette write has one
+# implementation: an install runs both, and two whole-domain rewrites raced.
+fastab_hitoolbox = { path = "../fastab_hitoolbox" }
+libc.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSResponder",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSBundle",
+    "NSDistributedNotificationCenter",
+    "NSGeometry",
+    "NSNotification",
+    "NSObject",
+    "NSRange",
+    "NSString",
+    "NSThread",
+] }
+objc2-input-method-kit = { workspace = true, features = [
+    "IMKServer",
+    "IMKInputController",
+] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+fastab_proto.workspace = true
+fastab_util.workspace = true

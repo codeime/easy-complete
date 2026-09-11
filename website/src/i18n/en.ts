@@ -24,7 +24,7 @@ export const homeCopyEn: HomeCopy = {
   featuresSubheading:
     "One job, done well — no chat, no AI calls, no cloud completions.",
 
-  whyLabel: "Why Easy Complete",
+  whyLabel: "Why Fastab",
   whyHeading: "Opinionated, on purpose",
 
   terminalsLabel: "Supported terminals",
@@ -51,7 +51,7 @@ export const homeCopyEn: HomeCopy = {
   docsLabel: "Docs",
   docsHeading: "Get from download to first completion.",
   docsSubheading:
-    "Install Easy Complete, check which terminals are supported, set up cursor tracking for Ghostty, or fix a shell integration — without digging through the repository.",
+    "Install Fastab, check which terminals are supported, set up cursor tracking for Ghostty, or fix a shell integration — without digging through the repository.",
   docsCta: "Browse the docs",
 
   ctaHeading: "Stop memorizing flags",
@@ -72,7 +72,7 @@ export const docsCopyEn: DocsCopy = {
   eyebrow: "Documentation",
   heading: "Install it, wire up your terminal, keep it working.",
   intro:
-    "Everything Easy Complete needs from you is on this page — the Native ARM64 DMG, one macOS permission, and a support list so you know which path your terminal takes.",
+    "Everything Fastab needs from you is on this page — the Native ARM64 DMG, one macOS permission, and a support list so you know which path your terminal takes.",
   quickStart: "Quick start",
   installGuideCta: "Full install guide",
   downloadCta: "Download DMG",
@@ -83,7 +83,7 @@ export const docsCopyEn: DocsCopy = {
   newBadge: "New",
   terminalsCalloutLead: `New in v2.1.0 — ${newTerminals.join(" and ")}.`,
   terminalsCalloutBody:
-    "Otty gets input-method cursor tracking, and Easy Complete now coexists with Otty-managed shell rc files instead of reporting its own integration as broken. ChatGPT (Codex) sessions are tracked through xterm.js caret detection, the same path VS Code uses.",
+    "Otty gets input-method cursor tracking, and Fastab now coexists with Otty-managed shell rc files instead of reporting its own integration as broken. ChatGPT (Codex) sessions are tracked through xterm.js caret detection, the same path VS Code uses.",
   docSections,
   terminalSupport,
 };

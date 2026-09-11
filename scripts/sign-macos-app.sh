@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_DISPLAY="Easy Complete"
+APP_DISPLAY="Fastab"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="${1:-${REPO_DIR}/build/${APP_DISPLAY}.app}"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
@@ -32,9 +32,9 @@ sign_deep_if_exists() {
 }
 
 sign_deep_if_exists "$APP_PATH/Contents/Frameworks/Sparkle.framework"
-sign_if_exists "$APP_PATH/Contents/MacOS/ec"
-sign_if_exists "$APP_PATH/Contents/MacOS/ecterm"
-sign_if_exists "$APP_PATH/Contents/MacOS/easy-complete"
+sign_if_exists "$APP_PATH/Contents/MacOS/ftab"
+sign_if_exists "$APP_PATH/Contents/MacOS/fastabterm"
+sign_if_exists "$APP_PATH/Contents/MacOS/fastab"
 sign_deep_if_exists "$APP_PATH/Contents/Helpers/EasyCompleteInputMethod.app"
 codesign "${codesign_args[@]}" "$APP_PATH"
 

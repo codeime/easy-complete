@@ -3,9 +3,9 @@ import { DocsPageView } from "../components/DocsPageView.tsx";
 import { docsCopyZh } from "../i18n/zh.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "Easy Complete 文档 — 安装、终端支持与故障排查";
+const TITLE = "Fastab 文档 — 安装、终端支持与故障排查";
 const DESCRIPTION =
-  "Easy Complete 使用文档:在 macOS 上安装、完整的终端支持列表、Ghostty 光标跟踪、故障排查与隐私说明。";
+  "Fastab 使用文档:在 macOS 上安装、完整的终端支持列表、Ghostty 光标跟踪、故障排查与隐私说明。";
 
 const ALTERNATES = [
   { locale: "en" as const, path: "/docs" },

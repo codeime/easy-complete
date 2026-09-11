@@ -59,7 +59,7 @@ printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
 
 [ -f "$APPCAST_DIR/appcast.xml" ] || { echo "error: appcast.xml was not generated" >&2; exit 1; }
 
-# Sparkle derives delta names from the app bundle display name ("Easy Complete")
+# Sparkle derives delta names from the app bundle display name ("Fastab")
 # and writes files with spaces on disk. GitHub normalizes those spaces to dots in
 # release asset names, so normalize the files ourselves and keep the appcast URLs
 # aligned with the exact names uploaded to the release.

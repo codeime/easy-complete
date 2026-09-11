@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_PATH="${1:-build/Easy Complete.app}"
+APP_PATH="${1:-build/Fastab.app}"
 LICENSE_DIR="${APP_PATH}/Contents/Resources/Licenses"
 
 test -f "${LICENSE_DIR}/LICENSE"

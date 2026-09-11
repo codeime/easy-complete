@@ -1,20 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Build & assemble Easy Complete.app ──────────────────────────────────────
+# ── Build & assemble Fastab.app ─────────────────────────────────────────────
 #
 # Builds the Rust binaries and TypeScript frontend, then assembles a complete
-# `build/Easy Complete.app` bundle. Does NOT install to /Applications or touch
+# `build/Fastab.app` bundle. Does NOT install to /Applications or touch
 # any system state — that is install.sh's job. This script is the single source
 # of truth for how the .app is put together, shared by install.sh and CI.
 #
-# Output: build/Easy Complete.app  (ad-hoc code-signed)
+# Output: build/Fastab.app  (ad-hoc code-signed)
 
-APP_NAME="easy-complete"          # binary / process name (no spaces)
-APP_DISPLAY="Easy Complete"       # human-readable / bundle directory name
-BUNDLE_ID="dev.emmmm.easy-complete"
+APP_NAME="fastab"                 # binary / process name (no spaces)
+APP_DISPLAY="Fastab"              # human-readable / bundle directory name
+BUNDLE_ID="app.fastab"
 APP_CATEGORY="public.app-category.productivity"   # Finder / Launchpad "Developer Tools"
-COPYRIGHT="${COPYRIGHT:-© 2026 Easy Complete contributors}"
+COPYRIGHT="${COPYRIGHT:-© 2026 Fastab contributors}"
 DEFAULT_SPARKLE_APPCAST_URL="https://github.com/codeime/easy-complete/releases/latest/download/appcast.xml"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 
@@ -33,7 +33,7 @@ info() { echo -e "${GREEN}==>${NC} $*"; }
 cd "$REPO_DIR"
 
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
-  echo "error: Easy Complete release bundles must be built on Apple Silicon macOS" >&2
+  echo "error: Fastab release bundles must be built on Apple Silicon macOS" >&2
   exit 1
 fi
 
@@ -52,15 +52,10 @@ else
 fi
 
 info "Building Rust binaries (profile: ${CARGO_PROFILE})..."
-# POSTHOG_ENDPOINT and POSTHOG_API_KEY are baked in at compile time via option_env!().
-# Set both before running this script to enable telemetry, e.g.:
-#   POSTHOG_ENDPOINT=https://analytics.example.com/capture/ \
-#   POSTHOG_API_KEY=phc_xxx \
-#   ./scripts/build-app.sh
-# Either being unset disables telemetry silently.
-POSTHOG_ENDPOINT="${POSTHOG_ENDPOINT:-}" \
-POSTHOG_API_KEY="${POSTHOG_API_KEY:-}" \
-cargo build --profile "$CARGO_PROFILE" -p fig_desktop -p figterm -p ec_cli -p fig_input_method
+# POSTHOG_ENDPOINT and POSTHOG_API_KEY are unused placeholders; init ignores them.
+POSTHOG_ENDPOINT= \
+POSTHOG_API_KEY= \
+cargo build --profile "$CARGO_PROFILE" -p fastab_desktop -p fastabterm -p fastab_cli -p fastab_input_method
 
 info "Assembling '${APP_DISPLAY}.app'..."
 rm -rf "$STAGING_BUNDLE"
@@ -134,12 +129,12 @@ ${SPARKLE_PUBLIC_KEY_ENTRY}    <key>SUEnableInstallerLauncherService</key>
 PLIST
 
 cp "${TARGET_DIR}/${APP_NAME}" "$MACOS_DIR/"
-cp "${TARGET_DIR}/ec"          "$MACOS_DIR/"
-cp "${TARGET_DIR}/ecterm"      "$MACOS_DIR/"
+cp "${TARGET_DIR}/ftab"        "$MACOS_DIR/"
+cp "${TARGET_DIR}/fastabterm"  "$MACOS_DIR/"
 
 cp themes/*.json                       "${RESOURCES_DIR}/themes/"
 # Only specs-ir ships. bundle/specs is build-time input: it feeds the IR compiler
-# above, and ec_gpui embeds its icons with include_bytes!. The .app never reads it.
+# above, and fastab_gpui embeds its icons with include_bytes!. The .app never reads it.
 if [ -d "${REPO_DIR}/bundle/specs-ir" ]; then
   cp -R bundle/specs-ir                "${RESOURCES_DIR}/specs-ir"
 fi
@@ -158,9 +153,9 @@ cp LICENSE NOTICE THIRD_PARTY_NOTICES.txt "$LICENSES_DIR/"
 IM_APP="${STAGING_BUNDLE}/Contents/Helpers/EasyCompleteInputMethod.app"
 mkdir -p "${IM_APP}/Contents/MacOS"
 mkdir -p "${IM_APP}/Contents/Resources"
-cp "${TARGET_DIR}/fig_input_method"   "${IM_APP}/Contents/MacOS/"
-cp "crates/fig_input_method/Info.plist" "${IM_APP}/Contents/"
-cp crates/fig_input_method/resources/*  "${IM_APP}/Contents/Resources/" 2>/dev/null || true
+cp "${TARGET_DIR}/fastab_input_method"   "${IM_APP}/Contents/MacOS/"
+cp "crates/fastab_input_method/Info.plist" "${IM_APP}/Contents/"
+cp crates/fastab_input_method/resources/*  "${IM_APP}/Contents/Resources/" 2>/dev/null || true
 
 while IFS= read -r -d '' binary; do
   if file -b "$binary" | grep -q "Mach-O"; then
@@ -204,7 +199,7 @@ cat > "${STAGING_BUNDLE}/Contents/Info.plist" <<PLIST
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
     <!--
-      macOS Tahoe spawns an "AutoFill (Easy Complete)" helper that heuristically
+      macOS Tahoe spawns an "AutoFill (Fastab)" helper that heuristically
       scans text fields for one-time codes. This app never marks fields as
       one-time-code, so the helper is pure overhead. Documented Apple key:
       https://developer.apple.com/documentation/bundleresources/information-property-list/nsautofillrequirestextcontenttypeforonetimecodeonmac
@@ -220,7 +215,7 @@ cat > "${STAGING_BUNDLE}/Contents/Info.plist" <<PLIST
             <string>${APP_DISPLAY} URL</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>ec</string>
+                <string>fastab</string>
             </array>
         </dict>
     </array>
@@ -230,7 +225,7 @@ ${SPARKLE_PLIST_ENTRIES}
 PLIST
 
 # Copy app icon to Resources
-cp "${REPO_DIR}/crates/fig_desktop/icons/icon.icns" "${RESOURCES_DIR}/icon.icns"
+cp "${REPO_DIR}/crates/fastab_desktop/icons/icon.icns" "${RESOURCES_DIR}/icon.icns"
 
 # ── 3. Ad-hoc code sign ───────────────────────────────────────────────────────
 # Release builds replace this with Developer ID signing in CI.

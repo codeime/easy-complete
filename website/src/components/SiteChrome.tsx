@@ -43,14 +43,14 @@ const FOOTER_LABELS: Record<
  * followable — `rel="noreferrer"` would still pass link equity, but there's no
  * reason to hide the referrer between two properties we own. Paired with the
  * `Organization` node in `seo.tsx`, it lets crawlers confirm that
- * easy-complete.emmmm.dev and tools.emmmm.dev are the same publisher instead of
+ * fastab.app and tools.emmmm.dev are the same publisher instead of
  * guessing from a one-way link.
  */
 const PUBLISHER_SITE_URL = "https://tools.emmmm.dev/";
 
 const FOOTER_TAGLINE: Record<Locale, string> = {
-  en: "Easy Complete · local terminal autocomplete",
-  "zh-CN": "Easy Complete · 本地终端自动补全",
+  en: "Fastab · local terminal autocomplete",
+  "zh-CN": "Fastab · 本地终端自动补全",
 };
 
 /** URL of this page in each language that has a translation. */
@@ -265,7 +265,7 @@ export function SiteHeader({
             alt=""
             className="h-8 w-8 rounded-[9px] shadow-[0_0_24px_-12px_var(--accent)]"
           />
-          <span>Easy Complete</span>
+          <span>Fastab</span>
         </a>
 
         <nav className="ml-auto flex items-center gap-2 text-sm sm:gap-6.5">
@@ -294,7 +294,7 @@ export function SiteHeader({
                 placement: "header",
               })
             }
-            aria-label="Easy Complete on GitHub"
+            aria-label="Fastab on GitHub"
             className="inline-flex items-center gap-1.75 rounded-lg border border-[#2b333d] px-3.25 py-1.75 text-[#e6edf3] transition-colors hover:border-[#475060] hover:bg-[#141a22]"
           >
             <GitHubIcon />

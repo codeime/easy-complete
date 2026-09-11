@@ -1,0 +1,27 @@
+[package]
+name = "fastab_desktop_api"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+publish.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anstream.workspace = true
+cfg-if.workspace = true
+fastab_integrations.workspace = true
+fastab_os_shim.workspace = true
+fastab_proto.workspace = true
+fastab_settings.workspace = true
+fastab_util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[target.'cfg(target_os="macos")'.dependencies]
+macos-utils = { path = "../macos-utils" }

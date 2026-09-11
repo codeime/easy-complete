@@ -15,9 +15,9 @@ import {
 import { DOWNLOAD_URL } from "../download.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "Install Easy Complete on macOS — Terminal Autocomplete";
+const TITLE = "Install Fastab on macOS — Terminal Autocomplete";
 const DESCRIPTION =
-  "Install Easy Complete with the ARM64 DMG on Apple Silicon macOS, grant Accessibility permission, reload your shell, and verify it with ec doctor.";
+  "Install Fastab with the ARM64 DMG on Apple Silicon macOS, grant Accessibility permission, reload your shell, and verify it with ec doctor.";
 
 const ALTERNATES = [
   { locale: "en" as const, path: "/install" },
@@ -50,7 +50,7 @@ function InstallPage() {
       <GuidePage
         eyebrow="Install guide"
         title="Terminal autocomplete, installed in five minutes."
-        intro="Easy Complete runs locally on Apple Silicon Macs. Install the app, approve one macOS permission, reload your shell, and start typing."
+        intro="Fastab runs locally on Apple Silicon Macs. Install the app, approve one macOS permission, reload your shell, and start typing."
         hrefs={{ en: "/install", "zh-CN": "/zh/install" }}
       >
         <GuideCallout>
@@ -60,9 +60,9 @@ function InstallPage() {
 
         <h2 className={GUIDE_HEADING}>1. Download the Native DMG</h2>
         <p className={GUIDE_PARAGRAPH}>
-          Easy Complete (Native) is this repository&apos;s ARM64 DMG. Open it
+          Fastab (Native) is this repository&apos;s ARM64 DMG. Open it
           and drag{" "}
-          <strong className="text-[#d6dee8]">Easy Complete.app</strong> into
+          <strong className="text-[#d6dee8]">Fastab.app</strong> into
           your Applications folder.
         </p>
         <p className="mb-8">
@@ -74,10 +74,10 @@ function InstallPage() {
           </a>
         </p>
 
-        <h2 className={GUIDE_HEADING}>2. Launch Easy Complete</h2>
+        <h2 className={GUIDE_HEADING}>2. Launch Fastab</h2>
         <GuideList>
           <li>
-            Open Easy Complete from{" "}
+            Open Fastab from{" "}
             <code className="font-mono text-[#cdd6e0]">/Applications</code>.
           </li>
           <li>
@@ -90,15 +90,15 @@ function InstallPage() {
             , for Ghostty, Kitty, WezTerm, Zed, Alacritty, and Otty.
           </li>
           <li>
-            Open Settings from the menu bar icon if you want Easy Complete to
+            Open Settings from the menu bar icon if you want Fastab to
             launch at login.
           </li>
         </GuideList>
 
         <h2 className={GUIDE_HEADING}>3. Grant Accessibility permission</h2>
         <p className={GUIDE_PARAGRAPH}>
-          macOS Accessibility permission lets Easy Complete position the native
-          suggestion window beside your terminal cursor. Approve Easy Complete
+          macOS Accessibility permission lets Fastab position the native
+          suggestion window beside your terminal cursor. Approve Fastab
           at:
         </p>
         <pre className={GUIDE_CODE}>

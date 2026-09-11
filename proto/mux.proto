@@ -38,7 +38,7 @@ message Hostbound {
   reserved "ping";
 
   message Request {
-    // The session id of the figterm instance the message originated from
+    // The session id of the fastabterm instance the message originated from
     string session_id = 1;
     // A message id that all responses will share
     string message_id = 2;
@@ -53,7 +53,7 @@ message Hostbound {
   }
 
   message Response {
-    // The session id of the figterm instance the message originated from
+    // The session id of the fastabterm instance the message originated from
     string session_id = 1;
     // A message id that all responses will share
     string message_id = 2;
@@ -75,7 +75,7 @@ message Clientbound {
   reserved "response", "pong";
 
   message Request {
-    // The session id of the figterm instance the message will be sent to
+    // The session id of the fastabterm instance the message will be sent to
     string session_id = 1;
     // A message id that all responses will share
     string message_id = 2;

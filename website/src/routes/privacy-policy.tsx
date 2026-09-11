@@ -4,12 +4,12 @@ import { GITHUB_URL } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
 const PRIVACY_DESCRIPTION =
-  "What anonymous usage data Easy Complete collects, what it never collects, and how to turn telemetry off.";
+  "What anonymous usage data Fastab collects, what it never collects, and how to turn telemetry off.";
 
 export const Route = createFileRoute("/privacy-policy")({
   head: () =>
     pageHead({
-      title: "Privacy Policy — Easy Complete",
+      title: "Privacy Policy — Fastab",
       description: PRIVACY_DESCRIPTION,
       path: "/privacy-policy",
     }),
@@ -71,7 +71,7 @@ function PrivacyPage() {
     <div className="min-h-screen bg-[#0a0d12] text-[#e6edf3]">
       <SeoJsonLd
         data={guideSchema({
-          title: "Privacy Policy — Easy Complete",
+          title: "Privacy Policy — Fastab",
           description: PRIVACY_DESCRIPTION,
           path: "/privacy-policy",
           crumbLabel: "Privacy Policy",
@@ -85,7 +85,7 @@ function PrivacyPage() {
           className="mb-10 font-mono text-xs text-[#65707d]"
         >
           <a href="/" className="transition-colors hover:text-(--accent)">
-            Easy Complete
+            Fastab
           </a>
           <span className="px-2">/</span>
           <a href="/docs" className="transition-colors hover:text-(--accent)">
@@ -101,7 +101,7 @@ function PrivacyPage() {
           Your commands never leave your Mac.
         </h1>
         <p className={PARAGRAPH}>
-          Easy Complete's autocomplete engine runs entirely on-device: parsing
+          Fastab's autocomplete engine runs entirely on-device: parsing
           your command line, generating suggestions, and rendering the overlay
           all happen locally, with no account and no cloud calls. Separately
           from that, the app collects a small set of{" "}
@@ -180,7 +180,7 @@ function PrivacyPage() {
           </a>
           . PostHog derives a coarse location (country/city) from the request IP
           at ingestion; the IP address itself is not stored on events. Data is
-          used solely to understand aggregate usage of Easy Complete and is
+          used solely to understand aggregate usage of Fastab and is
           never sold or shared.
         </p>
 
@@ -201,10 +201,10 @@ function PrivacyPage() {
           The telemetry implementation is open source — you can audit exactly
           what is sent in the{" "}
           <a
-            href={`${GITHUB_URL}/tree/main/crates/fig_telemetry`}
+            href={`${GITHUB_URL}/tree/main/crates/fastab_telemetry`}
             className="text-(--accent) underline decoration-(--accent-line) underline-offset-4"
           >
-            fig_telemetry crate
+            fastab_telemetry crate
           </a>
           . For anything else, open an issue on{" "}
           <a
@@ -216,7 +216,7 @@ function PrivacyPage() {
           .
         </p>
         <p className="mt-10 font-mono text-[12.5px] text-[#5d6773]">
-          Last updated: July 2026 · Applies to Easy Complete v2.0.41 and later
+          Last updated: July 2026 · Applies to Fastab v2.0.41 and later
         </p>
       </main>
 

@@ -2,7 +2,7 @@
   "name": "@easy-complete/fuzzysort",
   "version": "0.1.0",
   "license": "MIT",
-  "author": "Easy Complete Contributors",
+  "author": "Fastab Contributors",
   "repository": "https://github.com/chen86860/easy-complete",
   "type": "module",
   "exports": "./fuzzysort.js",

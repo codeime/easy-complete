@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const outfile = path.resolve(root, "../../../crates/ec_engine/js/engine.bundled.js");
+const outfile = path.resolve(root, "../../../crates/fastab_engine/js/engine.bundled.js");
 
 await esbuild.build({
   absWorkingDir: path.resolve(root, ".."),

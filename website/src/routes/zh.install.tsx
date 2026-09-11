@@ -15,9 +15,9 @@ import {
 import { DOWNLOAD_URL } from "../download.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "在 macOS 上安装 Easy Complete — 终端自动补全";
+const TITLE = "在 macOS 上安装 Fastab — 终端自动补全";
 const DESCRIPTION =
-  "在 Apple Silicon Mac 上下载 ARM64 DMG 安装 Easy Complete,授予辅助功能权限,重载 Shell,并用 ec doctor 验证安装。";
+  "在 Apple Silicon Mac 上下载 ARM64 DMG 安装 Fastab,授予辅助功能权限,重载 Shell,并用 ec doctor 验证安装。";
 
 const ALTERNATES = [
   { locale: "en" as const, path: "/install" },
@@ -51,7 +51,7 @@ function ZhInstallPage() {
       <GuidePage
         eyebrow="安装指南"
         title="五分钟装好终端自动补全。"
-        intro="Easy Complete 在 Apple Silicon Mac 上本地运行。装好应用,批准一项 macOS 权限,重载 Shell,然后就可以开始输入了。"
+        intro="Fastab 在 Apple Silicon Mac 上本地运行。装好应用,批准一项 macOS 权限,重载 Shell,然后就可以开始输入了。"
         locale="zh-CN"
         hrefs={{ en: "/install", "zh-CN": "/zh/install" }}
       >
@@ -62,8 +62,8 @@ function ZhInstallPage() {
 
         <h2 className={GUIDE_HEADING}>1. 下载 Native DMG</h2>
         <p className={GUIDE_PARAGRAPH}>
-          Easy Complete (Native) 是本仓库的 ARM64 DMG。打开后把{" "}
-          <strong className="text-[#d6dee8]">Easy Complete.app</strong>{" "}
+          Fastab (Native) 是本仓库的 ARM64 DMG。打开后把{" "}
+          <strong className="text-[#d6dee8]">Fastab.app</strong>{" "}
           拖入「应用程序」文件夹即可。
         </p>
         <p className="mb-8">
@@ -75,11 +75,11 @@ function ZhInstallPage() {
           </a>
         </p>
 
-        <h2 className={GUIDE_HEADING}>2. 启动 Easy Complete</h2>
+        <h2 className={GUIDE_HEADING}>2. 启动 Fastab</h2>
         <GuideList>
           <li>
             从 <code className="font-mono text-[#cdd6e0]">/Applications</code>{" "}
-            打开 Easy Complete。
+            打开 Fastab。
           </li>
           <li>
             首次启动会安装随附的命令行工具和 Shell 集成。输入法是可选项，可稍后在「设置
@@ -96,8 +96,8 @@ function ZhInstallPage() {
 
         <h2 className={GUIDE_HEADING}>3. 授予辅助功能权限</h2>
         <p className={GUIDE_PARAGRAPH}>
-          macOS 的辅助功能权限让 Easy Complete
-          能把原生建议窗口摆在终端光标旁边。请在这里勾选 Easy Complete:
+          macOS 的辅助功能权限让 Fastab
+          能把原生建议窗口摆在终端光标旁边。请在这里勾选 Fastab:
         </p>
         <pre className={GUIDE_CODE}>
           {`${AX_SETTINGS_PANE_ZH}\n${AX_SETTINGS_PANE_ZH_LEGACY}`}

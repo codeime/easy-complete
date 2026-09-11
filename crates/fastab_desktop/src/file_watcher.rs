@@ -1,0 +1,167 @@
+use std::sync::Arc;
+
+use fastab_proto::fig::notification::Type as NotificationEnum;
+use fastab_proto::fig::{NotificationType, SettingsChangedNotification};
+use fastab_settings::JsonStore;
+use fastab_util::directories;
+use notify::{EventKind, RecursiveMode, Watcher};
+use serde_json::{Map, Value};
+use tracing::{debug, error, trace};
+
+use crate::Event;
+use crate::EventLoopProxy;
+use crate::notification_bus::NOTIFICATION_BUS;
+use crate::webview::notification::WebviewNotificationsState;
+
+pub async fn setup_listeners(notifications_state: Arc<WebviewNotificationsState>, proxy: EventLoopProxy) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let mut watcher = notify::recommended_watcher(move |res| match res {
+        Ok(event) => {
+            if let Err(err) = tx.send(event) {
+                error!(%err, "failed to send notify event");
+            }
+        },
+        Err(err) => error!(%err, "notify watcher"),
+    })
+    .unwrap();
+
+    let settings_path = match directories::settings_path() {
+        Ok(settings_path) => match settings_path.parent() {
+            Some(settings_dir) => match watcher.watch(settings_dir, RecursiveMode::NonRecursive) {
+                Ok(()) => {
+                    trace!("watching settings file at {settings_dir:?}");
+                    Some(settings_path)
+                },
+                Err(err) => {
+                    error!(%err, "failed to watch settings dir");
+                    None
+                },
+            },
+            None => {
+                error!("failed to get settings file dir");
+                None
+            },
+        },
+        Err(err) => {
+            error!(%err, "failed to get settings file path");
+            None
+        },
+    };
+
+    tokio::spawn(async move {
+        let _watcher = watcher;
+
+        let mut prev_settings = match fastab_settings::OldSettings::load_from_file() {
+            Ok(map) => map,
+            Err(err) => {
+                error!(?err, "failed to initialize settings");
+                Map::new()
+            },
+        };
+
+        #[cfg(target_os = "linux")]
+        {
+            use crate::Event;
+            use crate::event::WindowEvent;
+            use crate::webview::AUTOCOMPLETE_ID;
+            proxy
+                .send_event(Event::WindowEvent {
+                    window_id: AUTOCOMPLETE_ID,
+                    window_event: WindowEvent::SetEnabled(
+                        !prev_settings
+                            .get("autocomplete.disable")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                    ),
+                })
+                .map_err(|err| error!(?err, "failed initializing autocomplete.disable state"))
+                .ok();
+        }
+
+        while let Some(event) = rx.recv().await {
+            trace!(?event, "Settings event");
+
+            if let Some(settings_path) = &settings_path {
+                if event.paths.contains(settings_path) {
+                    if let EventKind::Create(_) | EventKind::Modify(_) = event.kind {
+                        match fastab_settings::OldSettings::load_from_file() {
+                            Ok(settings) => {
+                                debug!("Settings file changed");
+
+                                if let Err(err) = fastab_settings::settings::init_global() {
+                                    error!(%err, "failed to reload settings into memory");
+                                }
+                                proxy
+                                    .send_event(Event::ReloadCredentials)
+                                    .map_err(|err| error!(?err, "failed to refresh overlay after settings change"))
+                                    .ok();
+
+                                notifications_state
+                                    .broadcast_notification_all(
+                                        &NotificationType::NotifyOnSettingsChange,
+                                        fastab_proto::fig::Notification {
+                                            r#type: Some(NotificationEnum::SettingsChangedNotification(
+                                                SettingsChangedNotification {
+                                                    json_blob: serde_json::to_string(&settings).ok(),
+                                                },
+                                            )),
+                                        },
+                                        &proxy,
+                                    )
+                                    .await
+                                    .map_err(|err| error!(?err, "failed to broadcast settings change"))
+                                    .ok();
+
+                                json_map_diff(
+                                    &prev_settings,
+                                    &settings,
+                                    |key, value| {
+                                        debug!(%key, %value, "Setting added");
+                                        NOTIFICATION_BUS.send_settings_new(key, value);
+                                    },
+                                    |key, old, new| {
+                                        debug!(%key, %old, %new, "Setting change");
+                                        NOTIFICATION_BUS.send_settings_changed(key, new);
+                                    },
+                                    |key, value| {
+                                        debug!(%key, %value, "Setting removed");
+                                        NOTIFICATION_BUS.send_settings_remove(key);
+                                    },
+                                );
+
+                                prev_settings = settings;
+                            },
+                            Err(err) => error!(%err, "Failed to get settings"),
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+// Diffs the old and new settings and calls the appropriate callbacks
+fn json_map_diff(
+    map_a: &Map<String, Value>,
+    map_b: &Map<String, Value>,
+    on_new: impl Fn(&str, &Value),
+    on_changed: impl Fn(&str, &Value, &Value),
+    on_removed: impl Fn(&str, &Value),
+) {
+    for (key, value) in map_a {
+        if let Some(other_value) = map_b.get(key) {
+            if value != other_value {
+                on_changed(key, value, other_value);
+            }
+        } else {
+            on_removed(key, value);
+        }
+    }
+
+    for (key, value) in map_b {
+        if !map_a.contains_key(key) {
+            on_new(key, value);
+        }
+    }
+}

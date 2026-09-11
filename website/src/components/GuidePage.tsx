@@ -52,7 +52,7 @@ export function GuidePage({
             href={homePath}
             className="transition-colors hover:text-(--accent)"
           >
-            Easy Complete
+            Fastab
           </a>
           <span className="px-2">/</span>
           <a

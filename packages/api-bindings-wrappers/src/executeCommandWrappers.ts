@@ -59,7 +59,7 @@ export const executeLoginShell = async ({
   }
   const flags = window.fig.constants?.os === "linux" ? "-lc" : "-lic";
 
-  // When Process.run goes through figterm it does not apply the local
+  // When Process.run goes through fastabterm it does not apply the local
   // set_fig_vars() path, so without this the child is an interactive login
   // shell that re-enters Easy Complete hooks and may exec ecterm — hang/empty
   // output for callers like firstTokenSpec. Marking the process as launched by

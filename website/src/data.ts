@@ -1,4 +1,4 @@
-// Page content, ported verbatim from the Claude Design source (Easy Complete.dc.html).
+// Page content, ported verbatim from the Claude Design source (Fastab.dc.html).
 
 export const GITHUB_URL = "https://github.com/codeime/easy-complete";
 
@@ -98,7 +98,7 @@ export const reasons: Reason[] = [
  * They differ in how the caret is located, which is what positions the overlay:
  * the bundled macOS input method, xterm.js caret detection inside Electron
  * hosts, or the macOS Accessibility API. Mirrors the capability matrix in
- * `crates/fig_util/src/terminal.rs`.
+ * `crates/fastab_util/src/terminal.rs`.
  */
 export type TerminalIntegration = "input-method" | "xterm" | "accessibility";
 
@@ -117,38 +117,38 @@ export const terminalSupport: TerminalSupport[] = [
     name: "Ghostty",
     slug: "ghostty",
     integration: "input-method",
-    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
+    note: "Optional input method from Settings → Behavior, or `ftab integrations install input-method`.",
   },
   {
     name: "Otty",
     slug: "otty",
     integration: "input-method",
-    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`. Easy Complete leaves Otty's own shell-integration block at the end of your rc file alone.",
+    note: "Optional input method from Settings → Behavior, or `ftab integrations install input-method`. Fastab leaves Otty's own shell-integration block at the end of your rc file alone.",
     isNew: true,
   },
   {
     name: "Kitty",
     slug: "kitty",
     integration: "input-method",
-    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
+    note: "Optional input method from Settings → Behavior, or `ftab integrations install input-method`.",
   },
   {
     name: "WezTerm",
     slug: "wezterm",
     integration: "input-method",
-    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
+    note: "Optional input method from Settings → Behavior, or `ftab integrations install input-method`.",
   },
   {
     name: "Alacritty",
     slug: "alacritty",
     integration: "input-method",
-    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
+    note: "Optional input method from Settings → Behavior, or `ftab integrations install input-method`.",
   },
   {
     name: "Zed",
     slug: "zed",
     integration: "input-method",
-    note: "Optional input method from Settings → Behavior, or `ec integrations install input-method`.",
+    note: "Optional input method from Settings → Behavior, or `ftab integrations install input-method`.",
   },
   {
     name: "JetBrains IDEs",
@@ -198,27 +198,27 @@ export interface Faq {
 
 export const faqs: Faq[] = [
   {
-    question: "What is Easy Complete?",
+    question: "What is Fastab?",
     answer:
-      "Easy Complete is a macOS terminal autocomplete app that shows IDE-style inline suggestions for command-line tools.",
+      "Fastab is a macOS terminal autocomplete app that shows IDE-style inline suggestions for command-line tools.",
   },
   {
-    question: "Does Easy Complete run locally?",
+    question: "Does Fastab run locally?",
     answer:
       "Yes. Autocomplete runs fully on-device — no account, no cloud calls, no AI requests, and your commands never leave your Mac.",
   },
   {
-    question: "What data does Easy Complete collect?",
+    question: "What data does Fastab collect?",
     answer:
-      "Only anonymous usage statistics: app opens, install/update events, and daily completion counts, tied to a random device ID. Command content, completion text, and file paths are never collected. Disable it any time with `ec telemetry disable` — see the Privacy Policy page for the full list.",
+      "Only anonymous usage statistics: app opens, install/update events, and daily completion counts, tied to a random device ID. Command content, completion text, and file paths are never collected. Disable it any time with telemetry is off — see the Privacy Policy page for the full list.",
   },
   {
-    question: "Which terminals does Easy Complete support?",
+    question: "Which terminals does Fastab support?",
     answer:
-      "Easy Complete supports Ghostty, Otty, Kitty, WezTerm, Alacritty, Zed, iTerm2, Apple Terminal, VS Code, ChatGPT (Codex), and JetBrains IDE terminals. Otty and ChatGPT (Codex) were added in v2.1.0.",
+      "Fastab supports Ghostty, Otty, Kitty, WezTerm, Alacritty, Zed, iTerm2, Apple Terminal, VS Code, ChatGPT (Codex), and JetBrains IDE terminals. Otty and ChatGPT (Codex) were added in v2.1.0.",
   },
   {
-    question: "How do I install Easy Complete?",
+    question: "How do I install Fastab?",
     answer:
       "Download the Native ARM64 DMG from this repository's GitHub Releases and follow the install guide.",
   },
@@ -263,7 +263,7 @@ export const docSections: DocSection[] = [
     id: "terminals",
     title: "Terminal support",
     summary:
-      "Every terminal reads your command through the same shell integration — they differ in how Easy Complete finds the caret to position the overlay.",
+      "Every terminal reads your command through the same shell integration — they differ in how Fastab finds the caret to position the overlay.",
     links: [
       {
         href: "/terminals/ghostty",
@@ -275,7 +275,7 @@ export const docSections: DocSection[] = [
         href: "/terminals/otty",
         label: "Otty autocomplete",
         description:
-          "Input-method tracking, plus how Easy Complete coexists with Otty's own shell-integration block.",
+          "Input-method tracking, plus how Fastab coexists with Otty's own shell-integration block.",
       },
       {
         href: "/terminals/kitty",
@@ -346,18 +346,18 @@ export interface Process {
 
 export const processes: Process[] = [
   {
-    bin: "easy-complete",
-    crate: "fig_desktop",
+    bin: "fastab",
+    crate: "fastab_desktop",
     role: "Native app host — GPUI overlay and settings (not WKWebView), completion engine worker, system tray and window management.",
   },
   {
-    bin: "ecterm",
-    crate: "figterm",
+    bin: "fastabterm",
+    crate: "fastabterm",
     role: "Pseudoterminal between your shell and emulator; intercepts the shell edit buffer to drive completions.",
   },
   {
-    bin: "ec",
-    crate: "ec_cli",
+    bin: "ftab",
+    crate: "fastab_cli",
     role: "CLI entry point — setup, integrations, diagnostic, settings and more.",
   },
 ];

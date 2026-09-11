@@ -7,12 +7,12 @@ const HREFLANG: Record<Locale, string> = {
   "zh-CN": "zh-Hans",
 };
 
-export const SITE_NAME = "Easy Complete";
+export const SITE_NAME = "Fastab";
 /** Keep in sync with the workspace `Cargo.toml` version on each release. */
 export const APP_VERSION = "3.0.0-beta.7";
-export const HOME_TITLE = "Easy Complete (Native) — macOS Terminal Autocomplete";
+export const HOME_TITLE = "Fastab (Native) — macOS Terminal Autocomplete";
 export const HOME_DESCRIPTION =
-  "Easy Complete (Native) adds IDE-style inline autocomplete to your macOS terminal. Native GPUI overlay — not a WebView. Fast, local, open source.";
+  "Fastab (Native) adds IDE-style inline autocomplete to your macOS terminal. Native GPUI overlay — not a WebView. Fast, local, open source.";
 
 export function siteOrigin(): string {
   if (typeof window !== "undefined") {
@@ -45,7 +45,7 @@ export function pageHead({
   title,
   description,
   path,
-  imageAlt = "Easy Complete terminal autocomplete preview",
+  imageAlt = "Fastab terminal autocomplete preview",
   robots = "index, follow",
   locale = "en",
   alternates,
@@ -127,7 +127,7 @@ function publisherSchema() {
     url: "https://tools.emmmm.dev",
     email: "help@emmmm.dev",
     sameAs: [
-      "https://easy-complete.emmmm.dev/",
+      "https://fastab.app/",
       "https://github.com/codeime/easy-complete",
       "https://x.com/chen86860",
     ],
@@ -205,7 +205,7 @@ export function guideSchema({
   const docsPath = locale === "en" ? "/docs" : "/zh/docs";
   const isDocsRoot = path === docsPath;
 
-  // Mirrors the visible trail: Easy Complete / Docs / <page>.
+  // Mirrors the visible trail: Fastab / Docs / <page>.
   const trail = [
     { name: SITE_NAME, item: absoluteUrl(locale === "en" ? "/" : "/zh") },
     ...(isDocsRoot

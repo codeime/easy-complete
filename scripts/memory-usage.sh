@@ -42,12 +42,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Anchored on the installed bundle layout and on cargo's output directories so a
-# `cargo run` build is picked up too. `figterm` rewrites its process title to
+# `cargo run` build is picked up too. `fastabterm` rewrites its process title to
 # "<shell> (ecterm)", which is why it is matched on the title rather than a path.
 #
 # The negative match matters: an editor or terminal whose window happens to
 # mention this project shows up in `ps` with "easy-complete" in its title.
-readonly MATCH='Easy Complete\.app/Contents/(MacOS/easy-complete|Helpers/.*fig_input_method)|target/(dist|release|debug)/(easy-complete|figterm|ec_cli)|\(ecterm\)'
+readonly MATCH='Fastab\.app/Contents/(MacOS/(fastab|ftab)|Helpers/.*fastab_input_method)|target/(dist|release|debug)/(fastab|ftab|fastabterm|fastab_cli)|\(fastabterm\)'
 # An editor whose window title mentions this project shows up in `ps` with
 # "easy-complete" in its command line. The paths above are specific enough on
 # their own, but these are the ones actually seen in the wild.

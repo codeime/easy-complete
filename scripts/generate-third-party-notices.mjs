@@ -24,10 +24,10 @@ const outputPath = resolve(
 );
 
 const runtimeRoots = new Set([
-  "ec_cli",
-  "fig_desktop",
-  "fig_input_method",
-  "figterm",
+  "fastab_cli",
+  "fastab_desktop",
+  "fastab_input_method",
+  "fastabterm",
 ]);
 const localThirdPartyCrates = new Set([
   "accessibility",

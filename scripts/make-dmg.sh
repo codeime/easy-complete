@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Package Easy Complete.app into a distributable .dmg ──────────────────────
+# ── Package Fastab.app into a distributable .dmg ─────────────────────────────
 #
-# Expects build/Easy Complete.app to already exist (run scripts/build-app.sh
+# Expects build/Fastab.app to already exist (run scripts/build-app.sh
 # first). Produces a drag-to-install DMG with a custom background image.
 #
 # Background images (committed to the repo):
@@ -14,8 +14,8 @@ set -euo pipefail
 # Usage: scripts/make-dmg.sh [output.dmg]
 #   Default output: dist/Easy-Complete.dmg
 
-APP_DISPLAY="Easy Complete"
-VOL_NAME="Easy Complete"
+APP_DISPLAY="Fastab"
+VOL_NAME="Fastab"
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${REPO_DIR}/build/${APP_DISPLAY}.app"

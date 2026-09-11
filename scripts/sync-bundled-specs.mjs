@@ -50,7 +50,7 @@ const sourceMode = process.env.BUNDLED_SPECS_SOURCE || "dependency";
 
 const outDir =
   process.env.BUNDLED_SPECS_DIR || join(repoDir, "bundle", "specs");
-// Named spec icons to keep. `crates/ec_gpui/src/icons.rs` embeds each of these
+// Named spec icons to keep. `crates/fastab_gpui/src/icons.rs` embeds each of these
 // with include_bytes!, so the two lists have to move together. An empty list
 // keeps every icon the archive ships.
 const iconNames = Array.isArray(config.icons) ? config.icons : [];

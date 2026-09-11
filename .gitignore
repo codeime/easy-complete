@@ -53,7 +53,7 @@ run-build.sh
 .amazonq/
 *.app/
 dist/
-crates/ec_engine/js/engine.bundled.js
+crates/fastab_engine/js/engine.bundled.js
 bundle/specs-ir/
 .codex-audit
 .claude/settings.local.json

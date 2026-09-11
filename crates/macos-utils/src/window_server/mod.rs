@@ -35,16 +35,18 @@ pub use ui_element::{CGWindowLevelForKey, UIElement};
 use crate::util::NotificationCenter;
 use crate::util::notification_center::get_app_from_notification;
 
-// The last three are this app and the upstream builds it descends from, listed for the
-// same reason `own_bundle_id` exists. They stay hardcoded because `own_bundle_id` reports
-// nothing for a dev build launched outside an app bundle, and because this crate sits
-// below `fig_util` in the dependency graph so it cannot read `APP_BUNDLE_ID`.
+// The last four are this app, the previous product id, and the upstream builds it
+// descends from, listed for the same reason `own_bundle_id` exists. They stay hardcoded
+// because `own_bundle_id` reports nothing for a dev build launched outside an app
+// bundle, and because this crate sits below `fastab_util` in the dependency graph so it
+// cannot read `APP_BUNDLE_ID`.
 const BLOCKED_BUNDLE_IDS: &[&str] = &[
     "com.apple.ViewBridgeAuxiliary",
     "com.apple.notificationcenterui",
     "com.apple.WebKit.WebContent",
     "com.apple.WebKit.Networking",
     "com.apple.controlcenter",
+    "app.fastab",
     "dev.emmmm.easy-complete",
     "com.mschrage.fig",
     "com.amazon.codewhisperer",
@@ -68,7 +70,7 @@ fn own_bundle_id() -> Option<&'static str> {
 /// Electron hosts that only expose their DOM to accessibility once asked, which is what
 /// `find_x_term_caret_tree` needs to locate the xterm.js caret.
 ///
-/// Duplicates `fig_util::Terminal::is_xterm`, which cannot be used here: `fig_util`
+/// Duplicates `fastab_util::Terminal::is_xterm`, which cannot be used here: `fastab_util`
 /// depends on this crate, so the reverse would be a cycle. Keep the two in sync.
 pub const XTERM_BUNDLE_IDS: &[&str] = &[
     "com.microsoft.VSCodeInsiders",

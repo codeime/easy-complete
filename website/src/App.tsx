@@ -473,7 +473,7 @@ export function App({
           <div className="relative mx-auto mt-16 flex max-w-295 flex-wrap items-center justify-between gap-4 border-t border-[#161d25] pt-6.5 text-[13px] text-[#5d6773]">
             <span className="inline-flex items-center gap-2 font-mono">
               <img src={logoUrl} alt="" className="h-5 w-5 rounded-md" />
-              Easy Complete
+              Fastab
             </span>
             <span className="inline-flex flex-wrap items-center gap-4">
               <SiteFooterLinks locale={locale} />

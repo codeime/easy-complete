@@ -39,7 +39,7 @@ const SETTINGS_GONE_TICKS: u8 = 25;
 const NS_DRAG_OPERATION_COPY: usize = 1;
 const DRAG_CHIP_RADIUS: f64 = 10.0;
 
-/// Same mask as the overlay: click/drag must not activate Easy Complete.
+/// Same mask as the overlay: click/drag must not activate Fastab.
 const NS_WINDOW_STYLE_NONACTIVATING_PANEL: u64 = 1 << 7;
 const NS_WINDOW_ANIMATION_BEHAVIOR_NONE: i64 = 2;
 const NS_MODAL_PANEL_WINDOW_LEVEL: i64 = 8;
@@ -932,7 +932,7 @@ fn app_display_name() -> String {
             }
         }
     }
-    "Easy Complete".into()
+    "Fastab".into()
 }
 
 /// `addSubview:` retains. Drop the extra `alloc`/`new` retain so releasing
@@ -1245,13 +1245,17 @@ mod tests {
     #[test]
     fn tccutil_reset_requires_a_safe_bundle_id() {
         assert_eq!(
+            tccutil_reset_args("app.fastab"),
+            Some(["reset", "Accessibility", "app.fastab"])
+        );
+        assert_eq!(
             tccutil_reset_args("dev.emmmm.easy-complete"),
             Some(["reset", "Accessibility", "dev.emmmm.easy-complete"])
         );
         assert_eq!(tccutil_reset_args(""), None);
         assert_eq!(tccutil_reset_args("foo;rm"), None);
         assert_eq!(tccutil_reset_args("a b"), None);
-        assert!(tccutil_reset_args("dev.emmmm.easy-complete").unwrap().len() == 3);
+        assert!(tccutil_reset_args("app.fastab").unwrap().len() == 3);
     }
 
     #[test]

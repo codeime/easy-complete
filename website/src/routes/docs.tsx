@@ -3,9 +3,9 @@ import { DocsPageView } from "../components/DocsPageView.tsx";
 import { docsCopyEn } from "../i18n/en.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "Easy Complete Docs — Install, Terminals & Troubleshooting";
+const TITLE = "Fastab Docs — Install, Terminals & Troubleshooting";
 const DESCRIPTION =
-  "Documentation for Easy Complete: install on macOS, the full terminal support list, Ghostty cursor tracking, troubleshooting, and privacy.";
+  "Documentation for Fastab: install on macOS, the full terminal support list, Ghostty cursor tracking, troubleshooting, and privacy.";
 
 const ALTERNATES = [
   { locale: "en" as const, path: "/docs" },

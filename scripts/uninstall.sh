@@ -1,17 +1,22 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Easy Complete macOS uninstaller ────────────────────────────────────────
+# ── Fastab macOS uninstaller ───────────────────────────────────────────────
 
-APP_NAME="easy-complete"
-APP_DISPLAY="Easy Complete"
-BUNDLE_ID="dev.emmmm.easy-complete"
-IME_BUNDLE_ID="dev.emmmm.easy-complete.inputmethod"
+APP_NAME="fastab"
+APP_DISPLAY="Fastab"
+BUNDLE_ID="app.fastab"
+IME_BUNDLE_ID="app.fastab.inputmethod"
+PREVIOUS_APP_DISPLAY="Easy Complete"
+PREVIOUS_BUNDLE_ID="dev.emmmm.easy-complete"
+PREVIOUS_IME_BUNDLE_ID="dev.emmmm.easy-complete.inputmethod"
 
 APP_BUNDLE="/Applications/${APP_DISPLAY}.app"
+PREVIOUS_APP_BUNDLE="/Applications/${PREVIOUS_APP_DISPLAY}.app"
 LOCAL_BIN="${HOME}/.local/bin"
 LAUNCH_AGENTS="${HOME}/Library/LaunchAgents"
 PLIST_PATH="${LAUNCH_AGENTS}/${BUNDLE_ID}.plist"
+PREVIOUS_PLIST_PATH="${LAUNCH_AGENTS}/${PREVIOUS_BUNDLE_ID}.plist"
 UPSTREAM_PLIST_PATH="${LAUNCH_AGENTS}/com.amazon.codewhisperer.launcher.plist"
 INPUT_METHODS_DIR="${HOME}/Library/Input Methods"
 IME_SYMLINK="${INPUT_METHODS_DIR}/EasyCompleteInputMethod.app"
@@ -30,7 +35,7 @@ if [[ "${1:-}" != "--yes" ]]; then
   echo "  • /Applications/${APP_DISPLAY}.app"
   echo "  • ${IME_SYMLINK}"
   echo "  • ${PLIST_PATH}"
-  echo "  • ${LOCAL_BIN}/ec  and  ecterm"
+  echo "  • ${LOCAL_BIN}/ftab  and  fastabterm"
   echo "  • ${APP_SUPPORT}/"
   echo "  • ${LOGS_DIR}/"
   echo "  • Shell integration lines in ~/.zshrc / ~/.bashrc / ~/.config/fish/config.fish"
@@ -39,20 +44,20 @@ if [[ "${1:-}" != "--yes" ]]; then
   [[ "${confirm}" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 fi
 
-# ── 0. Telemetry (best-effort, respects `ec telemetry disable`) ───────────────
-if command -v ec &>/dev/null; then
-  ec telemetry track app_uninstalled 2>/dev/null || true
+# ── 0. Telemetry (best-effort, respects telemetry is off) ───────────────
+if command -v ftab &>/dev/null; then
+  ftab telemetry track app_uninstalled 2>/dev/null || true
 fi
 
 # ── 1. Uninstall integrations via CLI (must run before binary is removed) ─────
 info "Uninstalling input method integration..."
-if command -v ec &>/dev/null; then
-  ec integrations uninstall input-method 2>/dev/null || true
+if command -v ftab &>/dev/null; then
+  ftab integrations uninstall input-method 2>/dev/null || true
 fi
 
 info "Uninstalling shell integration..."
-if command -v ec &>/dev/null; then
-  ec integrations uninstall shell 2>/dev/null || true
+if command -v ftab &>/dev/null; then
+  ftab integrations uninstall shell 2>/dev/null || true
 fi
 
 # ── 2. Kill running processes ─────────────────────────────────────────────────
@@ -61,15 +66,16 @@ if [[ -x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}" ]]; then
   "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}" --unregister-login-item 2>/dev/null || true
 fi
 pkill -x "${APP_NAME}"       2>/dev/null || true
-pkill -f "fig_input_method"  2>/dev/null || true
-pkill -f "ecterm"          2>/dev/null || true
+pkill -f "fastab_input_method"  2>/dev/null || true
+pkill -f "fastabterm"          2>/dev/null || true
 sleep 0.5
 
 # ── 3. Remove login item and legacy LaunchAgents ─────────────────────────────
 info "Removing login startup entries..."
 launchctl bootout "gui/$(id -u)/${BUNDLE_ID}" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/${PREVIOUS_BUNDLE_ID}" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)/com.amazon.codewhisperer.launcher" 2>/dev/null || true
-for launch_agent in "$PLIST_PATH" "$UPSTREAM_PLIST_PATH"; do
+for launch_agent in "$PLIST_PATH" "$PREVIOUS_PLIST_PATH" "$UPSTREAM_PLIST_PATH"; do
   if [[ -f "$launch_agent" ]]; then
     launchctl unload "$launch_agent" 2>/dev/null || true
     rm -f "$launch_agent"
@@ -87,9 +93,9 @@ fi
 # the selected input-source lists — NOT `defaults delete` on the whole array,
 # which would wipe every keyboard layout and input method the user has.
 info "Removing Input Method from HIToolbox..."
-python3 - "$IME_BUNDLE_ID" <<'PY' 2>/dev/null || true
+python3 - "$IME_BUNDLE_ID" "$PREVIOUS_IME_BUNDLE_ID" <<'PY' 2>/dev/null || true
 import subprocess, plistlib, sys
-bundle_id = sys.argv[1]
+bundle_ids = set(sys.argv[1:])
 domain = "com.apple.HIToolbox"
 proc = subprocess.run(["defaults", "export", domain, "-"], capture_output=True)
 if proc.returncode != 0:
@@ -100,7 +106,7 @@ for key in ("AppleEnabledInputSources", "AppleSelectedInputSources"):
     sources = data.get(key)
     if not isinstance(sources, list):
         continue
-    kept = [s for s in sources if s.get("Bundle ID") != bundle_id]
+    kept = [s for s in sources if s.get("Bundle ID") not in bundle_ids]
     if len(kept) != len(sources):
         data[key] = kept
         changed = True
@@ -111,14 +117,18 @@ PY
 # ── 5. Remove app bundle ───────────────────────────────────────────────────────
 info "Removing /Applications/${APP_DISPLAY}.app..."
 rm -rf "$APP_BUNDLE"
+if [[ -d "$PREVIOUS_APP_BUNDLE" ]]; then
+  info "Removing previous app at /Applications/${PREVIOUS_APP_DISPLAY}.app..."
+  rm -rf "$PREVIOUS_APP_BUNDLE"
+fi
 
 # ── 6. Remove CLI symlinks ─────────────────────────────────────────────────────
 info "Removing CLI symlinks..."
-rm -f "${LOCAL_BIN}/ec"
-rm -f "${LOCAL_BIN}/ecterm"
+rm -f "${LOCAL_BIN}/ftab"
+rm -f "${LOCAL_BIN}/ftabterm"
 
 # ── 7. Fallback shell integration cleanup (in case ec was already removed) ────
-# ec integrations uninstall shell was already called in step 1.
+# ftab integrations uninstall shell was already called in step 1.
 # This fallback removes any remaining lines using targeted patterns only.
 info "Verifying shell integration removal..."
 
@@ -132,7 +142,7 @@ strip_shell_integration_fallback() {
   #   - The block comment headers
   #   - The source lines referencing our shell data directory
   grep -Ev \
-    'Easy Complete (pre|post) block|easy-complete/shell/(zshrc|zprofile|bashrc|bash_profile)\.(pre|post)\.(zsh|bash)' \
+    'Easy Complete (pre|post) block|Fastab (pre|post) block|fastab/shell/(zshrc|zprofile|bashrc|bash_profile)\.(pre|post)\.(zsh|bash)' \
     "$rc_file" > "$tmp" || true
   mv "$tmp" "$rc_file"
 }
@@ -152,23 +162,26 @@ rm -rf "$APP_SUPPORT"
 rm -rf "$LOGS_DIR"
 
 # IPC sockets / temp dirs
-rm -rf "${TMPDIR}ecrun"  2>/dev/null || true
-rm -rf "/tmp/ecrun"      2>/dev/null || true
+rm -rf "${TMPDIR}fastabrun"  2>/dev/null || true
+rm -rf "/tmp/fastabrun"      2>/dev/null || true
 
 # Preferences
 defaults delete "$BUNDLE_ID"     2>/dev/null || true
 defaults delete "$IME_BUNDLE_ID" 2>/dev/null || true
+defaults delete "$PREVIOUS_BUNDLE_ID" 2>/dev/null || true
+defaults delete "$PREVIOUS_IME_BUNDLE_ID" 2>/dev/null || true
 
 # Accessibility grant — drop the now-dead TCC entry so it doesn't linger in
 # System Settings pointing at a removed binary.
 tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null || true
+tccutil reset Accessibility "$PREVIOUS_BUNDLE_ID" 2>/dev/null || true
 
 # Keychain entries (best-effort)
 security delete-generic-password -s "$BUNDLE_ID" 2>/dev/null || true
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 echo ""
-info "Easy Complete has been fully uninstalled."
+info "${APP_DISPLAY} has been fully uninstalled."
 echo ""
 echo "  To remove the ~/.local/bin directory itself (if empty):"
 echo "    rmdir ~/.local/bin 2>/dev/null"

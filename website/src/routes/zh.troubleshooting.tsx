@@ -11,9 +11,9 @@ import {
 import { AX_SETTINGS_PANE_ZH, AX_SETTINGS_PANE_ZH_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "修复 macOS 终端自动补全问题 — Easy Complete";
+const TITLE = "修复 macOS 终端自动补全问题 — Fastab";
 const DESCRIPTION =
-  "通过检查辅助功能权限、Shell 钩子和终端集成，排查 Easy Complete 在 macOS 上不显示建议或建议窗口错位的问题。";
+  "通过检查辅助功能权限、Shell 钩子和终端集成，排查 Fastab 在 macOS 上不显示建议或建议窗口错位的问题。";
 const ALTERNATES = [
   { locale: "en" as const, path: "/troubleshooting" },
   { locale: "zh-CN" as const, path: "/zh/troubleshooting" },
@@ -58,7 +58,7 @@ function ZhTroubleshootingPage() {
 
         <h2 className={GUIDE_HEADING}>完全没有建议</h2>
         <GuideList>
-          <li>确认 Easy Complete 正在菜单栏中运行。</li>
+          <li>确认 Fastab 正在菜单栏中运行。</li>
           <li>
             在「{AX_SETTINGS_PANE_ZH}」中启用它（{AX_SETTINGS_PANE_ZH_LEGACY}）。
           </li>
@@ -87,7 +87,7 @@ function ZhTroubleshootingPage() {
 
         <h2 className={GUIDE_HEADING}>找不到 ec 命令</h2>
         <p className={GUIDE_PARAGRAPH}>
-          安装程序会把 Easy Complete 命令行工具放在{" "}
+          安装程序会把 Fastab 命令行工具放在{" "}
           <code className="font-mono text-[#cdd6e0]">~/.local/bin</code>
           。确认该目录已加入 PATH，然后启动新的 Shell 会话。
         </p>

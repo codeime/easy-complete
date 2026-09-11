@@ -2,18 +2,18 @@
 resolver = "3"
 members = [
     "crates/*",
-    "crates/fig_desktop/fuzz",
+    "crates/fastab_desktop/fuzz",
     "crates/macos-utils/accessibility-master/accessibility",
     "crates/macos-utils/accessibility-master/accessibility-sys",
     "crates/macos-utils/appkit-nsworkspace-bindings",
-    "tests/figterm2",
+    "tests/fastabterm2",
 ]
-default-members = ["crates/ec_cli"]
+default-members = ["crates/fastab_cli"]
 
 [workspace.package]
-authors = ["Easy Complete Contributors"]
+authors = ["Fastab Contributors"]
 edition = "2024"
-homepage = "https://easy-complete.emmmm.dev/"
+homepage = "https://fastab.app/"
 publish = false
 version = "3.0.0-beta.7"
 license = "MIT"
@@ -52,19 +52,19 @@ crossterm = { version = "0.29.0", features = ["event-stream", "events"] }
 dashmap = "6.0.1"
 dirs = "5.0.0"
 eyre = "0.6.8"
-fig_desktop_api = { path = "crates/fig_desktop_api" }
-fig_telemetry = { path = "crates/fig_telemetry" }
-fig_diagnostic = { path = "crates/fig_diagnostic" }
-fig_install = { path = "crates/fig_install" }
-fig_integrations = { path = "crates/fig_integrations" }
-fig_ipc = { path = "crates/fig_ipc" }
-fig_log = { path = "crates/fig_log" }
-fig_os_shim = { path = "crates/fig_os_shim" }
-fig_proto = { path = "crates/fig_proto" }
-fig_remote_ipc = { path = "crates/fig_remote_ipc" }
-fig_settings = { path = "crates/fig_settings" }
-fig_test_utils = { path = "crates/fig_test_utils" }
-fig_util = { path = "crates/fig_util" }
+fastab_desktop_api = { path = "crates/fastab_desktop_api" }
+fastab_telemetry = { path = "crates/fastab_telemetry" }
+fastab_diagnostic = { path = "crates/fastab_diagnostic" }
+fastab_install = { path = "crates/fastab_install" }
+fastab_integrations = { path = "crates/fastab_integrations" }
+fastab_ipc = { path = "crates/fastab_ipc" }
+fastab_log = { path = "crates/fastab_log" }
+fastab_os_shim = { path = "crates/fastab_os_shim" }
+fastab_proto = { path = "crates/fastab_proto" }
+fastab_remote_ipc = { path = "crates/fastab_remote_ipc" }
+fastab_settings = { path = "crates/fastab_settings" }
+fastab_test_utils = { path = "crates/fastab_test_utils" }
+fastab_util = { path = "crates/fastab_util" }
 flate2 = "1.1.1"
 flume = "0.12.0"
 futures = "0.3.26"

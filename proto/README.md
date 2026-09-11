@@ -6,11 +6,11 @@ message format for inter process communication.
 This folder defines three main protocols:
 
 1. `local.proto` - Protocol for communication from local processes like
-   `figterm` and the `fig` CLI to the desktop app
+   `fastabterm` and the `fig` CLI to the desktop app
 2. `fig.proto` - Protocol for communication between client Fig.js apps like
    autocomplete and the desktop app
-3. `figterm.proto` - Protocol for sending commands from the CLI to `figterm`
-4. `remote.proto` - Protocol for sending between `figterm` and the desktop app,
+3. `fastabterm.proto` - Protocol for sending commands from the CLI to `fastabterm`
+4. `remote.proto` - Protocol for sending between `fastabterm` and the desktop app,
    intended to be secure for remote machines
 
 ## Setup

@@ -11,9 +11,9 @@ import {
 import { AX_SETTINGS_PANE_EN, AX_SETTINGS_PANE_EN_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "Fix macOS Terminal Autocomplete — Easy Complete";
+const TITLE = "Fix macOS Terminal Autocomplete — Fastab";
 const DESCRIPTION =
-  "Troubleshoot missing or misaligned Easy Complete suggestions on macOS by checking Accessibility permission, shell hooks, and terminal integrations.";
+  "Troubleshoot missing or misaligned Fastab suggestions on macOS by checking Accessibility permission, shell hooks, and terminal integrations.";
 const ALTERNATES = [
   { locale: "en" as const, path: "/troubleshooting" },
   { locale: "zh-CN" as const, path: "/zh/troubleshooting" },
@@ -55,7 +55,7 @@ function TroubleshootingPage() {
 
         <h2 className={GUIDE_HEADING}>No suggestions appear</h2>
         <GuideList>
-          <li>Confirm Easy Complete is running from the menu bar.</li>
+          <li>Confirm Fastab is running from the menu bar.</li>
           <li>
             Enable it under {AX_SETTINGS_PANE_EN} ({AX_SETTINGS_PANE_EN_LEGACY}
             ).
@@ -70,7 +70,7 @@ function TroubleshootingPage() {
             <code className="font-mono text-[#cdd6e0]">npm</code>.
           </li>
         </GuideList>
-        <pre className={GUIDE_CODE}>{`ec debug prompt-accessibility
+        <pre className={GUIDE_CODE}>{`ftab debug prompt-accessibility
 exec $SHELL`}</pre>
 
         <h2 className={GUIDE_HEADING}>
@@ -85,7 +85,7 @@ exec $SHELL`}</pre>
 
         <h2 className={GUIDE_HEADING}>The CLI command is not found</h2>
         <p className={GUIDE_PARAGRAPH}>
-          The installer places the Easy Complete CLI in{" "}
+          The installer places the Fastab CLI in{" "}
           <code className="font-mono text-[#cdd6e0]">~/.local/bin</code>.
           Confirm that directory is in your PATH, then start a new shell
           session.

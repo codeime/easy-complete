@@ -1,7 +1,7 @@
 {
   "name": "easy-complete",
   "private": true,
-  "author": "Easy Complete Contributors",
+  "author": "Fastab Contributors",
   "repository": "https://github.com/codeime/easy-complete",
   "license": "MIT",
   "packageManager": "pnpm@11.14.0",

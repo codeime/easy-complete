@@ -51,9 +51,9 @@ message ShellContext {
   optional string current_working_directory = 4;
   // the value of $TERM_SESSION_ID
   optional string session_id = 5;
-  // the parent terminal of figterm
+  // the parent terminal of fastabterm
   optional string terminal = 7;
-  // the hostname of the computer figterm is running on
+  // the hostname of the computer fastabterm is running on
   optional string hostname = 8;
   // path to the current shell exe
   optional string shell_path = 10;

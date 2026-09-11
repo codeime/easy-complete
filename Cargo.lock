@@ -77,7 +77,7 @@ version = "3.0.0-beta.7"
 dependencies = [
  "bitflags 2.13.1",
  "camino",
- "fig_os_shim",
+ "fastab_os_shim",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2263,136 +2263,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
-name = "ec_cli"
-version = "3.0.0-beta.7"
-dependencies = [
- "anstream 1.0.0",
- "appkit-nsworkspace-bindings",
- "arboard",
- "assert_cmd",
- "async-trait",
- "base64 0.23.1",
- "bitflags 2.13.1",
- "bytes",
- "cfg-if",
- "clap",
- "clap_complete",
- "clap_complete_fig",
- "color-eyre",
- "color-print",
- "convert_case 0.11.0",
- "criterion",
- "crossterm",
- "ctrlc",
- "dialoguer",
- "ec_engine",
- "eyre",
- "fig_diagnostic",
- "fig_install",
- "fig_integrations",
- "fig_ipc",
- "fig_log",
- "fig_os_shim",
- "fig_proto",
- "fig_remote_ipc",
- "fig_settings",
- "fig_telemetry",
- "fig_util",
- "flume 0.12.0",
- "futures",
- "glob",
- "globset",
- "indicatif",
- "indoc",
- "insta",
- "macos-utils",
- "mimalloc",
- "nix 0.31.3",
- "objc2 0.5.2",
- "objc2-app-kit 0.2.2",
- "objc2-foundation 0.2.2",
- "owo-colors",
- "parking_lot",
- "paste",
- "predicates",
- "rand 0.10.2",
- "regex",
- "semver",
- "serde",
- "serde_json",
- "spinners",
- "sysinfo 0.36.1",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "unicode-width 0.2.2",
- "url",
- "uuid",
- "walkdir",
- "which 8.0.5",
- "whoami",
- "winapi",
- "windows 0.58.0",
-]
-
-[[package]]
-name = "ec_engine"
-version = "3.0.0-beta.7"
-dependencies = [
- "anyhow",
- "fancy-regex 0.16.2",
- "fig_settings",
- "futures",
- "libc",
- "rquickjs",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "ec_gpui"
-version = "3.0.0-beta.7"
-dependencies = [
- "anyhow",
- "cocoa 0.26.0",
- "dispatch",
- "gpui",
- "objc",
- "objc2 0.5.2",
- "objc2-app-kit 0.2.2",
- "objc2-foundation 0.2.2",
- "parking_lot",
- "raw-window-handle",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "ec_hitoolbox"
-version = "3.0.0-beta.7"
-dependencies = [
- "core-foundation 0.10.0",
- "core-foundation-sys",
-]
-
-[[package]]
-name = "ec_overlay_spike"
-version = "3.0.0-beta.7"
-dependencies = [
- "ec_gpui",
- "gpui",
-]
-
-[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2615,6 +2485,575 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastab_cli"
+version = "3.0.0-beta.7"
+dependencies = [
+ "anstream 1.0.0",
+ "appkit-nsworkspace-bindings",
+ "arboard",
+ "assert_cmd",
+ "async-trait",
+ "base64 0.23.1",
+ "bitflags 2.13.1",
+ "bytes",
+ "cfg-if",
+ "clap",
+ "clap_complete",
+ "clap_complete_fig",
+ "color-eyre",
+ "color-print",
+ "convert_case 0.11.0",
+ "criterion",
+ "crossterm",
+ "ctrlc",
+ "dialoguer",
+ "eyre",
+ "fastab_diagnostic",
+ "fastab_engine",
+ "fastab_install",
+ "fastab_integrations",
+ "fastab_ipc",
+ "fastab_log",
+ "fastab_os_shim",
+ "fastab_proto",
+ "fastab_remote_ipc",
+ "fastab_settings",
+ "fastab_telemetry",
+ "fastab_util",
+ "flume 0.12.0",
+ "futures",
+ "glob",
+ "globset",
+ "indicatif",
+ "indoc",
+ "insta",
+ "macos-utils",
+ "mimalloc",
+ "nix 0.31.3",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "owo-colors",
+ "parking_lot",
+ "paste",
+ "predicates",
+ "rand 0.10.2",
+ "regex",
+ "semver",
+ "serde",
+ "serde_json",
+ "spinners",
+ "sysinfo 0.36.1",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-width 0.2.2",
+ "url",
+ "uuid",
+ "walkdir",
+ "which 8.0.5",
+ "whoami",
+ "winapi",
+ "windows 0.58.0",
+]
+
+[[package]]
+name = "fastab_desktop"
+version = "3.0.0-beta.7"
+dependencies = [
+ "accessibility-sys",
+ "anyhow",
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "cfg-if",
+ "clap",
+ "cocoa 0.26.0",
+ "core-foundation 0.10.0",
+ "core-graphics 0.25.0",
+ "dashmap",
+ "dispatch",
+ "fastab_desktop_api",
+ "fastab_engine",
+ "fastab_gpui",
+ "fastab_install",
+ "fastab_integrations",
+ "fastab_ipc",
+ "fastab_log",
+ "fastab_os_shim",
+ "fastab_proto",
+ "fastab_remote_ipc",
+ "fastab_settings",
+ "fastab_telemetry",
+ "fastab_util",
+ "flume 0.12.0",
+ "fnv",
+ "futures",
+ "gpui",
+ "image",
+ "libc",
+ "macos-utils",
+ "muda",
+ "nix 0.31.3",
+ "notify",
+ "objc",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "parking_lot",
+ "paste",
+ "rfd",
+ "semver",
+ "serde",
+ "serde_json",
+ "sysinfo 0.36.1",
+ "tao",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tray-icon",
+ "url",
+ "uuid",
+ "windows 0.58.0",
+]
+
+[[package]]
+name = "fastab_desktop-fuzz"
+version = "0.0.0"
+dependencies = [
+ "fastab_ipc",
+ "fastab_proto",
+ "fastab_util",
+ "libfuzzer-sys",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "fastab_desktop_api"
+version = "3.0.0-beta.7"
+dependencies = [
+ "anstream 1.0.0",
+ "cfg-if",
+ "fastab_integrations",
+ "fastab_os_shim",
+ "fastab_proto",
+ "fastab_settings",
+ "fastab_util",
+ "macos-utils",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fastab_diagnostic"
+version = "3.0.0-beta.7"
+dependencies = [
+ "cfg-if",
+ "clap",
+ "fastab_ipc",
+ "fastab_os_shim",
+ "fastab_proto",
+ "fastab_util",
+ "serde",
+ "serde_json",
+ "sysinfo 0.36.1",
+ "time",
+ "tokio",
+ "toml 1.1.4+spec-1.1.0",
+ "whoami",
+]
+
+[[package]]
+name = "fastab_engine"
+version = "3.0.0-beta.7"
+dependencies = [
+ "anyhow",
+ "fancy-regex 0.16.2",
+ "fastab_settings",
+ "futures",
+ "libc",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fastab_gpui"
+version = "3.0.0-beta.7"
+dependencies = [
+ "anyhow",
+ "cocoa 0.26.0",
+ "dispatch",
+ "gpui",
+ "objc",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "parking_lot",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "fastab_hitoolbox"
+version = "3.0.0-beta.7"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-foundation-sys",
+]
+
+[[package]]
+name = "fastab_input_method"
+version = "3.0.0-beta.7"
+dependencies = [
+ "apple-bundle",
+ "core-foundation 0.10.0",
+ "fastab_hitoolbox",
+ "fastab_proto",
+ "fastab_util",
+ "libc",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "objc2-input-method-kit",
+ "plist",
+ "serde",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
+name = "fastab_install"
+version = "3.0.0-beta.7"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytes",
+ "camino",
+ "cfg-if",
+ "cookie",
+ "fastab_integrations",
+ "fastab_ipc",
+ "fastab_os_shim",
+ "fastab_settings",
+ "fastab_test_utils",
+ "fastab_util",
+ "hex",
+ "libc",
+ "regex",
+ "reqwest",
+ "ring",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde_json",
+ "strum 0.28.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "fastab_integrations"
+version = "3.0.0-beta.7"
+dependencies = [
+ "accessibility-sys",
+ "async-trait",
+ "cfg-if",
+ "clap",
+ "core-foundation 0.10.0",
+ "dirs 5.0.1",
+ "dispatch",
+ "fastab_hitoolbox",
+ "fastab_os_shim",
+ "fastab_settings",
+ "fastab_util",
+ "indoc",
+ "insta",
+ "macos-utils",
+ "nix 0.31.3",
+ "objc",
+ "owo-colors",
+ "plist",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fastab_ipc"
+version = "3.0.0-beta.7"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "cfg-if",
+ "fastab_proto",
+ "fastab_util",
+ "flate2",
+ "nix 0.31.3",
+ "pin-project-lite",
+ "rand 0.10.2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "whoami",
+]
+
+[[package]]
+name = "fastab_log"
+version = "3.0.0-beta.7"
+dependencies = [
+ "fastab_os_shim",
+ "fastab_util",
+ "parking_lot",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fastab_os_shim"
+version = "3.0.0-beta.7"
+dependencies = [
+ "cfg-if",
+ "dirs 5.0.1",
+ "nix 0.31.3",
+ "serde",
+ "sysinfo 0.36.1",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "fastab_overlay_spike"
+version = "3.0.0-beta.7"
+dependencies = [
+ "fastab_gpui",
+ "gpui",
+]
+
+[[package]]
+name = "fastab_proto"
+version = "3.0.0-beta.7"
+dependencies = [
+ "arbitrary",
+ "bytes",
+ "fastab_util",
+ "flate2",
+ "hex",
+ "nix 0.31.3",
+ "prost",
+ "prost-build",
+ "prost-reflect",
+ "prost-reflect-build",
+ "rand 0.10.2",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "fastab_remote_ipc"
+version = "3.0.0-beta.7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fastab_ipc",
+ "fastab_proto",
+ "fastab_util",
+ "flume 0.12.0",
+ "parking_lot",
+ "serde",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fastab_settings"
+version = "3.0.0-beta.7"
+dependencies = [
+ "fastab_util",
+ "fd-lock",
+ "parking_lot",
+ "r2d2",
+ "r2d2_sqlite",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "fastab_telemetry"
+version = "3.0.0-beta.7"
+dependencies = [
+ "chrono",
+ "fastab_os_shim",
+ "fastab_settings",
+ "fastab_util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fastab_test_macro"
+version = "3.0.0-beta.7"
+dependencies = [
+ "quote",
+ "syn 2.0.108",
+]
+
+[[package]]
+name = "fastab_test_utils"
+version = "3.0.0-beta.7"
+dependencies = [
+ "bytes",
+ "fastab_os_shim",
+ "fastab_util",
+ "hex",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "reqwest",
+ "ring",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fastab_util"
+version = "3.0.0-beta.7"
+dependencies = [
+ "bstr",
+ "camino",
+ "cfg-if",
+ "clap",
+ "dirs 5.0.1",
+ "fastab_os_shim",
+ "hex",
+ "indoc",
+ "insta",
+ "libc",
+ "nix 0.31.3",
+ "paste",
+ "rand 0.10.2",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "strum 0.28.0",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+ "whoami",
+ "windows 0.58.0",
+ "winreg 0.56.0",
+]
+
+[[package]]
+name = "fastabterm"
+version = "3.0.0-beta.7"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "assert_cmd",
+ "async-trait",
+ "bitflags 2.13.1",
+ "bstr",
+ "bytes",
+ "cfg-if",
+ "clap",
+ "dashmap",
+ "fastab_ipc",
+ "fastab_log",
+ "fastab_os_shim",
+ "fastab_proto",
+ "fastab_settings",
+ "fastab_util",
+ "filedescriptor",
+ "flume 0.12.0",
+ "fnv",
+ "lazy_static",
+ "memmem",
+ "mimalloc",
+ "nix 0.31.3",
+ "num-traits",
+ "pin-project",
+ "portable-pty",
+ "predicates",
+ "shared_library",
+ "shell-color",
+ "shlex 2.0.1",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "which 8.0.5",
+ "winapi",
+ "windows 0.58.0",
+ "winreg 0.56.0",
+]
+
+[[package]]
+name = "fastabterm2"
+version = "3.0.0-beta.7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fastab_ipc",
+ "fastab_proto",
+ "fastab_remote_ipc",
+ "fastab_util",
+ "portable-pty",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "fastrand"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2666,445 +3105,6 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
-]
-
-[[package]]
-name = "fig_desktop"
-version = "3.0.0-beta.7"
-dependencies = [
- "accessibility-sys",
- "anyhow",
- "async-trait",
- "base64 0.23.1",
- "bytes",
- "cfg-if",
- "clap",
- "cocoa 0.26.0",
- "core-foundation 0.10.0",
- "core-graphics 0.25.0",
- "dashmap",
- "dispatch",
- "ec_engine",
- "ec_gpui",
- "fig_desktop_api",
- "fig_install",
- "fig_integrations",
- "fig_ipc",
- "fig_log",
- "fig_os_shim",
- "fig_proto",
- "fig_remote_ipc",
- "fig_settings",
- "fig_telemetry",
- "fig_util",
- "flume 0.12.0",
- "fnv",
- "futures",
- "gpui",
- "image",
- "libc",
- "macos-utils",
- "muda",
- "nix 0.31.3",
- "notify",
- "objc",
- "objc2 0.5.2",
- "objc2-app-kit 0.2.2",
- "objc2-foundation 0.2.2",
- "parking_lot",
- "paste",
- "rfd",
- "semver",
- "serde",
- "serde_json",
- "sysinfo 0.36.1",
- "tao",
- "tempfile",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "url",
- "uuid",
- "windows 0.58.0",
-]
-
-[[package]]
-name = "fig_desktop-fuzz"
-version = "0.0.0"
-dependencies = [
- "fig_ipc",
- "fig_proto",
- "fig_util",
- "libfuzzer-sys",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "fig_desktop_api"
-version = "3.0.0-beta.7"
-dependencies = [
- "anstream 1.0.0",
- "cfg-if",
- "fig_integrations",
- "fig_os_shim",
- "fig_proto",
- "fig_settings",
- "fig_util",
- "macos-utils",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "fig_diagnostic"
-version = "3.0.0-beta.7"
-dependencies = [
- "cfg-if",
- "clap",
- "fig_ipc",
- "fig_os_shim",
- "fig_proto",
- "fig_util",
- "serde",
- "serde_json",
- "sysinfo 0.36.1",
- "time",
- "tokio",
- "toml 1.1.4+spec-1.1.0",
- "whoami",
-]
-
-[[package]]
-name = "fig_input_method"
-version = "3.0.0-beta.7"
-dependencies = [
- "apple-bundle",
- "core-foundation 0.10.0",
- "ec_hitoolbox",
- "fig_proto",
- "fig_util",
- "libc",
- "objc2 0.5.2",
- "objc2-app-kit 0.2.2",
- "objc2-foundation 0.2.2",
- "objc2-input-method-kit",
- "plist",
- "serde",
- "toml 1.1.4+spec-1.1.0",
-]
-
-[[package]]
-name = "fig_install"
-version = "3.0.0-beta.7"
-dependencies = [
- "bitflags 2.13.1",
- "bytes",
- "camino",
- "cfg-if",
- "cookie",
- "fig_integrations",
- "fig_ipc",
- "fig_os_shim",
- "fig_settings",
- "fig_test_utils",
- "fig_util",
- "hex",
- "libc",
- "regex",
- "reqwest",
- "ring",
- "security-framework",
- "semver",
- "serde",
- "serde_json",
- "strum 0.28.0",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "fig_integrations"
-version = "3.0.0-beta.7"
-dependencies = [
- "accessibility-sys",
- "async-trait",
- "cfg-if",
- "clap",
- "core-foundation 0.10.0",
- "dirs 5.0.1",
- "dispatch",
- "ec_hitoolbox",
- "fig_os_shim",
- "fig_settings",
- "fig_util",
- "indoc",
- "insta",
- "macos-utils",
- "nix 0.31.3",
- "objc",
- "owo-colors",
- "plist",
- "regex",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "fig_ipc"
-version = "3.0.0-beta.7"
-dependencies = [
- "async-trait",
- "base64 0.23.1",
- "bytes",
- "cfg-if",
- "fig_proto",
- "fig_util",
- "flate2",
- "nix 0.31.3",
- "pin-project-lite",
- "rand 0.10.2",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
- "whoami",
-]
-
-[[package]]
-name = "fig_log"
-version = "3.0.0-beta.7"
-dependencies = [
- "fig_os_shim",
- "fig_util",
- "parking_lot",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "fig_os_shim"
-version = "3.0.0-beta.7"
-dependencies = [
- "cfg-if",
- "dirs 5.0.1",
- "nix 0.31.3",
- "serde",
- "sysinfo 0.36.1",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "fig_proto"
-version = "3.0.0-beta.7"
-dependencies = [
- "arbitrary",
- "bytes",
- "fig_util",
- "flate2",
- "hex",
- "nix 0.31.3",
- "prost",
- "prost-build",
- "prost-reflect",
- "prost-reflect-build",
- "rand 0.10.2",
- "rmp-serde",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "uuid",
-]
-
-[[package]]
-name = "fig_remote_ipc"
-version = "3.0.0-beta.7"
-dependencies = [
- "anyhow",
- "async-trait",
- "fig_ipc",
- "fig_proto",
- "fig_util",
- "flume 0.12.0",
- "parking_lot",
- "serde",
- "time",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "fig_settings"
-version = "3.0.0-beta.7"
-dependencies = [
- "fd-lock",
- "fig_util",
- "parking_lot",
- "r2d2",
- "r2d2_sqlite",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "fig_telemetry"
-version = "3.0.0-beta.7"
-dependencies = [
- "chrono",
- "fig_os_shim",
- "fig_settings",
- "fig_util",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "fig_test_macro"
-version = "3.0.0-beta.7"
-dependencies = [
- "quote",
- "syn 2.0.108",
-]
-
-[[package]]
-name = "fig_test_utils"
-version = "3.0.0-beta.7"
-dependencies = [
- "bytes",
- "fig_os_shim",
- "fig_util",
- "hex",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "reqwest",
- "ring",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "fig_util"
-version = "3.0.0-beta.7"
-dependencies = [
- "bstr",
- "camino",
- "cfg-if",
- "clap",
- "dirs 5.0.1",
- "fig_os_shim",
- "hex",
- "indoc",
- "insta",
- "libc",
- "nix 0.31.3",
- "paste",
- "rand 0.10.2",
- "regex",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "strum 0.28.0",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
- "uuid",
- "whoami",
- "windows 0.58.0",
- "winreg 0.56.0",
-]
-
-[[package]]
-name = "figterm"
-version = "3.0.0-beta.7"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "assert_cmd",
- "async-trait",
- "bitflags 2.13.1",
- "bstr",
- "bytes",
- "cfg-if",
- "clap",
- "dashmap",
- "fig_ipc",
- "fig_log",
- "fig_os_shim",
- "fig_proto",
- "fig_settings",
- "fig_util",
- "filedescriptor",
- "flume 0.12.0",
- "fnv",
- "lazy_static",
- "memmem",
- "mimalloc",
- "nix 0.31.3",
- "num-traits",
- "pin-project",
- "portable-pty",
- "predicates",
- "shared_library",
- "shell-color",
- "shlex 2.0.1",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
- "which 8.0.5",
- "winapi",
- "windows 0.58.0",
- "winreg 0.56.0",
-]
-
-[[package]]
-name = "figterm2"
-version = "3.0.0-beta.7"
-dependencies = [
- "anyhow",
- "async-trait",
- "fig_ipc",
- "fig_proto",
- "fig_remote_ipc",
- "fig_util",
- "portable-pty",
- "tempfile",
- "tokio",
- "uuid",
 ]
 
 [[package]]

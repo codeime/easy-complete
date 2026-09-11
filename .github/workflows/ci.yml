@@ -86,4 +86,4 @@ jobs:
       # profile-specific breakage (panic = "abort", LTO, strip) is caught in CI
       # rather than only surfacing during a release. Mirrors scripts/build-app.sh.
       - name: Build release binaries (dist profile)
-        run: cargo build --locked --profile dist -p fig_desktop -p figterm -p ec_cli -p fig_input_method
+        run: cargo build --locked --profile dist -p fastab_desktop -p fastabterm -p fastab_cli -p fastab_input_method

@@ -5,9 +5,9 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN_SVG="${REPO_DIR}/assets/logo.svg"
 MENU_BAR_SVG="${REPO_DIR}/assets/menu-bar.svg"
 SVG_RENDERER_SOURCE="${REPO_DIR}/scripts/render-svg.m"
-DESKTOP_ICONS="${REPO_DIR}/crates/fig_desktop/icons"
+DESKTOP_ICONS="${REPO_DIR}/crates/fastab_desktop/icons"
 APP_ICONSET="${DESKTOP_ICONS}/AppIcon.iconset"
-IME_ICON="${REPO_DIR}/crates/fig_input_method/resources/product_icon.icns"
+IME_ICON="${REPO_DIR}/crates/fastab_input_method/resources/product_icon.icns"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 

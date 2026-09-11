@@ -3,7 +3,7 @@ package figterm;
 
 import "fig_common.proto";
 
-// A request message to figterm
+// A request message to fastabterm
 message FigtermRequestMessage {
   oneof request {
     InterceptRequest intercept = 1;
@@ -20,7 +20,7 @@ message FigtermRequestMessage {
   }
 }
 
-// A response message back from figterm
+// A response message back from fastabterm
 message FigtermResponseMessage {
   oneof response {
     DiagnosticsResponse diagnostics = 1;
@@ -36,7 +36,7 @@ message Action {
 }
 
 // Intercept command
-// Used to set which input is intercepted by figterm
+// Used to set which input is intercepted by fastabterm
 message InterceptRequest {
   reserved 1 to 5;
 
@@ -44,7 +44,7 @@ message InterceptRequest {
     bool intercept_bound_keystrokes = 1;
     bool intercept_global_keystrokes = 2;
     repeated Action actions = 3;
-    // If true then figterm will clear the current action bindings and set the
+    // If true then fastabterm will clear the current action bindings and set the
     // bindings to the bindings in the actions field, otherwise it will append
     // if there are any new bindings
     bool override_actions = 4;
@@ -56,9 +56,9 @@ message InterceptRequest {
 
   // The intercept command to execute
   oneof intercept_command {
-    // Set figterm to intercept keys according to the FigJs interface
+    // Set fastabterm to intercept keys according to the FigJs interface
     SetFigjsIntercepts set_figjs_intercepts = 6;
-    // Tell figterm if the figjs window is visible
+    // Tell fastabterm if the figjs window is visible
     SetFigjsVisible set_figjs_visible = 7;
   }
 }
@@ -77,7 +77,7 @@ message InsertTextRequest {
   optional bool immediate = 4;
   // client buffer at the time of the insertion request (prior to insertion)
   optional string insertion_buffer = 5;
-  // if figterm should insert while a command is running, if false and a command
+  // if fastabterm should insert while a command is running, if false and a command
   // is running the insertion will be ignored
   optional bool insert_during_command = 6;
 }
@@ -114,7 +114,7 @@ message TermStyle {
 message DiagnosticsRequest {}
 
 message DiagnosticsResponse {
-  // Current shell context of the figterm instance
+  // Current shell context of the fastabterm instance
   optional fig_common.ShellContext shell_context = 1;
   // Current suggestion style for fish
   optional TermStyle fish_suggestion_style = 2;
@@ -147,7 +147,7 @@ message UpdateShellContextRequest {
   optional string alias = 4;
 }
 
-// Command to notify figterm session that an SSH session has started in the terminal
+// Command to notify fastabterm session that an SSH session has started in the terminal
 message NotifySSHSessionStartedRequest {
   string uuid = 1;
   string remote_host = 2;

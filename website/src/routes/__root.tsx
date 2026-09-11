@@ -23,7 +23,7 @@ export const Route = createRootRoute({
       meta: [
         { charSet: "utf-8" },
         { name: "viewport", content: "width=device-width, initial-scale=1" },
-        { name: "application-name", content: "Easy Complete" },
+        { name: "application-name", content: "Fastab" },
         { name: "theme-color", content: "#0a0d12" },
         // Description fallback for any response without a route-level head —
         // the 404 in particular. The title is deliberately NOT set here: the
@@ -52,7 +52,7 @@ function NotFoundComponent() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-[#0a0d12] px-7 text-center text-[#e6edf3]">
       {/* React 19 hoists these into <head>; the route head has no 404 hook. */}
-      <title>Page not found — Easy Complete</title>
+      <title>Page not found — Fastab</title>
       <meta name="robots" content="noindex, follow" />
       <p className="mb-3 font-mono text-sm uppercase tracking-[.22em] text-(--accent)">
         404
@@ -61,7 +61,7 @@ function NotFoundComponent() {
         Page not found.
       </h1>
       <p className="m-0 mb-8 max-w-130 text-[16px] leading-[1.6] text-[#909aa6]">
-        The page you requested does not exist. Return to Easy Complete to
+        The page you requested does not exist. Return to Fastab to
         download the macOS terminal autocomplete app.
       </p>
       <a

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-const POSTHOG_PROJECT_TOKEN = "phc_9biiBNdgbqZlxcJdISohgz7VWJnC83jCexzXhrMKnd";
+const POSTHOG_PROJECT_TOKEN = "";
 const POSTHOG_IDLE_DELAY_MS = 2_000;
 
 type PostHogClient = (typeof import("posthog-js"))["default"];
@@ -9,10 +9,11 @@ let clientPromise: Promise<PostHogClient> | undefined;
 
 function loadPostHog() {
   if (typeof window === "undefined") return;
+  if (!POSTHOG_PROJECT_TOKEN) return;
 
   clientPromise ??= import("posthog-js").then(({ default: posthog }) => {
     posthog.init(POSTHOG_PROJECT_TOKEN, {
-      api_host: "https://a.emmmm.dev",
+      api_host: "https://telemetry.placeholder.invalid",
       defaults: "2026-05-30",
       loaded: (posthog) => {
         posthog.register({
@@ -29,6 +30,7 @@ function loadPostHog() {
 }
 
 export function initPostHog() {
+  if (!POSTHOG_PROJECT_TOKEN) return;
   void loadPostHog();
 }
 
@@ -36,6 +38,7 @@ export function captureEvent(
   event: string,
   properties?: Record<string, unknown>,
 ) {
+  if (!clientPromise) return;
   void loadPostHog()?.then((posthog) => posthog.capture(event, properties));
 }
 
