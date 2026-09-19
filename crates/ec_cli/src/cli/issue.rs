@@ -112,7 +112,7 @@ impl IssueCreator {
         };
 
         // Use GitHub's standard `title` and `body` parameters rather than relying on a
-        // repository issue template. This keeps `ec issue` working when templates are
+        // repository issue template. This keeps `ftab issue` working when templates are
         // renamed, removed, or disabled in the target repository.
         let url = self.build_url(&os, &environment)?;
 

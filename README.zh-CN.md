@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="Easy Complete" width="140px">
+  <img src="./assets/logo.png" alt="Fastab" width="140px">
 </p>
 
-<h1 align="center">Easy Complete (Native)</h1>
+<h1 align="center">Fastab (Native)</h1>
 
 <p align="center">
   <b>为 macOS 终端打造的 IDE 风格行内自动补全——原生 GPUI，不是 WebView。</b><br/>
@@ -22,7 +22,7 @@
   <a href="./README.md">English</a> · <b>简体中文</b>
 </p>
 
-**Easy Complete (Native)** 是一款 macOS 终端自动补全应用——以原生 GPUI 浮层跟随光标，
+**Fastab (Native)** 是一款 macOS 终端自动补全应用——以原生 GPUI 浮层跟随光标，
 为你的 shell 提供 IDE 风格的行内补全。补全列表和设置窗口都是真正的原生视图，不是
 WKWebView。补全引擎在本地 Rust 里运行。它只专注于终端自动补全这一件事——是一款轻量、
 完全本地、开源的 Fig 替代品。
@@ -30,11 +30,10 @@ WKWebView。补全引擎在本地 Rust 里运行。它只专注于终端自动�
 你会在输入 `git`、`npm`、`docker`、`cargo` 等数百种命令行工具时，获得类似 fish shell 的
 建议：参数、子命令、文件路径、选项，边打边补。
 自动补全完全在本机运行——无需账号、无云端调用、无 AI 请求，你的命令内容永远不会离开你的
-Mac。应用会收集匿名使用统计（打开次数、每日补全次数——绝不包含命令内容），可随时通过
-`ec telemetry disable` 关闭。完整的采集清单见[隐私页面](https://easy-complete.emmmm.dev/privacy-policy)。
+Mac。**本 fork 已关闭全部遥测，不采集任何数据。** 详见[隐私页面](https://fastab.app/privacy-policy)。
 
 <p align="center">
-  <img src="./.github/media/screenshot.png" alt="Easy Complete 自动补全效果">
+  <img src="./.github/media/screenshot.png" alt="Fastab 自动补全效果">
 </p>
 
 > **平台：** 仅支持 macOS。当前发布的 DMG 仅支持 Apple Silicon / ARM64。
@@ -64,27 +63,33 @@ spec hook（`postProcess`、`script`、`custom`、`generateSpec`）同样在构�
 
 Native 构建是本仓库的 Apple Silicon DMG：
 
-[下载最新版 DMG](https://github.com/codeime/easy-complete/releases/download/v3.0.0-beta.16/Easy-Complete-arm64.dmg) ·
+[下载最新版 DMG](https://github.com/codeime/easy-complete/releases/download/v3.0.0-beta.16/Fastab-arm64.dmg) ·
 [所有 Releases](https://github.com/codeime/easy-complete/releases)
 
 然后：
 
-1. 打开 `Easy-Complete-arm64.dmg`。
-2. 把 **Easy Complete.app** 拖到 `/Applications`。
-3. 从 `/Applications` 启动 **Easy Complete**。
-4. 打开 Easy Complete 设置，点击**授予辅助功能权限**。
-5. 重新加载你的 shell：
+1. 打开 `Fastab-arm64.dmg`。
+2. 把 **Fastab.app** 拖到 `/Applications`。
+3. **当前构建未做 Developer ID 签名。** 拷贝完成后先清一次隔离属性，否则 macOS 会拦截启动：
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Fastab.app"
+   ```
+
+4. 从 `/Applications` 启动 **Fastab**。
+5. 打开 Fastab 设置，点击**授予辅助功能权限**。
+6. 重新加载你的 shell：
 
    ```bash
    exec $SHELL
    ```
 
-首次启动时，Easy Complete 会设置随附的 CLI 二进制、shell 集成和登录启动项。输入法是可选项，
-可在设置 → 行为里安装，或运行 `ec integrations install input-method`，供 Ghostty、Kitty、
+首次启动时，Fastab 会设置随附的 CLI 二进制、shell 集成和登录启动项。输入法是可选项，
+可在设置 → 行为里安装，或运行 `ftab integrations install input-method`，供 Ghostty、Kitty、
 WezTerm、Zed、Alacritty 和 Otty 使用。可以运行下面的命令确认安装状态：
 
 ```bash
-ec doctor
+ftab doctor
 ```
 
 ### 从源码构建
@@ -94,17 +99,17 @@ ec doctor
 ```bash
 git clone https://github.com/codeime/easy-complete.git
 cd easy-complete
-./install.sh
+./scripts/install.sh
 ```
 
 源码安装脚本会：
 
 1. 构建 Rust 二进制，并编译打包的补全 spec。
-2. 组装出 `Easy Complete.app` 并复制到 `/Applications`。
-3. 把 `ec` 和 `ecterm` 两个 CLI 软链到 `~/.local/bin`。
+2. 组装出 `Fastab.app` 并复制到 `/Applications`。
+3. 把 `ftab` 和 `fastabterm` 两个 CLI 软链到 `~/.local/bin`。
 4. 可在设置中开启**登录时启动**（macOS 13+ 使用系统登录项，macOS 12 回退到 LaunchAgent）。
-5. 配置 shell 集成。`./install.sh` 还会注册可选输入法（DMG 首次启动不会）。
-6. **辅助功能**需要你在 Easy Complete 设置里手动授予（必需，见下文）。
+5. 配置 shell 集成。`./scripts/install.sh` 还会注册可选输入法（DMG 首次启动不会）。
+6. **辅助功能**需要你在 Fastab 设置里手动授予（必需，见下文）。
 
 完成后，重新加载你的 shell：
 
@@ -114,20 +119,24 @@ exec $SHELL
 
 ### 授予「辅助功能」权限
 
-Easy Complete 需要把补全浮层定位到你当前聚焦的终端窗口，这依赖 macOS 的**辅助功能
-（Accessibility）**权限。打开 Easy Complete 设置，点击**授予辅助功能权限**。应用会打开：
+Fastab 需要把补全浮层定位到你当前聚焦的终端窗口，这依赖 macOS 的**辅助功能
+（Accessibility）**权限。打开 Fastab 设置，点击**授予辅助功能权限**。应用会打开：
 
 > 系统设置 → 隐私与安全 → 设备控制和数据访问
 >
 > macOS 26 及更早，同一列表名为**辅助功能**。授予按钮仍会打开它。
 
-并把一张可拖拽的卡片停在列表旁边，把 **Easy Complete** 拖进去即可。启动、安装和菜单栏
+并把一张可拖拽的卡片停在列表旁边，把 **Fastab** 拖进去即可。启动、安装和菜单栏
 都不会自动打开系统设置。
+
+从 Easy Complete 升级是**新的 TCC 身份**（`app.fastab`，不是
+`dev.emmmm.easy-complete`）。即使以前已经勾过 Easy Complete，也要再给 Fastab
+授一次权——旧勾选不覆盖这个二进制。
 
 **如果补全始终不出现，几乎都是这个权限没授予。** 在设置里再点一次按钮，或运行：
 
 ```bash
-ec debug prompt-accessibility
+ftab debug prompt-accessibility
 ```
 
 ---
@@ -142,16 +151,16 @@ ec debug prompt-accessibility
 | `⇥` (Tab) / `→` | 采用高亮的建议 |
 | `Esc`           | 关闭补全浮层   |
 
-原生设置窗口可从**菜单栏的 Easy Complete 图标**打开。
+原生设置窗口可从**菜单栏的 Fastab 图标**打开。
 
 常用 CLI 命令：
 
 ```bash
-ec doctor                       # 诊断常见问题
-ec diagnostic                   # 打印环境 / 集成状态
-ec integrations install input-method   # （重新）注册 macOS 输入法
-ec settings list                # 查看设置
-ec settings <key> <value>       # 修改某项设置
+ftab doctor                       # 诊断常见问题
+ftab diagnostic                   # 打印环境 / 集成状态
+ftab integrations install input-method   # （重新）注册 macOS 输入法
+ftab settings list                # 查看设置
+ftab settings <key> <value>       # 修改某项设置
 ```
 
 ### 受支持的终端
@@ -159,7 +168,7 @@ ec settings <key> <value>       # 修改某项设置
 大多数终端通过 PTY 集成开箱即用——包括 iTerm2、Apple Terminal、VS Code、Cursor、
 ChatGPT（Codex）以及 JetBrains IDE 终端。少数绕过标准 PTY 路径的终端（**Ghostty、Kitty、
 WezTerm、Zed、Alacritty、Otty**）还需要依赖随附的输入法来追踪光标位置。可在设置 → 行为里
-安装，或运行 `ec integrations install input-method`。
+安装，或运行 `ftab integrations install input-method`。
 
 ---
 
@@ -170,29 +179,29 @@ WezTerm、Zed、Alacritty、Otty**）还需要依赖随附的输入法来追踪�
 ```
 
 该脚本会移除应用包、CLI 软链、LaunchAgent、输入法、shell 集成以及全部应用数据。它只会
-精确移除 Easy Complete 自己的输入源，**不会动**你其它的键盘布局和输入法。
+精确移除 Fastab 自己的输入源，**不会动**你其它的键盘布局和输入法。
 
 ---
 
 ## 🧩 工作原理
 
-Easy Complete 由三个相互协作的原生进程组成，通过 Unix 域套接字（Protobuf 消息）通信：
+Fastab 由三个相互协作的原生进程组成，通过 Unix 域套接字（Protobuf 消息）通信：
 
 | 二进制          | Crate         | 职责                                                                                           |
 | --------------- | ------------- | ---------------------------------------------------------------------------------------------- |
-| `easy-complete` | `fig_desktop` | 原生应用宿主——GPUI 补全浮层与设置窗口（不是 WKWebView）、补全引擎工作线程、系统托盘、窗口管理 |
-| `ecterm`        | `figterm`     | 介于 shell 与终端模拟器之间的伪终端；拦截 shell 编辑缓冲区以驱动补全                           |
-| `ec`            | `ec_cli`      | CLI 入口——`setup`、`integrations`、`diagnostic`、`settings` 等                                 |
+| `fastab` | `fig_desktop` | 原生应用宿主——GPUI 补全浮层与设置窗口（不是 WKWebView）、补全引擎工作线程、系统托盘、窗口管理 |
+| `fastabterm`        | `figterm`     | 介于 shell 与终端模拟器之间的伪终端；拦截 shell 编辑缓冲区以驱动补全                           |
+| `ftab`            | `ec_cli`      | CLI 入口——`setup`、`integrations`、`diagnostic`、`settings` 等                                 |
 
 Shell 钩子（`.zshrc`、`.bashrc`、fish 配置）在每次提示符和按键时，把 shell 状态（当前目
-录、命令文本、光标位置）回报给 `ecterm`。在 macOS 上，`fig_input_method` 辅助应用负责为绕
+录、命令文本、光标位置）回报给 `fastabterm`。在 macOS 上，`fig_input_method` 辅助应用负责为绕
 过 PTY 的终端上报光标位置。
 
 **标识符**
 
-- 应用 bundle ID：`dev.emmmm.easy-complete`
-- 输入法 bundle ID：`dev.emmmm.easy-complete.inputmethod`
-- 应用包路径：`/Applications/Easy Complete.app`
+- 应用 bundle ID：`app.fastab`
+- 输入法 bundle ID：`app.fastab.inputmethod`
+- 应用包路径：`/Applications/Fastab.app`
 
 ---
 
@@ -211,8 +220,8 @@ Shell 钩子（`.zshrc`、`.bashrc`、fish 配置）在每次提示符和按键�
 cargo build --release -p fig_desktop -p figterm -p ec_cli -p fig_input_method
 
 # 以 dev 模式运行单个 crate
-cargo run --bin ec -- <子命令>
-cargo run --bin easy-complete
+cargo run --bin ftab -- <子命令>
+cargo run --bin fastab
 
 cargo clippy --locked --workspace --color always -- -D warnings   # lint（CI 要求 -D warnings）
 cargo fmt                                                         # 格式化
@@ -228,7 +237,7 @@ pnpm lint                                   # lint
 pnpm test                                   # 运行 Vitest
 ```
 
-无界面补全：`cargo run --bin ec -- engine complete --buffer "git ch"`。
+无界面补全：`cargo run --bin ftab -- engine complete --buffer "git ch"`。
 进程内存：`./scripts/memory-usage.sh`（`--watch 5`、`--peak`、`--csv mem.csv`）。
 
 ### 核心 crate
@@ -239,7 +248,7 @@ pnpm test                                   # 运行 Vitest
 | `ec_gpui`               | 补全列表、主题、macOS 窗口定位                          |
 | `ec_engine`             | 无界面补全：IR 查找、生成器、typed hook IR              |
 | `figterm`               | PTY 拦截、shell 编辑缓冲区追踪                          |
-| `ec_cli`                | CLI crate，提供 `ec` 二进制及其所有子命令               |
+| `ec_cli`                | CLI crate，提供 `ftab` 二进制及其所有子命令               |
 | `fig_input_method`      | macOS 输入法辅助应用（光标追踪）                        |
 | `fig_integrations`      | shell / 终端 / 编辑器集成的安装逻辑                     |
 | `fig_ipc` / `fig_proto` | Unix 套接字 IPC 原语与生成的 Protobuf 类型              |
@@ -256,7 +265,7 @@ pnpm test                                   # 运行 Vitest
 
 ## 📜 许可证
 
-采用 MIT 许可证。Easy Complete 基于上游 Amazon Q Developer CLI，并在
-[LICENSE](./LICENSE) 中保留其原始版权声明。
+采用 MIT 许可证。Fastab 由 Easy Complete 更名而来，基于 Amazon Q Developer CLI
+与 Fig；这些版权声明保留在 [LICENSE](./LICENSE)。
 第三方版权与许可证条款集中收录于
 [THIRD_PARTY_NOTICES.txt](./THIRD_PARTY_NOTICES.txt)。

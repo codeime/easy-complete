@@ -71,6 +71,7 @@ mod tests {
         "org.alacritty.extra",
         "",
         "dev.emmmm.easy-complete",
+        "app.fastab",
     ];
 
     #[test]

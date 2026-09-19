@@ -17,7 +17,7 @@ import { acquirePairLock } from "./spec-pair.mjs";
 
 const repoDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const buildRoot = join(repoDir, "build");
-const expectedFinal = join(buildRoot, "Easy Complete.app");
+const expectedFinal = join(buildRoot, "Fastab.app");
 const publishLockPath = join(buildRoot, ".app-publish.lock");
 
 function parseArguments(argv) {
@@ -89,7 +89,7 @@ async function validatePaths(
     canonicalWorkRoot !== resolve(workRoot) ||
     !isWithin(canonicalBuildRoot, canonicalWorkRoot) ||
     !basename(canonicalWorkRoot).startsWith(".specs-inputs.") ||
-    basename(staging) !== "Easy Complete.app" ||
+    basename(staging) !== "Fastab.app" ||
     final !== resolve(expectedFinalPath) ||
     dirname(swapHelper) !== canonicalWorkRoot
   ) {

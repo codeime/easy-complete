@@ -16,7 +16,7 @@ import { terminalGuides } from "../terminalGuides.ts";
 function inlineCode(text: string): ReactNode {
   return text.split("`").map((part, index) =>
     index % 2 === 1 ? (
-      <code key={index} className="font-mono text-[#cdd6e0]">
+      <code key={index} className="font-mono text-(--ink)">
         {part}
       </code>
     ) : (
@@ -27,7 +27,7 @@ function inlineCode(text: string): ReactNode {
 
 const TRACKING_EXPLAINER: Record<TerminalGuide["integration"], string> = {
   "input-method":
-    "Optional macOS input method — Settings → Behavior, or `ec integrations install input-method`",
+    "Optional macOS input method — Settings → Behavior, or `ftab integrations install input-method`",
   xterm: "xterm.js caret detection inside the Electron host",
   accessibility: "macOS Accessibility API",
 };
@@ -35,10 +35,10 @@ const TRACKING_EXPLAINER: Record<TerminalGuide["integration"], string> = {
 function FactRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid gap-1 px-5 py-3.5 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] sm:gap-5">
-      <span className="font-mono text-[11px] uppercase tracking-wider text-[#65707d]">
+      <span className="font-mono text-[11px] uppercase tracking-wider text-(--muted)">
         {label}
       </span>
-      <span className="min-w-0 text-sm leading-[1.6] text-[#cdd6e0]">
+      <span className="min-w-0 text-sm leading-[1.6] text-(--ink)">
         {children}
       </span>
     </div>
@@ -55,7 +55,7 @@ export function TerminalGuidePage({ guide }: { guide: TerminalGuide }) {
     <GuidePage eyebrow={guide.eyebrow} title={guide.heading} intro={guide.intro}>
       <GuideCallout>{inlineCode(guide.callout)}</GuideCallout>
 
-      <div className="mb-10 divide-y divide-[#1c232d] overflow-hidden rounded-[14px] border border-[#1c232d] bg-[#0d1219]">
+      <div className="mb-10 divide-y divide-(--border) overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
         <FactRow label="Cursor tracking">
           {INTEGRATION_LABEL[guide.integration]} —{" "}
           {TRACKING_EXPLAINER[guide.integration]}
@@ -86,15 +86,15 @@ export function TerminalGuidePage({ guide }: { guide: TerminalGuide }) {
       <h2 className={GUIDE_HEADING}>Keyboard controls</h2>
       <GuideList>
         <li>
-          <code className="font-mono text-[#cdd6e0]">↑ / ↓</code> moves through
+          <code className="font-mono text-(--ink)">↑ / ↓</code> moves through
           suggestions.
         </li>
         <li>
-          <code className="font-mono text-[#cdd6e0]">Tab / →</code> accepts the
+          <code className="font-mono text-(--ink)">Tab / →</code> accepts the
           highlighted suggestion.
         </li>
         <li>
-          <code className="font-mono text-[#cdd6e0]">Esc</code> dismisses the
+          <code className="font-mono text-(--ink)">Esc</code> dismisses the
           popup.
         </li>
       </GuideList>

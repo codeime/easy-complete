@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use cfg_if::cfg_if;
 use clap::ValueEnum;
 use fig_os_shim::Env;
-use fig_util::{CLI_BINARY_NAME, PRODUCT_NAME, PTY_BINARY_NAME, Shell, directories};
+use fig_util::{
+    CLI_BINARY_NAME, OLD_CLI_BINARY_NAMES, OLD_PRODUCT_NAME, PRODUCT_NAME, PTY_BINARY_NAME, Shell, directories,
+};
 use regex::{Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 
@@ -416,14 +418,22 @@ impl DotfileShellIntegration {
         );
 
         let old_brand_regex = self.old_brand_regex(when)?;
+        let previous_product_brand_regex = self.previous_product_brand_regex(when)?;
+        let previous_product_comment_regex = Self::previous_product_comment_regex(when);
+        let mut patterns = vec![
+            old_file_regex.to_string(),
+            old_eval_regex,
+            old_source_regex_1,
+            old_source_regex_2,
+            old_brand_regex,
+            previous_product_brand_regex,
+            previous_product_comment_regex,
+        ];
+        for old_cli in OLD_CLI_BINARY_NAMES {
+            patterns.push(self.previous_cli_eval_regex(when, old_cli));
+        }
 
-        Ok(RegexSet::new([
-            old_file_regex,
-            &old_eval_regex,
-            &old_source_regex_1,
-            &old_source_regex_2,
-            &old_brand_regex,
-        ])?)
+        Ok(RegexSet::new(patterns)?)
     }
 
     fn legacy_source_text_1(&self, when: When) -> Result<String> {
@@ -550,6 +560,93 @@ impl DotfileShellIntegration {
             regex::escape(&DotfileShellIntegration::legacy_description(when)),
             self.legacy_source_text_3(when)?,
         ))
+    }
+
+    fn previous_product_descriptions(when: When) -> Vec<String> {
+        match when {
+            When::Pre => vec![format!("# {OLD_PRODUCT_NAME} pre block. Keep at the top of this file.")],
+            When::Post => vec![
+                format!("# {OLD_PRODUCT_NAME} post block. Keep near the bottom of this file."),
+                format!("# {OLD_PRODUCT_NAME} post block. Keep at the bottom of this file."),
+            ],
+        }
+    }
+
+    fn previous_product_comment_regex(when: When) -> String {
+        format!(
+            r#"(?m)^\s*# {}\s+{} block\.[^\n]*\n?"#,
+            regex::escape(OLD_PRODUCT_NAME),
+            when
+        )
+    }
+
+    fn previous_product_script_integration(&self, when: When) -> Result<ShellScriptShellIntegration> {
+        let integration_file_name = format!(
+            "{}.{}.{}",
+            Regex::new(r"^\.").unwrap().replace_all(self.dotfile_name, ""),
+            when,
+            self.shell
+        );
+        Ok(ShellScriptShellIntegration {
+            shell: self.shell,
+            when,
+            path: directories::previous_product_data_dir()?
+                .join("shell")
+                .join(integration_file_name),
+        })
+    }
+
+    fn previous_product_source_text_3(&self, when: When) -> Result<String> {
+        let home = directories::home_dir()?;
+        let integration_path = self.previous_product_script_integration(when)?.path;
+        let path = regex::escape(&format!(
+            "\"${{HOME}}/{}\"",
+            integration_path.strip_prefix(home)?.display()
+        ));
+
+        match self.shell {
+            Shell::Fish => Ok(format!(r"test\s*\-f\s*{path};\s*and\s+builtin\s+source\s+{path}")),
+            _ => Ok(format!(r"\[\[\s*\-f\s*{path}\s*\]\]\s*&&\s*builtin\s+source\s*{path}")),
+        }
+    }
+
+    fn previous_product_brand_regex(&self, when: When) -> Result<String> {
+        let comments = Self::previous_product_descriptions(when)
+            .into_iter()
+            .map(|comment| regex::escape(&comment))
+            .collect::<Vec<_>>()
+            .join("|");
+        Ok(format!(
+            r#"(?m)(?:\s*(?:{comments})\s*\n)?^\s*{}\s*\n{{0,2}}"#,
+            self.previous_product_source_text_3(when)?,
+        ))
+    }
+
+    fn previous_cli_eval_regex(&self, when: When, old_cli: &str) -> String {
+        let cli = regex::escape(old_cli);
+        let shell = regex::escape(&self.shell.to_string());
+        let when_s = regex::escape(&when.to_string());
+        let comments = Self::previous_product_descriptions(when)
+            .into_iter()
+            .map(|comment| regex::escape(&comment))
+            .collect::<Vec<_>>()
+            .join("|");
+        let eval_line = match self.shell {
+            Shell::Fish => format!(
+                r"(?:command -qv {cli}; and |command -v {cli} >/dev/null 2>&1; and |test -x ~/\.local/bin/{cli}; and )?eval \((?:~/\.local/bin/)?{cli} init {shell} {when_s}(?: --rcfile \S+)? \| string split0\)"
+            ),
+            _ => format!(
+                r#"(?:\[ -n "\$BASH_VERSION" \] && )?(?:command -v {cli} >/dev/null 2>&1 && |\[ -x ~/\.local/bin/{cli} \] && )?eval "\$\((?:~/\.local/bin/)?{cli} init {shell} {when_s}(?: --rcfile \S+)?\)""#
+            ),
+        };
+        let path_prefix = match when {
+            When::Pre => match self.shell {
+                Shell::Fish => r"(?:set -Ua fish_user_paths \$HOME/\.local/bin\n)?".to_string(),
+                _ => r#"(?:export PATH="\$\{PATH\}:\$\{HOME\}/\.local/bin"\n)?"#.to_string(),
+            },
+            When::Post => String::new(),
+        };
+        format!(r#"(?m)(?:(?:{comments})\n)?^{path_prefix}{eval_line}\n{{0,2}}"#)
     }
 
     async fn install_inner(&self) -> Result<()> {
@@ -743,7 +840,7 @@ fn split_shebang(contents: &str) -> (&str, &str) {
 /// Otty's block is guarded on `$OTTY_SHELL_INTEGRATION`, so it is a no-op in
 /// every other terminal. It is *not* Otty Autocomplete (a separate Fig-compatible
 /// UI); coexistence here only means "don't treat their rc trailer as a broken
-/// Easy Complete install."
+/// Fastab install."
 ///
 /// Matched against both:
 /// - raw rc files (with `# >>> otty shell integration >>>` markers), and
@@ -824,7 +921,7 @@ mod test {
     use std::process::{Command, Stdio};
 
     use fig_util::build::SKIP_SHELLCHECK_TESTS;
-    use fig_util::directories::{home_dir, old_fig_data_dir};
+    use fig_util::directories::{home_dir, old_fig_data_dir, previous_product_data_dir};
 
     use super::*;
 
@@ -945,6 +1042,144 @@ mod test {
         assert_eq!(replaced, "");
     }
 
+    fn zshrc_integration() -> DotfileShellIntegration {
+        DotfileShellIntegration {
+            pre: true,
+            post: true,
+            shell: Shell::Zsh,
+            dotfile_directory: "".into(),
+            dotfile_name: ".zshrc",
+        }
+    }
+
+    fn fish_integration() -> DotfileShellIntegration {
+        DotfileShellIntegration {
+            pre: true,
+            post: true,
+            shell: Shell::Fish,
+            dotfile_directory: "".into(),
+            dotfile_name: "config.fish",
+        }
+    }
+
+    #[test]
+    fn test_previous_product_regex_strips_easy_complete_blocks() {
+        let integration = zshrc_integration();
+        let data_dir = previous_product_data_dir().unwrap();
+        let dir = data_dir.strip_prefix(home_dir().unwrap()).unwrap().display();
+        let source = format!(
+            r#"[[ -f "${{HOME}}/{dir}/shell/zshrc.pre.zsh" ]] && builtin source "${{HOME}}/{dir}/shell/zshrc.pre.zsh""#
+        );
+        let doc = format!("# Easy Complete pre block. Keep at the top of this file.\n{source}\nexport PATH=/usr/bin\n");
+
+        let stripped = integration.remove_from_text(&doc, When::Pre).unwrap();
+        assert!(
+            !stripped.contains("Easy Complete"),
+            "Easy Complete comment must be removed: {stripped}"
+        );
+        assert!(
+            !stripped.contains("easy-complete/shell"),
+            "Easy Complete source must be removed: {stripped}"
+        );
+        assert!(
+            stripped.contains("export PATH=/usr/bin"),
+            "foreign lines must stay: {stripped}"
+        );
+        assert!(
+            matches!(
+                integration.matches_text(&doc, When::Pre),
+                Err(Error::LegacyInstallation(_))
+            ),
+            "Easy Complete blocks must look like a legacy install so migrate() rewrites them"
+        );
+    }
+
+    #[test]
+    fn test_previous_cli_eval_strips_rcfile_and_guards() {
+        let integration = zshrc_integration();
+        let lines = [
+            r#"eval "$(ec init zsh pre)""#,
+            r#"eval "$(ec init zsh pre --rcfile zshrc)""#,
+            r#"command -v ec >/dev/null 2>&1 && eval "$(ec init zsh pre --rcfile zshrc)""#,
+            r#"[ -x ~/.local/bin/ec ] && eval "$(~/.local/bin/ec init zsh pre --rcfile zshrc)""#,
+            r#"export PATH="${PATH}:${HOME}/.local/bin"
+eval "$(ec init zsh pre --rcfile zshrc)""#,
+        ];
+        for line in lines {
+            let doc =
+                format!("# Easy Complete pre block. Keep at the top of this file.\n{line}\nexport KEEP=/usr/bin\n");
+            let stripped = integration.remove_from_text(&doc, When::Pre).unwrap();
+            assert!(
+                !stripped.contains("ec init"),
+                "legacy eval must be removed: {line} -> {stripped}"
+            );
+            assert!(
+                stripped.contains("export KEEP=/usr/bin"),
+                "foreign lines must stay: {stripped}"
+            );
+            assert!(
+                matches!(
+                    integration.matches_text(&doc, When::Pre),
+                    Err(Error::LegacyInstallation(_))
+                ),
+                "legacy eval must look like a leftover install: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_previous_cli_eval_leaves_ftab() {
+        let integration = zshrc_integration();
+        let line = r#"[ -x ~/.local/bin/ftab ] && eval "$(~/.local/bin/ftab init zsh pre --rcfile zshrc)""#;
+        let stripped = integration.remove_from_text(line, When::Pre).unwrap();
+        assert!(
+            stripped.contains("ftab init"),
+            "current CLI eval must not be treated as leftover: {stripped}"
+        );
+    }
+
+    #[test]
+    fn test_previous_cli_eval_strips_fish() {
+        let integration = fish_integration();
+        let lines = [
+            r#"eval (ec init fish pre | string split0)"#,
+            r#"eval (ec init fish pre --rcfile config | string split0)"#,
+            r#"test -x ~/.local/bin/ec; and eval (~/.local/bin/ec init fish pre --rcfile config | string split0)"#,
+        ];
+        for line in lines {
+            let doc =
+                format!("# Easy Complete pre block. Keep at the top of this file.\n{line}\nset -gx KEEP /usr/bin\n");
+            let stripped = integration.remove_from_text(&doc, When::Pre).unwrap();
+            assert!(
+                !stripped.contains("ec init"),
+                "legacy fish eval must be removed: {line} -> {stripped}"
+            );
+            assert!(
+                stripped.contains("set -gx KEEP /usr/bin"),
+                "foreign lines must stay: {stripped}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_previous_product_regex_leaves_fastab_blocks() {
+        let integration = zshrc_integration();
+        let data_dir = directories::fig_data_dir().unwrap();
+        let dir = data_dir.strip_prefix(home_dir().unwrap()).unwrap().display();
+        let source = format!(
+            r#"[[ -f "${{HOME}}/{dir}/shell/zshrc.pre.zsh" ]] && builtin source "${{HOME}}/{dir}/shell/zshrc.pre.zsh""#
+        );
+        let doc = format!("# Fastab pre block. Keep at the top of this file.\n{source}\n");
+
+        assert!(
+            !integration.legacy_regexes(When::Pre).unwrap().is_match(&doc),
+            "current Fastab blocks must not look like a legacy install"
+        );
+        integration
+            .matches_text(&doc, When::Pre)
+            .expect("a Fastab pre block at the top of the file is installed");
+    }
+
     #[test]
     fn test_split_shebang() {
         let shebang = "#!/usr/bin/env sh";
@@ -969,7 +1204,7 @@ mod test {
     fn test_strip_trailing_otty_marker_block() {
         let body = indoc::indoc! {r#"
             export PATH="$HOME/.local/bin:$PATH"
-            [[ -f "${HOME}/Library/Application Support/easy-complete/shell/bashrc.post.bash" ]] && builtin source "${HOME}/Library/Application Support/easy-complete/shell/bashrc.post.bash"
+            [[ -f "${HOME}/Library/Application Support/fastab/shell/bashrc.post.bash" ]] && builtin source "${HOME}/Library/Application Support/fastab/shell/bashrc.post.bash"
         "#};
         let otty = indoc::indoc! {r#"
 
@@ -995,14 +1230,14 @@ mod test {
     fn test_strip_trailing_otty_comment_stripped_form() {
         // Mimics DotfileShellIntegration::is_installed after comment/blank-line filtering.
         let filtered = indoc::indoc! {r#"
-            [[ -f "${HOME}/Library/Application Support/easy-complete/shell/bashrc.post.bash" ]] && builtin source "${HOME}/Library/Application Support/easy-complete/shell/bashrc.post.bash"
+            [[ -f "${HOME}/Library/Application Support/fastab/shell/bashrc.post.bash" ]] && builtin source "${HOME}/Library/Application Support/fastab/shell/bashrc.post.bash"
             if [ -n "$OTTY_SHELL_INTEGRATION" ] && [ -r "$OTTY_SHELL_INTEGRATION/otty-integration.bash" ]; then
               . "$OTTY_SHELL_INTEGRATION/otty-integration.bash"
             fi
         "#};
         let stripped = strip_trailing_foreign_integrations(filtered);
         assert!(
-            stripped.ends_with("bashrc.post.bash\" ]] && builtin source \"${HOME}/Library/Application Support/easy-complete/shell/bashrc.post.bash\""),
+            stripped.ends_with("bashrc.post.bash\" ]] && builtin source \"${HOME}/Library/Application Support/fastab/shell/bashrc.post.bash\""),
             "post source should remain: {stripped}"
         );
         assert!(

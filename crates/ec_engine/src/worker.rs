@@ -41,7 +41,7 @@ enum JobKind {
         accepted_name: String,
         timestamp: u64,
     },
-    /// `ec hook clear-autocomplete-cache`: drop every cached spec and
+    /// `ftab hook clear-autocomplete-cache`: drop every cached spec and
     /// generator result before the next completion runs.
     ClearCaches,
 }
@@ -508,7 +508,7 @@ fn bundled_specs_ir_dir() -> anyhow::Result<PathBuf> {
     }
 }
 
-/// `Easy Complete.app/Contents/MacOS` → `Contents/Resources/specs-ir`. Only the
+/// `Fastab.app/Contents/MacOS` → `Contents/Resources/specs-ir`. Only the
 /// compiled IR is bundled; the JS specs it was built from never enter the `.app`,
 /// so pointing at `Resources/specs` would silently yield an empty registry.
 fn specs_ir_in_bundle(macos_dir: &Path) -> PathBuf {
@@ -1139,12 +1139,12 @@ mod tests {
 
     #[test]
     fn app_bundle_uses_specs_ir_not_js_specs() {
-        let macos = Path::new("/Applications/easy-complete.app/Contents/MacOS");
+        let macos = Path::new("/Applications/Fastab.app/Contents/MacOS");
         let dir = specs_ir_in_bundle(macos);
         assert_eq!(dir.file_name().unwrap(), "specs-ir");
         assert_eq!(
             dir,
-            PathBuf::from("/Applications/easy-complete.app/Contents/MacOS/../Resources/specs-ir")
+            PathBuf::from("/Applications/Fastab.app/Contents/MacOS/../Resources/specs-ir")
         );
     }
 }

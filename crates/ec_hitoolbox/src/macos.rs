@@ -17,6 +17,10 @@ const SELECTED_KEY: &str = "AppleSelectedInputSources";
 const BUNDLE_ID_KEY: &str = "Bundle ID";
 const KIND_KEY: &str = "InputSourceKind";
 const NON_KEYBOARD_KIND: &str = "Non Keyboard Input Method";
+/// Bundle IDs left by the Easy Complete product name. A vendor rename does not
+/// share a prefix with `app.fastab.inputmethod`, so prefix cleanup cannot see
+/// them; they still point at a helper that no longer exists.
+const PREVIOUS_IME_BUNDLE_IDS: &[&str] = &["dev.emmmm.easy-complete.inputmethod"];
 
 /// Whether `AppleEnabledInputSources` names this source.
 ///
@@ -56,9 +60,13 @@ fn classify(bundle_id: Option<&str>, kind: Option<&str>, ours: &str, vendor_pref
     if bundle_id == Some(ours) {
         return Entry::Ours;
     }
+    if bundle_id.is_some_and(|id| PREVIOUS_IME_BUNDLE_IDS.contains(&id)) {
+        return Entry::Superseded;
+    }
     // An empty prefix would match every palette on the machine, so a bundle ID
     // with too few components disables the rename cleanup rather than widening it.
-    let same_vendor = !vendor_prefix.is_empty() && bundle_id.is_some_and(|id| id.starts_with(vendor_prefix));
+    // Match on a label boundary so `app.fastab` does not eat `app.fastabulous`.
+    let same_vendor = bundle_id.is_some_and(|id| vendor_owns(id, vendor_prefix));
     if same_vendor && kind == Some(NON_KEYBOARD_KIND) {
         Entry::Superseded
     } else {
@@ -66,14 +74,24 @@ fn classify(bundle_id: Option<&str>, kind: Option<&str>, ours: &str, vendor_pref
     }
 }
 
-/// `dev.emmmm.easy-complete.inputmethod` → `dev.emmmm`: the reverse-DNS vendor,
-/// which survives renaming both the app and the helper.
+fn vendor_owns(id: &str, prefix: &str) -> bool {
+    !prefix.is_empty() && (id == prefix || (id.starts_with(prefix) && id.as_bytes().get(prefix.len()) == Some(&b'.')))
+}
+
+/// `app.fastab.inputmethod` → `app.fastab`: the reverse-DNS vendor, which
+/// survives renaming both the app and the helper.
+///
+/// Three-label IME ids keep both remaining labels so a two-label product is
+/// still a vendor, not just `app`. Four-or-more still drop the last two
+/// (`com.example.fastab.inputmethod` → `com.example`).
 fn vendor_prefix(bundle_id: &str) -> &str {
-    bundle_id
-        .rsplit_once('.')
-        .map_or("", |(head, _)| head)
-        .rsplit_once('.')
-        .map_or("", |(head, _)| head)
+    let Some((without_suffix, _)) = bundle_id.rsplit_once('.') else {
+        return "";
+    };
+    let Some((head, _)) = without_suffix.rsplit_once('.') else {
+        return "";
+    };
+    if head.contains('.') { head } else { without_suffix }
 }
 
 fn palette_entry(bundle_id: &str) -> CFDictionary<CFString, CFString> {
@@ -179,8 +197,10 @@ mod tests {
 
     /// Never the real domain: a test must not touch the input sources of the
     /// machine it runs on.
-    const TEST_DOMAIN: &str = "dev.emmmm.easy-complete.palette-test";
-    const OURS: &str = "dev.emmmm.easy-complete.inputmethod";
+    const TEST_DOMAIN: &str = "app.fastab.palette-test";
+    const OURS: &str = "app.fastab.inputmethod";
+    const VENDOR: &str = "app.fastab";
+    const PREVIOUS_PRODUCT: &str = "dev.emmmm.easy-complete.inputmethod";
 
     static SERIAL: Mutex<()> = Mutex::new(());
 
@@ -205,66 +225,76 @@ mod tests {
 
     #[test]
     fn vendor_prefix_keeps_the_reverse_dns_vendor() {
+        assert_eq!(vendor_prefix("app.fastab.inputmethod"), "app.fastab");
+        assert_eq!(vendor_prefix("com.example.fastab.inputmethod"), "com.example");
         assert_eq!(vendor_prefix("dev.emmmm.easy-complete.inputmethod"), "dev.emmmm");
-        assert_eq!(vendor_prefix("com.example.app"), "com");
         assert_eq!(vendor_prefix("two.parts"), "");
         assert_eq!(vendor_prefix("single"), "");
     }
 
     #[test]
     fn our_own_entry_is_recognised() {
-        assert_eq!(
-            classify(Some(OURS), Some(NON_KEYBOARD_KIND), OURS, "dev.emmmm"),
-            Entry::Ours
-        );
+        assert_eq!(classify(Some(OURS), Some(NON_KEYBOARD_KIND), OURS, VENDOR), Entry::Ours);
         // A stale entry keeps its identity even without the kind recorded.
-        assert_eq!(classify(Some(OURS), None, OURS, "dev.emmmm"), Entry::Ours);
+        assert_eq!(classify(Some(OURS), None, OURS, VENDOR), Entry::Ours);
     }
 
     #[test]
     fn a_renamed_copy_of_this_palette_is_superseded() {
         assert_eq!(
             classify(
-                Some("dev.emmmm.old-name.inputmethod"),
+                Some("app.fastab.old-name.inputmethod"),
                 Some(NON_KEYBOARD_KIND),
                 OURS,
-                "dev.emmmm"
+                VENDOR
             ),
             Entry::Superseded
         );
     }
 
     #[test]
-    fn other_vendors_and_keyboard_layouts_are_left_alone() {
+    fn previous_product_ime_is_superseded() {
         assert_eq!(
-            classify(
-                Some("com.apple.keylayout.ABC"),
-                Some("Keyboard Layout"),
-                OURS,
-                "dev.emmmm"
-            ),
+            classify(Some(PREVIOUS_PRODUCT), Some(NON_KEYBOARD_KIND), OURS, VENDOR),
+            Entry::Superseded
+        );
+        // The dead helper is this product even if the kind field is missing.
+        assert_eq!(classify(Some(PREVIOUS_PRODUCT), None, OURS, VENDOR), Entry::Superseded);
+    }
+
+    #[test]
+    fn a_three_label_prefix_does_not_eat_other_app_vendors() {
+        assert_eq!(
+            classify(Some("app.other.inputmethod"), Some(NON_KEYBOARD_KIND), OURS, VENDOR),
             Entry::Other
         );
         assert_eq!(
             classify(
-                Some("com.sogou.inputmethod"),
+                Some("app.fastabulous.inputmethod"),
                 Some(NON_KEYBOARD_KIND),
                 OURS,
-                "dev.emmmm"
+                VENDOR
             ),
+            Entry::Other
+        );
+    }
+
+    #[test]
+    fn other_vendors_and_keyboard_layouts_are_left_alone() {
+        assert_eq!(
+            classify(Some("com.apple.keylayout.ABC"), Some("Keyboard Layout"), OURS, VENDOR),
+            Entry::Other
+        );
+        assert_eq!(
+            classify(Some("com.sogou.inputmethod"), Some(NON_KEYBOARD_KIND), OURS, VENDOR),
             Entry::Other
         );
         // Same vendor, but a keyboard layout rather than this palette.
         assert_eq!(
-            classify(
-                Some("dev.emmmm.keylayout.x"),
-                Some("Keyboard Layout"),
-                OURS,
-                "dev.emmmm"
-            ),
+            classify(Some("app.fastab.keylayout.x"), Some("Keyboard Layout"), OURS, VENDOR),
             Entry::Other
         );
-        assert_eq!(classify(None, None, OURS, "dev.emmmm"), Entry::Other);
+        assert_eq!(classify(None, None, OURS, VENDOR), Entry::Other);
     }
 
     /// An unparsed bundle ID must not turn the rename cleanup into "drop every
@@ -348,7 +378,7 @@ mod tests {
             key,
             &[
                 ("com.apple.keylayout.ABC", "Keyboard Layout"),
-                ("dev.emmmm.old-name.inputmethod", NON_KEYBOARD_KIND),
+                ("app.fastab.old-name.inputmethod", NON_KEYBOARD_KIND),
             ],
         );
 
@@ -358,6 +388,30 @@ mod tests {
         let ids: Vec<Option<&str>> = entries.iter().map(|(id, _)| id.as_deref()).collect();
         assert_eq!(ids, [Some("com.apple.keylayout.ABC"), Some(OURS)]);
         assert_eq!(entries[1].1.as_deref(), Some(NON_KEYBOARD_KIND));
+
+        clear(key);
+    }
+
+    /// Easy Complete used a different vendor. Prefix cleanup cannot see that
+    /// entry; the explicit previous-id list has to drop it or new windows keep
+    /// binding to a helper that is gone.
+    #[test]
+    fn previous_product_ime_is_dropped_on_rewrite() {
+        let key = "PaletteTestPreviousProduct";
+        let Some(_serial) = scratch(key) else { return };
+        seed(
+            key,
+            &[
+                ("com.apple.keylayout.ABC", "Keyboard Layout"),
+                (PREVIOUS_PRODUCT, NON_KEYBOARD_KIND),
+            ],
+        );
+
+        assert!(ensure_listed(TEST_DOMAIN, key, OURS));
+
+        let entries = read_back(key);
+        let ids: Vec<Option<&str>> = entries.iter().map(|(id, _)| id.as_deref()).collect();
+        assert_eq!(ids, [Some("com.apple.keylayout.ABC"), Some(OURS)]);
 
         clear(key);
     }

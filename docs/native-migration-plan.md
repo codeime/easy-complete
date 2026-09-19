@@ -1,8 +1,8 @@
 # 纯原生补全迁移计划（桌面零运行时 JS）
 
-**状态（T4.3）：完成。** `Easy Complete.app` 运行时不执行 JavaScript。3701 个抽取 hook = 3136 typed IR + 565 named adapters；`hookFilesOnDisk = 0`；`gate.pathSwitchAllowed = true`；`rquickjs` / `js_host` / `hooks/` / `source-modules/` 已删除。构建期仍用 Node。清单以 `crates/ec_engine/testdata/native-hooks/inventory.json` 为准。
+**状态（T4.3）：完成。** `Fastab.app` 运行时不执行 JavaScript。3701 个抽取 hook = 3136 typed IR + 565 named adapters；`hookFilesOnDisk = 0`；`gate.pathSwitchAllowed = true`；`rquickjs` / `js_host` / `hooks/` / `source-modules/` 已删除。构建期仍用 Node。清单以 `crates/ec_engine/testdata/native-hooks/inventory.json` 为准。
 
-目标：`Easy Complete.app` 运行时不执行任何 JavaScript（删除 `rquickjs`、`js_host`、`hooks/`、`source-modules/`），同时用户可见行为（候选、插入、排序、缓存、shell 环境、超时）与原先的 QuickJS 路径 / WebView v2.2.2 等价。构建期可以用 Node；`.app` 里不能有 JS。
+目标：`Fastab.app` 运行时不执行任何 JavaScript（删除 `rquickjs`、`js_host`、`hooks/`、`source-modules/`），同时用户可见行为（候选、插入、排序、缓存、shell 环境、超时）与原先的 QuickJS 路径 / WebView v2.2.2 等价。构建期可以用 Node；`.app` 里不能有 JS。
 
 三条不变量贯穿全部阶段：
 
@@ -13,6 +13,8 @@
 逐任务的执行说明（改哪些文件、验收命令）在 `docs/native-migration-tasks.md`。进度、数字与 gate 的单一事实来源是 `crates/ec_engine/testdata/native-hooks/inventory.json`（`node scripts/classify-native-hooks.mjs --check|--update`，CI 校验）。下面所有数字均来自 `@chen86860/autocomplete-specs@3.1.0` 的这份清单。
 
 ## 0. 现状快照（v3.0.0-beta.14）
+
+> 这一节是 T4 切换前的基线，不是当前 Fastab 运行时。当前状态见文首：typed IR 已上线，`hookFilesOnDisk = 0`，`pathSwitchAllowed = true`。
 
 源 spec 中共 **4268** 个 hook 函数：
 

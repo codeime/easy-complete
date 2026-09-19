@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DMG_PATH="${1:-${REPO_DIR}/dist/Easy-Complete-arm64.dmg}"
+DMG_PATH="${1:-${REPO_DIR}/dist/Fastab-arm64.dmg}"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 
 if [ -z "$SIGNING_IDENTITY" ]; then

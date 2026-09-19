@@ -7,20 +7,26 @@
 @import "@fontsource/space-grotesk/latin-700.css";
 @import "tailwindcss";
 
-/* Accent theme — defaults to the GitHub-green palette from the design.
-   Swapped at runtime by setting CSS variables on :root (see useAccent). */
+/* Claude-like paper light: warm off-white, rare terracotta accent. */
 :root {
-  --accent: #39d353;
-  --accent-soft: rgba(57, 211, 83, 0.14);
-  --accent-line: rgba(57, 211, 83, 0.45);
-  --accent-glow: rgba(57, 211, 83, 0.22);
+  --accent: #d97757;
+  --accent-soft: rgba(217, 119, 87, 0.12);
+  --accent-line: rgba(217, 119, 87, 0.38);
+  --accent-glow: rgba(217, 119, 87, 0.16);
+  --accent-fg: #faf9f5;
+  --canvas: #faf9f5;
+  --ink: #141413;
+  --muted: #6f6e69;
+  --border: #e6e4da;
+  --surface: #ffffff;
+  --code-bg: #f1efe8;
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @theme {
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
 }
 
 html,
@@ -29,14 +35,14 @@ body {
 }
 
 body {
-  background: #0a0d12;
-  color: #e6edf3;
+  background: var(--canvas);
+  color: var(--ink);
   font-family: var(--font-display);
   -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
-  background: rgba(57, 211, 83, 0.28);
+  background: rgba(217, 119, 87, 0.22);
 }
 
 @keyframes ec-blink {
@@ -50,87 +56,8 @@ body {
   }
 }
 
-@keyframes ec-pop {
-  0% {
-    opacity: 0;
-    transform: translateY(6px) scale(0.99);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 .ec-blink {
   animation: ec-blink 1s steps(1) infinite;
-}
-
-.ec-pop {
-  animation: ec-pop 0.16s var(--ease-out-quart);
-}
-
-@keyframes ec-marquee {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    /* Exactly one copy of the track — the loop point is invisible. */
-    transform: translate3d(-50%, 0, 0);
-  }
-}
-
-.ec-marquee-track {
-  animation: ec-marquee 42s linear infinite;
-  will-change: transform;
-}
-
-.ec-marquee:hover .ec-marquee-track {
-  animation-play-state: paused;
-}
-
-/* Fade the logos out at both edges instead of cutting them off. */
-.ec-marquee {
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent,
-    #000 9%,
-    #000 91%,
-    transparent
-  );
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    #000 9%,
-    #000 91%,
-    transparent
-  );
-}
-
-.ec-reveal {
-  opacity: 0;
-  transform: translate3d(0, 22px, 0);
-  transition:
-    opacity 0.56s var(--ease-out-quint),
-    transform 0.56s var(--ease-out-quint);
-}
-
-.ec-reveal.is-visible {
-  opacity: 1;
-  transform: translate3d(0, 0, 0);
-}
-
-.ec-action:hover {
-  transform: translate3d(0, -2px, 0);
-}
-
-.ec-action:active {
-  transform: translate3d(0, 0, 0) scale(0.98);
-  transition-duration: 100ms;
-}
-
-.ec-card:active {
-  transform: translate3d(0, -1px, 0) scale(0.995);
-  transition-duration: 100ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -143,17 +70,7 @@ body {
     transition-duration: 0.01ms !important;
   }
 
-  .ec-reveal {
-    opacity: 1;
-    transform: none;
-    filter: none;
-  }
-
   .ec-blink {
-    animation: none;
-  }
-
-  .ec-marquee-track {
     animation: none;
   }
 }

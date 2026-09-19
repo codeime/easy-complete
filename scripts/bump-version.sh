@@ -34,9 +34,9 @@ grep -qxF "export const APP_VERSION = \"$VERSION\";" "$REPO_DIR/website/src/down
 # directly, and advance both README links with each version bump.
 for readme in "$REPO_DIR/README.md" "$REPO_DIR/README.zh-CN.md"; do
   sed -i '' -E \
-    "s#https://github.com/codeime/easy-complete/releases/(latest/download|download/v[^/]+)/Easy-Complete-arm64\\.dmg#https://github.com/codeime/easy-complete/releases/download/v${VERSION}/Easy-Complete-arm64.dmg#g" \
+    "s#https://github.com/codeime/easy-complete/releases/(latest/download|download/v[^/]+)/Fastab-arm64\\.dmg#https://github.com/codeime/easy-complete/releases/download/v${VERSION}/Fastab-arm64.dmg#g" \
     "$readme"
-  grep -Fq "https://github.com/codeime/easy-complete/releases/download/v${VERSION}/Easy-Complete-arm64.dmg" "$readme" \
+  grep -Fq "https://github.com/codeime/easy-complete/releases/download/v${VERSION}/Fastab-arm64.dmg" "$readme" \
     || { echo "Failed to update $readme download link" >&2; exit 1; }
 done
 

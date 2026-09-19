@@ -27,8 +27,6 @@ pub const DASHBOARD_SIZE: LogicalSize<f64> = LogicalSize::new(820.0, 640.0);
 
 pub const AUTOCOMPLETE_WINDOW_TITLE: &str = "Fig Autocomplete";
 
-pub const LOGIN_PATH: &str = "/";
-
 fn map_theme(theme: &str) -> Option<TaoTheme> {
     match theme {
         "dark" => Some(TaoTheme::Dark),

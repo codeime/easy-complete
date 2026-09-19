@@ -5,7 +5,7 @@
 #
 #   scripts/assert-no-runtime-js.sh
 #     cargo tree + compiled bundle/specs-ir (CI after compile-spec-ir)
-#   scripts/assert-no-runtime-js.sh "build/Easy Complete.app/Contents/Resources"
+#   scripts/assert-no-runtime-js.sh "build/Fastab.app/Contents/Resources"
 #     cargo tree + the assembled .app (release after build-app.sh)
 #
 set -euo pipefail

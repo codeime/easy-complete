@@ -11,9 +11,9 @@ import {
 import { AX_SETTINGS_PANE_ZH, AX_SETTINGS_PANE_ZH_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "在 macOS 上为 Ghostty 启用自动补全 — Easy Complete";
+const TITLE = "在 macOS 上为 Ghostty 启用自动补全 — Fastab";
 const DESCRIPTION =
-  "使用 Easy Complete 为 macOS 上的 Ghostty 添加 IDE 风格终端自动补全，了解 Shell 集成与随附输入法如何让建议窗口准确跟随光标。";
+  "使用 Fastab 为 macOS 上的 Ghostty 添加 IDE 风格终端自动补全，了解 Shell 集成与随附输入法如何让建议窗口准确跟随光标。";
 const ALTERNATES = [
   { locale: "en" as const, path: "/terminals/ghostty" },
   { locale: "zh-CN" as const, path: "/zh/terminals/ghostty" },
@@ -46,7 +46,7 @@ function ZhGhosttyPage() {
       <GuidePage
         eyebrow="Ghostty 自动补全"
         title="让 IDE 风格补全准确跟随 Ghostty 光标。"
-        intro="Easy Complete 将 Shell 状态与随附的 macOS 输入法结合，让原生建议窗口在 Ghostty 中始终对准当前光标。"
+        intro="Fastab 将 Shell 状态与随附的 macOS 输入法结合，让原生建议窗口在 Ghostty 中始终对准当前光标。"
         locale="zh-CN"
         hrefs={{
           en: "/terminals/ghostty",
@@ -63,8 +63,8 @@ function ZhGhosttyPage() {
         <GuideCallout>
           Ghostty 绕过了标准 PTY 光标跟踪路径的一部分，因此需要输入法集成。可在「设置
           → 行为」里安装，或运行{" "}
-          <code className="font-mono text-[#cdd6e0]">
-            ec integrations install input-method
+          <code className="font-mono text-(--ink)">
+            ftab integrations install input-method
           </code>
           。
         </GuideCallout>
@@ -76,40 +76,40 @@ function ZhGhosttyPage() {
               href="/zh/install"
               className="text-(--accent) underline underline-offset-4"
             >
-              安装 Easy Complete
+              安装 Fastab
             </a>
             ，并授予辅助功能权限。
           </li>
           <li>退出并重新打开 Ghostty，或重载当前 Shell。</li>
           <li>
-            运行 <code className="font-mono text-[#cdd6e0]">ec doctor</code>
+            运行 <code className="font-mono text-(--ink)">ftab doctor</code>
             ，确认 Shell 和输入法集成都正常工作。
           </li>
         </GuideList>
-        <pre className={GUIDE_CODE}>{"exec $SHELL\nec doctor"}</pre>
+        <pre className={GUIDE_CODE}>{"exec $SHELL\nftab doctor"}</pre>
 
         <h2 className={GUIDE_HEADING}>建议错位或不显示时</h2>
         <p className={GUIDE_PARAGRAPH}>
           重新注册随附输入法，然后重启 Ghostty，让 macOS 加载更新后的集成。
         </p>
-        <pre className={GUIDE_CODE}>ec integrations install input-method</pre>
+        <pre className={GUIDE_CODE}>ftab integrations install input-method</pre>
         <p className={GUIDE_PARAGRAPH}>
-          还要确认「{AX_SETTINGS_PANE_ZH}」中仍然启用了 Easy Complete（
+          还要确认「{AX_SETTINGS_PANE_ZH}」中仍然启用了 Fastab（
           {AX_SETTINGS_PANE_ZH_LEGACY}）。
         </p>
 
         <h2 className={GUIDE_HEADING}>键盘操作</h2>
         <GuideList>
           <li>
-            <code className="font-mono text-[#cdd6e0]">↑ / ↓</code>
+            <code className="font-mono text-(--ink)">↑ / ↓</code>
             用于切换建议。
           </li>
           <li>
-            <code className="font-mono text-[#cdd6e0]">Tab / →</code>
+            <code className="font-mono text-(--ink)">Tab / →</code>
             用于接受高亮的建议。
           </li>
           <li>
-            <code className="font-mono text-[#cdd6e0]">Esc</code>
+            <code className="font-mono text-(--ink)">Esc</code>
             用于关闭建议窗口。
           </li>
         </GuideList>

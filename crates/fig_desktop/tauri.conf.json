@@ -3,13 +3,13 @@
     "distDir": []
   },
   "package": {
-    "productName": "Easy Complete"
+    "productName": "Fastab"
   },
   "tauri": {
     "bundle": {
       "targets": "app",
       "active": true,
-      "identifier": "dev.emmmm.easy-complete",
+      "identifier": "app.fastab",
       "icon": [
         "icons/icon.icns",
         "icons/128x128.png",

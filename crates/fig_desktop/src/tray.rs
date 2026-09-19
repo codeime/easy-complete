@@ -14,7 +14,6 @@ use tracing::{error, trace};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::event::{Event, ShowMessageNotification, WindowEvent};
-use crate::webview::LOGIN_PATH;
 use crate::{AUTOCOMPLETE_ID, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget};
 
 // macro_rules! icon {
@@ -35,7 +34,6 @@ use crate::{AUTOCOMPLETE_ID, DASHBOARD_ID, EventLoopProxy, EventLoopWindowTarget
 //     }};
 // }
 
-const LOGIN_MENU_ID: &str = "onboarding";
 const ACCESSIBILITY_MENU_ID: &str = "accessibility";
 
 /// Autocomplete is fully inert without Accessibility, so the tray is the one surface that can say
@@ -99,19 +97,6 @@ pub fn handle_event(menu_event: &MenuEvent, proxy: &EventLoopProxy) {
                     window_id: DASHBOARD_ID.clone(),
                     window_event: WindowEvent::Batch(vec![
                         WindowEvent::NavigateRelative { path: "/".into() },
-                        WindowEvent::Show,
-                    ]),
-                })
-                .unwrap();
-        },
-        LOGIN_MENU_ID => {
-            proxy
-                .send_event(Event::WindowEvent {
-                    window_id: DASHBOARD_ID.clone(),
-                    window_event: WindowEvent::Batch(vec![
-                        WindowEvent::NavigateRelative {
-                            path: LOGIN_PATH.into(),
-                        },
                         WindowEvent::Show,
                     ]),
                 })
@@ -398,33 +383,14 @@ impl MenuElement {
     }
 }
 
-fn menu(is_logged_in: bool) -> Vec<MenuElement> {
+fn menu(_is_logged_in: bool) -> Vec<MenuElement> {
     let quit = MenuElement::entry(None, None, "Quit", "quit").with_accelerator("super+KeyQ");
     let settings = MenuElement::entry(None, None, "Settings", "settings").with_accelerator("super+Comma");
     let check_for_updates = MenuElement::entry(None, None, "Check for Updates…", "update");
 
-    // Auth is gone, so the signed-out branches never run. Do not read
-    // `desktop.completedOnboarding` from SQLite on every tray rebuild.
-    let mut menu = if !is_logged_in {
-        let yellow_circle_img = warning_icon_rgba();
-        let onboarded_completed = fig_settings::state::get_bool_or("desktop.completedOnboarding", false);
-        if !onboarded_completed {
-            vec![
-                MenuElement::info(
-                    Some(yellow_circle_img),
-                    format!("{PRODUCT_NAME} hasn't been set up yet..."),
-                ),
-                MenuElement::entry(None, None, "Get Started", LOGIN_MENU_ID),
-            ]
-        } else {
-            vec![
-                MenuElement::info(Some(yellow_circle_img), "Your session has expired"),
-                MenuElement::entry(None, None, "Log back in", LOGIN_MENU_ID),
-            ]
-        }
-    } else {
-        vec![settings, check_for_updates]
-    };
+    // Auth is gone. A leftover logout IPC must not flip the tray to
+    // "Get Started" / "Log back in" — those commands do not exist.
+    let mut menu = vec![settings, check_for_updates];
 
     if accessibility_is_missing() {
         let warning_img = warning_icon_rgba();

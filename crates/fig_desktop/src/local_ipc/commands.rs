@@ -222,7 +222,7 @@ pub async fn logout(proxy: &EventLoopProxy) -> LocalResult {
         .ok();
 
     proxy
-        .send_event(Event::ReloadTray { is_logged_in: false })
+        .send_event(Event::ReloadTray { is_logged_in: true })
         .map_err(|err| error!(?err))
         .ok();
 

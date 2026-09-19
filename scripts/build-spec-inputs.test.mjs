@@ -175,7 +175,7 @@ test("snapshot manifest pins directory identities, binary digests, and IR pair d
   await writeFile(join(snapshot, "index.json"), "{}\n");
   const marker = await createPairMarker({ sourceRoot: source, irRoot: snapshot });
   await writePairMarker(snapshot, marker);
-  for (const name of ["easy-complete", "ec", "ecterm", "fig_input_method"]) {
+  for (const name of ["fastab", "ftab", "fastabterm", "fig_input_method"]) {
     await writeFile(join(binaries, name), `${name}\n`);
     await chmod(join(binaries, name), 0o755);
   }
@@ -192,14 +192,14 @@ test("snapshot manifest pins directory identities, binary digests, and IR pair d
   assert.equal(manifest.snapshot.pairSha256, marker.pairSha256);
   await verifySnapshotForAssembly(snapshot);
 
-  await writeFile(join(binaries, "ec"), "tampered\n");
-  await chmod(join(binaries, "ec"), 0o755);
+  await writeFile(join(binaries, "ftab"), "tampered\n");
+  await chmod(join(binaries, "ftab"), 0o755);
   await assert.rejects(
     verifySnapshotForAssembly(snapshot),
-    /binary snapshot ec changed before assembly/,
+    /binary snapshot ftab changed before assembly/,
   );
-  await writeFile(join(binaries, "ec"), "ec\n");
-  await chmod(join(binaries, "ec"), 0o755);
+  await writeFile(join(binaries, "ftab"), "ftab\n");
+  await chmod(join(binaries, "ftab"), 0o755);
   await writeFile(join(snapshot, "index.json"), "{\"tampered\":true}\n");
   await assert.rejects(
     verifySnapshotForAssembly(snapshot),

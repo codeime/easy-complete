@@ -65,7 +65,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_open_url() {
-        open_url("https://easy-complete.emmmm.dev").unwrap();
+        open_url("https://fastab.app").unwrap();
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
+import { APP_VERSION } from "./download.ts";
 import { OG_LOCALE, type Locale } from "./i18n/types.ts";
-import { APP_VERSION, DOWNLOAD_URL } from "./download.ts";
 
 /** hreflang values. `zh-Hans` targets Simplified Chinese regardless of region. */
 const HREFLANG: Record<Locale, string> = {
@@ -8,10 +8,10 @@ const HREFLANG: Record<Locale, string> = {
   "zh-CN": "zh-Hans",
 };
 
-export const SITE_NAME = "Easy Complete";
-export const HOME_TITLE = "Easy Complete (Native) — macOS Terminal Autocomplete";
+export const SITE_NAME = "Fastab";
+export const HOME_TITLE = "Fastab — macOS terminal autocomplete";
 export const HOME_DESCRIPTION =
-  "Easy Complete (Native) adds IDE-style inline autocomplete to your macOS terminal. Native GPUI overlay — not a WebView. Fast, local, open source.";
+  "IDE-style suggestions as you type — git, docker, npm, cargo — in Ghostty, iTerm2, VS Code, Kitty, and more. Native GPUI overlay, fully on-device. This fork has all telemetry off.";
 
 export function siteOrigin(): string {
   if (typeof window !== "undefined") {
@@ -44,7 +44,7 @@ export function pageHead({
   title,
   description,
   path,
-  imageAlt = "Easy Complete terminal autocomplete preview",
+  imageAlt = "Fastab terminal autocomplete preview",
   robots = "index, follow",
   locale = "en",
   alternates,
@@ -126,7 +126,7 @@ function publisherSchema() {
     url: "https://tools.emmmm.dev",
     email: "help@emmmm.dev",
     sameAs: [
-      "https://easy-complete.emmmm.dev/",
+      "https://fastab.app/",
       "https://github.com/codeime/easy-complete",
       "https://x.com/chen86860",
     ],
@@ -164,7 +164,7 @@ export function homeSchema(locale: Locale = "en") {
         releaseNotes:
           "https://github.com/codeime/easy-complete/blob/main/CHANGELOG.md",
         downloadUrl:
-          DOWNLOAD_URL,
+          "https://github.com/codeime/easy-complete/releases/latest/download/Fastab-arm64.dmg",
         codeRepository: "https://github.com/codeime/easy-complete",
         softwareRequirements: "macOS 12 or later; Apple Silicon (ARM64)",
         license: "https://opensource.org/license/mit",
@@ -204,7 +204,7 @@ export function guideSchema({
   const docsPath = locale === "en" ? "/docs" : "/zh/docs";
   const isDocsRoot = path === docsPath;
 
-  // Mirrors the visible trail: Easy Complete / Docs / <page>.
+  // Mirrors the visible trail: Fastab / Docs / <page>.
   const trail = [
     { name: SITE_NAME, item: absoluteUrl(locale === "en" ? "/" : "/zh") },
     ...(isDocsRoot

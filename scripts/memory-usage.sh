@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Report memory used by every Easy Complete process.
+# Report memory used by every Fastab process.
 #
 # Numbers come from `footprint`, i.e. phys_footprint — the same figure Activity
 # Monitor shows under "Memory" and the one that counts against system memory
@@ -43,13 +43,13 @@ done
 
 # Anchored on the installed bundle layout and on cargo's output directories so a
 # `cargo run` build is picked up too. `figterm` rewrites its process title to
-# "<shell> (ecterm)", which is why it is matched on the title rather than a path.
+# "<shell> (fastabterm)", which is why it is matched on the title rather than a path.
 #
 # The negative match matters: an editor or terminal whose window happens to
-# mention this project shows up in `ps` with "easy-complete" in its title.
-readonly MATCH='Easy Complete\.app/Contents/(MacOS/easy-complete|Helpers/.*fig_input_method)|target/(dist|release|debug)/(easy-complete|figterm|ec_cli)|\(ecterm\)'
+# mention this project shows up in `ps` with "fastab" in its title.
+readonly MATCH='Fastab\.app/Contents/(MacOS/(fastab|ftab)|Helpers/.*fig_input_method)|target/(dist|release|debug)/(fastab|figterm|ec_cli|ftab)|\(fastabterm\)'
 # An editor whose window title mentions this project shows up in `ps` with
-# "easy-complete" in its command line. The paths above are specific enough on
+# "fastab" in its command line. The paths above are specific enough on
 # their own, but these are the ones actually seen in the wild.
 readonly EXCLUDE='Cursor Helper|Code Helper|extension-host'
 
@@ -68,10 +68,10 @@ collect_pids() {
 #
 # Kept to substr/index rather than a regex with capture groups: macOS ships BWK
 # awk, which has no three-argument match(). Process names can contain spaces
-# ("zsh (ecterm)"), so field splitting is out too.
+# ("zsh (fastabterm)"), so field splitting is out too.
 sample() {
     footprint --noCategories -f bytes "$@" 2>/dev/null | awk '
-        # "easy-complete [9070]: 64-bit    Footprint: 85281280 B (16384 ...)"
+        # "fastab [9070]: 64-bit    Footprint: 85281280 B (16384 ...)"
         /Footprint:/ && /\[/ {
             lb = index($0, " [")
             rb = index($0, "]:")
@@ -107,7 +107,7 @@ report() {
     done < <(collect_pids)
 
     if [[ ${#args[@]} -eq 0 ]]; then
-        echo "No Easy Complete processes running."
+        echo "No Fastab processes running."
         return
     fi
 

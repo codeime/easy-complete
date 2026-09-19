@@ -42,9 +42,9 @@ const SNAPSHOT_MANIFEST_NAME = ".build-input-snapshot.json";
 const SNAPSHOT_MANIFEST_FORMAT = 1;
 const SNAPSHOT_MANIFEST_KIND = "easy-complete-build-input-snapshot";
 const EXPECTED_BINARIES = new Map([
-  ["easy-complete", join(repoDir, "crates", "fig_desktop", "Cargo.toml")],
-  ["ec", join(repoDir, "crates", "ec_cli", "Cargo.toml")],
-  ["ecterm", join(repoDir, "crates", "figterm", "Cargo.toml")],
+  ["fastab", join(repoDir, "crates", "fig_desktop", "Cargo.toml")],
+  ["ftab", join(repoDir, "crates", "ec_cli", "Cargo.toml")],
+  ["fastabterm", join(repoDir, "crates", "figterm", "Cargo.toml")],
   [
     "fig_input_method",
     join(repoDir, "crates", "fig_input_method", "Cargo.toml"),

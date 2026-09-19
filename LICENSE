@@ -1,7 +1,12 @@
+This software is a fork of Easy Complete
+(https://github.com/codeime/easy-complete), which is based on Amazon Q
+Developer CLI (https://github.com/aws/amazon-q-developer-cli) and Fig
+(https://github.com/withfig/autocomplete).
+
 MIT License
 
 Copyright (c) 2024 Amazon.com, Inc. or its affiliates.
-Copyright (c) 2026 Easy Complete contributors
+Copyright (c) 2026 Fastab contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

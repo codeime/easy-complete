@@ -23,8 +23,8 @@ export const Route = createRootRoute({
       meta: [
         { charSet: "utf-8" },
         { name: "viewport", content: "width=device-width, initial-scale=1" },
-        { name: "application-name", content: "Easy Complete" },
-        { name: "theme-color", content: "#0a0d12" },
+        { name: "application-name", content: "Fastab" },
+        { name: "theme-color", content: "#faf9f5" },
         // Description fallback for any response without a route-level head —
         // the 404 in particular. The title is deliberately NOT set here: the
         // 404 component hoists its own, and a fallback here would render a
@@ -50,9 +50,9 @@ export const Route = createRootRoute({
 
 function NotFoundComponent() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-[#0a0d12] px-7 text-center text-[#e6edf3]">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-(--canvas) px-7 text-center text-(--ink)">
       {/* React 19 hoists these into <head>; the route head has no 404 hook. */}
-      <title>Page not found — Easy Complete</title>
+      <title>Page not found — Fastab</title>
       <meta name="robots" content="noindex, follow" />
       <p className="mb-3 font-mono text-sm uppercase tracking-[.22em] text-(--accent)">
         404
@@ -60,13 +60,13 @@ function NotFoundComponent() {
       <h1 className="m-0 mb-4 text-[38px] font-bold tracking-[-.03em] sm:text-[52px]">
         Page not found.
       </h1>
-      <p className="m-0 mb-8 max-w-130 text-[16px] leading-[1.6] text-[#909aa6]">
-        The page you requested does not exist. Return to Easy Complete to
+      <p className="m-0 mb-8 max-w-130 text-[16px] leading-[1.6] text-(--muted)">
+        The page you requested does not exist. Return to Fastab to
         download the macOS terminal autocomplete app.
       </p>
       <a
         href="/"
-        className="inline-flex items-center rounded-[11px] bg-(--accent) px-5.5 py-3 font-semibold text-[#06140a] transition hover:brightness-110"
+        className="inline-flex items-center rounded-md bg-(--accent) px-5.5 py-3 font-semibold text-(--accent-fg) transition-opacity hover:opacity-90"
       >
         Back to home
       </a>

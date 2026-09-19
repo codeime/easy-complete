@@ -72,7 +72,7 @@ fn source_is_enabled(src: TISInputSourceRef) -> bool {
 
 /// Enable (and select) our own input source via the TIS API.
 ///
-/// The CLI installer (`ec integrations install input-method`) cannot do this: TIS
+/// The CLI installer (`ftab integrations install input-method`) cannot do this: TIS
 /// APIs need an `NSApplication` run loop, which the CLI lacks, so `TISEnableInputSource`
 /// silently fails there. The IME process *does* have that context, so it enables itself
 /// on startup. Without this, terminals that depend on the IME for cursor tracking

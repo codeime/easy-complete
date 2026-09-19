@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 use std::fmt::Display;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use camino::Utf8PathBuf;
 use fig_os_shim::{Context, EnvProvider, FsProvider, Os, PlatformProvider, Shim};
@@ -122,6 +122,106 @@ pub fn old_fig_data_dir() -> Result<PathBuf> {
         .join("codewhisperer"))
 }
 
+/// The Easy Complete data directory left behind by the previous product name.
+///
+/// Upgrades call [`migrate_product_data_dir`] so settings and history land in
+/// [`fig_data_dir`] even when that directory already has a `shell/` tree.
+pub fn previous_product_data_dir() -> Result<PathBuf> {
+    Ok(dirs::data_local_dir()
+        .ok_or(DirectoryError::NoHomeDirectory)?
+        .join("easy-complete"))
+}
+
+/// Move a previous product data directory onto the current one.
+///
+/// - If `new` is absent, rename `old` → `new` and leave a symlink at `old` so
+///   existing shell rc paths keep working.
+/// - If `new` already exists (shell integration creates `shell/` under the new
+///   name before the desktop app launches), move only top-level entries that
+///   `new` does not already have. Settings and history then survive an install
+///   that created the new directory first. Existing entries in `new` win, so a
+///   live Fastab profile is never overwritten — except a dest `settings.json`
+///   that is empty or `{}`, which is the placeholder `load_from_file` writes
+///   before migrate runs, not a real profile.
+/// - A symlink at `old` is left alone — that is the leftover of a previous
+///   rename, not a second source of settings.
+pub fn migrate_product_data_dir(old: &Path, new: &Path) -> std::io::Result<()> {
+    if old.is_symlink() || !old.is_dir() || old == new {
+        return Ok(());
+    }
+    if !new.exists() {
+        if let Some(parent) = new.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(old, new)?;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(new, old)?;
+        }
+        return Ok(());
+    }
+    if !new.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(old)? {
+        let entry = entry?;
+        let dest = new.join(entry.file_name());
+        if dest.exists() {
+            if dest.file_name().is_some_and(|name| name == "settings.json")
+                && is_placeholder_settings(&dest)
+                && entry.path().is_file()
+            {
+                std::fs::remove_file(&dest)?;
+            } else {
+                continue;
+            }
+        }
+        std::fs::rename(entry.path(), dest)?;
+    }
+    Ok(())
+}
+
+/// `load_from_file` creates `{}` when dest settings are missing. That file
+/// must not hide a real Easy Complete `settings.json` sitting in `old`.
+fn is_placeholder_settings(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(serde_json::Value::Object(map)) => map.is_empty(),
+        Ok(_) => false,
+        Err(_) => bytes.iter().all(u8::is_ascii_whitespace),
+    }
+}
+
+/// Move leftover Easy Complete and CodeWhisperer data dirs onto [`fig_data_dir`].
+///
+/// `ftab integrations install` can create `fastab/shell/` (and the IME can
+/// create `data.sqlite3`) before the desktop app launches. Call this from both
+/// the desktop launch path and integrations install so the old tree is merged
+/// first and a later empty-ish Fastab sqlite does not hide the old database.
+pub fn migrate_previous_product_data_dirs() {
+    let Ok(new) = fig_data_dir() else {
+        return;
+    };
+    for old in [previous_product_data_dir(), old_fig_data_dir()] {
+        let Ok(old) = old else {
+            continue;
+        };
+        if let Err(err) = migrate_product_data_dir(&old, &new) {
+            tracing::error!(
+                %err,
+                old = %old.display(),
+                new = %new.display(),
+                "Failed to migrate previous product data dir"
+            );
+        }
+    }
+}
+
 /// The q data directory
 ///
 /// - Linux: `$XDG_DATA_HOME/{data_dir}` or `$HOME/.local/share/{data_dir}`
@@ -216,8 +316,8 @@ pub fn runtime_dir() -> Result<PathBuf> {
 
 /// The q sockets directory of the local q installation
 ///
-/// - Linux: $XDG_RUNTIME_DIR/ecrun
-/// - MacOS: $TMPDIR/ecrun
+/// - Linux: $XDG_RUNTIME_DIR/fastabrun
+/// - MacOS: $TMPDIR/fastabrun
 /// - Windows: %TEMP%\{data_dir}\sockets
 pub fn sockets_dir() -> Result<PathBuf> {
     cfg_if::cfg_if! {
@@ -234,8 +334,8 @@ pub fn sockets_dir() -> Result<PathBuf> {
 /// In WSL, this will correctly return the host machine socket path.
 /// In other remote environments, it returns the same as `sockets_dir`
 ///
-/// - Linux: $XDG_RUNTIME_DIR/ecrun
-/// - MacOS: $TMPDIR/ecrun
+/// - Linux: $XDG_RUNTIME_DIR/fastabrun
+/// - MacOS: $TMPDIR/fastabrun
 /// - Windows: %TEMP%\sockets
 pub fn host_sockets_dir() -> Result<PathBuf> {
     // TODO: make this work again
@@ -311,8 +411,8 @@ pub fn chat_profiles_dir<Ctx: FsProvider + EnvProvider>(ctx: &Ctx) -> Result<Pat
 
 /// The desktop app socket path
 ///
-/// - MacOS: `$TMPDIR/ecrun/desktop.sock`
-/// - Linux: `$XDG_RUNTIME_DIR/ecrun/desktop.sock`
+/// - MacOS: `$TMPDIR/fastabrun/desktop.sock`
+/// - Linux: `$XDG_RUNTIME_DIR/fastabrun/desktop.sock`
 /// - Windows: `%TEMP%\sockets\desktop.sock`
 pub fn desktop_socket_path() -> Result<PathBuf> {
     Ok(host_sockets_dir()?.join("desktop.sock"))
@@ -321,8 +421,8 @@ pub fn desktop_socket_path() -> Result<PathBuf> {
 /// The path to remote socket
 // - Linux/MacOS on ssh: At the value of `Q_PARENT`
 // - Linux/MacOS not on ssh:
-/// - MacOS: `$TMPDIR/ecrun/remote.sock`
-/// - Linux: `$XDG_RUNTIME_DIR/ecrun/remote.sock`
+/// - MacOS: `$TMPDIR/fastabrun/remote.sock`
+/// - Linux: `$XDG_RUNTIME_DIR/fastabrun/remote.sock`
 /// - Windows: `%TEMP%\sockets\remote.sock`
 pub fn remote_socket_path() -> Result<PathBuf> {
     // Normal implementation for non-test code
@@ -340,8 +440,8 @@ pub fn remote_socket_path() -> Result<PathBuf> {
 
 /// The path to local remote socket
 ///
-/// - MacOS: `$TMPDIR/ecrun/remote.sock`
-/// - Linux: `$XDG_RUNTIME_DIR/ecrun/remote.sock`
+/// - MacOS: `$TMPDIR/fastabrun/remote.sock`
+/// - Linux: `$XDG_RUNTIME_DIR/fastabrun/remote.sock`
 /// - Windows: `%TEMP%\sockets\remote.sock`
 pub fn local_remote_socket_path() -> Result<PathBuf> {
     Ok(host_sockets_dir()?.join("remote.sock"))
@@ -350,8 +450,8 @@ pub fn local_remote_socket_path() -> Result<PathBuf> {
 /// Get path to a figterm socket
 ///
 /// - Linux/Macos: `/var/tmp/fig/%USERNAME%/figterm/$SESSION_ID.sock`
-/// - MacOS: `$TMPDIR/ecrun/t/$SESSION_ID.sock`
-/// - Linux: `$XDG_RUNTIME_DIR/ecrun/t/$SESSION_ID.sock`
+/// - MacOS: `$TMPDIR/fastabrun/t/$SESSION_ID.sock`
+/// - Linux: `$XDG_RUNTIME_DIR/fastabrun/t/$SESSION_ID.sock`
 /// - Windows: `%TEMP%\sockets\t\$SESSION_ID.sock`
 pub fn figterm_socket_path(session_id: impl Display) -> Result<PathBuf> {
     Ok(sockets_dir()?.join("t").join(format!("{session_id}.sock")))
@@ -532,8 +632,108 @@ mod linux_tests {
         assert!(manifest_path().is_ok());
         assert!(backups_dir().is_ok());
         assert!(logs_dir().is_ok());
+        assert!(previous_product_data_dir().is_ok());
         assert!(settings_path().is_ok());
         assert!(update_lock_path(&ctx).is_ok());
+    }
+
+    #[cfg(unix)]
+    fn scratch_pair() -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("fastab-migrate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        (root.join("old"), root.join("new"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_renames_when_new_is_absent() {
+        let (old, new) = scratch_pair();
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("settings.json"), "{}").unwrap();
+
+        migrate_product_data_dir(&old, &new).unwrap();
+
+        assert!(new.is_dir());
+        assert_eq!(std::fs::read_to_string(new.join("settings.json")).unwrap(), "{}");
+        assert!(old.is_symlink());
+        assert_eq!(std::fs::read_link(&old).unwrap(), new);
+        let _ = std::fs::remove_dir_all(new.parent().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_merges_missing_entries_when_new_exists() {
+        let (old, new) = scratch_pair();
+        std::fs::create_dir_all(old.join("history")).unwrap();
+        std::fs::write(old.join("settings.json"), "{\"theme\":\"dark\"}").unwrap();
+        std::fs::write(old.join("history").join("log"), "ls").unwrap();
+        std::fs::create_dir_all(new.join("shell")).unwrap();
+        std::fs::write(new.join("shell").join("zshrc.pre.zsh"), "ftab").unwrap();
+
+        migrate_product_data_dir(&old, &new).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(new.join("settings.json")).unwrap(),
+            "{\"theme\":\"dark\"}"
+        );
+        assert_eq!(std::fs::read_to_string(new.join("history").join("log")).unwrap(), "ls");
+        assert_eq!(
+            std::fs::read_to_string(new.join("shell").join("zshrc.pre.zsh")).unwrap(),
+            "ftab"
+        );
+        assert!(!old.join("settings.json").exists());
+        assert!(old.join("history").exists() == false || !old.join("history").join("log").exists());
+        let _ = std::fs::remove_dir_all(new.parent().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_replaces_placeholder_dest_settings() {
+        let (old, new) = scratch_pair();
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(old.join("settings.json"), "{\"theme\":\"dark\"}").unwrap();
+        std::fs::write(new.join("settings.json"), "{}\n").unwrap();
+
+        migrate_product_data_dir(&old, &new).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(new.join("settings.json")).unwrap(),
+            "{\"theme\":\"dark\"}"
+        );
+        assert!(!old.join("settings.json").exists());
+        let _ = std::fs::remove_dir_all(new.parent().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_does_not_overwrite_existing_new_entries() {
+        let (old, new) = scratch_pair();
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(old.join("settings.json"), "old").unwrap();
+        std::fs::write(new.join("settings.json"), "new").unwrap();
+
+        migrate_product_data_dir(&old, &new).unwrap();
+
+        assert_eq!(std::fs::read_to_string(new.join("settings.json")).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(old.join("settings.json")).unwrap(), "old");
+        let _ = std::fs::remove_dir_all(new.parent().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_skips_a_symlink_old() {
+        let (old, new) = scratch_pair();
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("settings.json"), "live").unwrap();
+        std::os::unix::fs::symlink(&new, &old).unwrap();
+
+        migrate_product_data_dir(&old, &new).unwrap();
+
+        assert!(old.is_symlink());
+        assert_eq!(std::fs::read_to_string(new.join("settings.json")).unwrap(), "live");
+        let _ = std::fs::remove_dir_all(new.parent().unwrap());
     }
 }
 
@@ -553,7 +753,7 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(
             host_sockets_dir().unwrap().file_name().unwrap().to_str().unwrap(),
-            format!("ecrun")
+            format!("fastabrun")
         );
 
         #[cfg(windows)]
@@ -655,72 +855,82 @@ mod tests {
 
     #[test]
     fn snapshot_fig_data_dir() {
-        linux!(fig_data_dir(), @"$HOME/.local/share/easy-complete");
-        macos!(fig_data_dir(), @"$HOME/Library/Application Support/easy-complete");
+        linux!(fig_data_dir(), @"$HOME/.local/share/fastab");
+        macos!(fig_data_dir(), @"$HOME/Library/Application Support/fastab");
         windows!(fig_data_dir(), @r"C:\Users\$USER\AppData\Local\AmazonQ");
     }
 
     #[test]
+    fn snapshot_previous_product_data_dir() {
+        linux!(previous_product_data_dir(), @"$HOME/.local/share/easy-complete");
+        macos!(previous_product_data_dir(), @"$HOME/Library/Application Support/easy-complete");
+        windows!(
+            previous_product_data_dir(),
+            @r"C:\Users\$USER\AppData\Local\easy-complete"
+        );
+    }
+
+    #[test]
     fn snapshot_sockets_dir() {
-        linux!(sockets_dir(), @"$XDG_RUNTIME_DIR/ecrun");
-        macos!(sockets_dir(), @"$TMPDIR/ecrun");
+        linux!(sockets_dir(), @"$XDG_RUNTIME_DIR/fastabrun");
+        macos!(sockets_dir(), @"$TMPDIR/fastabrun");
         windows!(sockets_dir(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets");
     }
 
     #[test]
     fn snapshot_themes_dir() {
         linux!(themes_dir(&Context::new()), @"/usr/share/fig/themes");
-        macos!(themes_dir(&Context::new()), @"/Applications/Easy Complete.app/Contents/Resources/themes");
+        macos!(themes_dir(&Context::new()), @"/Applications/Fastab.app/Contents/Resources/themes");
         windows!(themes_dir(&Context::new()), @r"C:\Users\$USER\AppData\Local\AmazonQ\resources\themes");
     }
 
     #[test]
     fn snapshot_backups_dir() {
-        linux!(backups_dir(), @"$HOME/.easy-complete.dotfiles.bak");
-        macos!(backups_dir(), @"$HOME/.easy-complete.dotfiles.bak");
-        windows!(backups_dir(), @r"C:\Users\$USER\.easy-complete.dotfiles.bak");
+        linux!(backups_dir(), @"$HOME/.fastab.dotfiles.bak");
+        macos!(backups_dir(), @"$HOME/.fastab.dotfiles.bak");
+        windows!(backups_dir(), @r"C:\Users\$USER\.fastab.dotfiles.bak");
     }
 
     #[test]
     fn snapshot_fig_socket_path() {
-        linux!(desktop_socket_path(), @"$XDG_RUNTIME_DIR/ecrun/desktop.sock");
-        macos!(desktop_socket_path(), @"$TMPDIR/ecrun/desktop.sock");
+        linux!(desktop_socket_path(), @"$XDG_RUNTIME_DIR/fastabrun/desktop.sock");
+        macos!(desktop_socket_path(), @"$TMPDIR/fastabrun/desktop.sock");
         windows!(desktop_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\desktop.sock");
     }
 
     #[test]
     fn snapshot_remote_socket_path() {
-        linux!(remote_socket_path(), @"$XDG_RUNTIME_DIR/ecrun/remote.sock");
-        macos!(remote_socket_path(), @"$TMPDIR/ecrun/remote.sock");
+        linux!(remote_socket_path(), @"$XDG_RUNTIME_DIR/fastabrun/remote.sock");
+        macos!(remote_socket_path(), @"$TMPDIR/fastabrun/remote.sock");
         windows!(remote_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\remote.sock");
     }
 
     #[test]
     fn snapshot_local_remote_socket_path() {
-        linux!(local_remote_socket_path(), @"$XDG_RUNTIME_DIR/ecrun/remote.sock");
-        macos!(local_remote_socket_path(), @"$TMPDIR/ecrun/remote.sock");
+        linux!(local_remote_socket_path(), @"$XDG_RUNTIME_DIR/fastabrun/remote.sock");
+        macos!(local_remote_socket_path(), @"$TMPDIR/fastabrun/remote.sock");
         windows!(local_remote_socket_path(), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\remote.sock");
     }
 
     #[test]
     fn snapshot_figterm_socket_path() {
-        linux!(figterm_socket_path("$SESSION_ID"), @"$XDG_RUNTIME_DIR/ecrun/t/$SESSION_ID.sock");
-        macos!(figterm_socket_path("$SESSION_ID"), @"$TMPDIR/ecrun/t/$SESSION_ID.sock");
+        linux!(figterm_socket_path("$SESSION_ID"), @"$XDG_RUNTIME_DIR/fastabrun/t/$SESSION_ID.sock");
+        macos!(figterm_socket_path("$SESSION_ID"), @"$TMPDIR/fastabrun/t/$SESSION_ID.sock");
         windows!(figterm_socket_path("$SESSION_ID"), @r"C:\Users\$USER\AppData\Local\Temp\AmazonQ\sockets\t\$SESSION_ID.sock");
     }
 
     #[test]
     fn snapshot_settings_path() {
-        linux!(settings_path(), @"$HOME/.local/share/easy-complete/settings.json");
-        macos!(settings_path(), @"$HOME/Library/Application Support/easy-complete/settings.json");
+        linux!(settings_path(), @"$HOME/.local/share/fastab/settings.json");
+        macos!(settings_path(), @"$HOME/Library/Application Support/fastab/settings.json");
         windows!(settings_path(), @r"C:\Users\$USER\AppData\Local\AmazonQ\settings.json");
     }
 
     #[test]
     fn snapshot_update_lock_path() {
         let ctx = Context::new();
-        linux!(update_lock_path(&ctx), @"$HOME/.local/share/easy-complete/update.lock");
-        macos!(update_lock_path(&ctx), @"$HOME/Library/Application Support/easy-complete/update.lock");
+        linux!(update_lock_path(&ctx), @"$HOME/.local/share/fastab/update.lock");
+        macos!(update_lock_path(&ctx), @"$HOME/Library/Application Support/fastab/update.lock");
         windows!(update_lock_path(&ctx), @r"C:\Users\$USER\AppData\Local\AmazonQ\update.lock");
     }
 

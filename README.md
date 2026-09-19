@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="Easy Complete" width="140px">
+  <img src="./assets/logo.png" alt="Fastab" width="140px">
 </p>
 
-<h1 align="center">Easy Complete (Native)</h1>
+<h1 align="center">Fastab (Native)</h1>
 
 <p align="center">
   <b>IDE-style inline autocomplete for your macOS terminal — native GPUI, not a WebView.</b><br/>
@@ -22,7 +22,7 @@
   <b>English</b> · <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-**Easy Complete (Native)** is a macOS terminal autocomplete app — IDE-style inline
+**Fastab (Native)** is a macOS terminal autocomplete app — IDE-style inline
 completions for your shell, rendered in a native GPUI overlay that follows your
 cursor. The popup and the settings window are real native views, not WKWebView.
 Completions run in a local Rust engine. It is a local-first completion engine
@@ -31,13 +31,11 @@ focused purely on autocomplete — a lightweight, fully local alternative to Fig
 You get fish-shell-style suggestions for hundreds of CLIs (`git`, `npm`, `docker`,
 `cargo`, …): flags, subcommands, file paths, and arguments, completed as you type.
 Autocomplete runs fully on-device — no account, no cloud calls, no AI requests, and
-your commands never leave your Mac. The app collects anonymous usage statistics
-(app opens, daily completion counts — never command content), which you can disable
-any time with `ec telemetry disable`. See the [Privacy page](https://easy-complete.emmmm.dev/privacy-policy)
-for the full list of what is and isn't collected.
+your commands never leave your Mac. **This fork has all telemetry off and collects
+nothing.** See the [Privacy page](https://fastab.app/privacy-policy).
 
 <p align="center">
-  <img src="./.github/media/screenshot.png" alt="Easy Complete autocomplete in action">
+  <img src="./.github/media/screenshot.png" alt="Fastab autocomplete in action">
 </p>
 
 > **Platform:** macOS only. The published DMG is Apple Silicon / ARM64 only.
@@ -68,28 +66,34 @@ a named Rust adapter at build time too.
 
 Native builds are the Apple Silicon DMGs from this repository:
 
-[Download latest DMG](https://github.com/codeime/easy-complete/releases/download/v3.0.0-beta.16/Easy-Complete-arm64.dmg) ·
+[Download latest DMG](https://github.com/codeime/easy-complete/releases/download/v3.0.0-beta.16/Fastab-arm64.dmg) ·
 [All releases](https://github.com/codeime/easy-complete/releases)
 
 Then:
 
-1. Open `Easy-Complete-arm64.dmg`.
-2. Drag **Easy Complete.app** into `/Applications`.
-3. Launch **Easy Complete** from `/Applications`.
-4. Open Easy Complete Settings and click **Grant Accessibility**.
-5. Reload your shell:
+1. Open `Fastab-arm64.dmg`.
+2. Drag **Fastab.app** into `/Applications`.
+3. **Current builds are not Developer ID signed.** After copying the app, clear Gatekeeper quarantine once, or macOS will block launch:
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Fastab.app"
+   ```
+
+4. Launch **Fastab** from `/Applications`.
+5. Open Fastab Settings and click **Grant Accessibility**.
+6. Reload your shell:
 
    ```bash
    exec $SHELL
    ```
 
-On first launch, Easy Complete sets up the bundled CLI binaries, shell integration,
+On first launch, Fastab sets up the bundled CLI binaries, shell integration,
 and login startup entries. The input method is optional — install it from Settings →
-Behavior, or with `ec integrations install input-method`, for Ghostty, Kitty,
+Behavior, or with `ftab integrations install input-method`, for Ghostty, Kitty,
 WezTerm, Zed, Alacritty, and Otty. To verify the installation, run:
 
 ```bash
-ec doctor
+ftab doctor
 ```
 
 ### Build from source
@@ -100,17 +104,17 @@ installer:
 ```bash
 git clone https://github.com/codeime/easy-complete.git
 cd easy-complete
-./install.sh
+./scripts/install.sh
 ```
 
 The source installer will:
 
 1. Build the Rust binaries and compile bundled completion specs.
-2. Assemble `Easy Complete.app` and copy it to `/Applications`.
-3. Symlink the `ec` and `ecterm` CLIs into `~/.local/bin`.
+2. Assemble `Fastab.app` and copy it to `/Applications`.
+3. Symlink the `ftab` and `fastabterm` CLIs into `~/.local/bin`.
 4. Let you enable **Launch at Login** from Settings (a system Login Item on macOS 13+, with a LaunchAgent fallback on macOS 12).
-5. Set up shell integration. `./install.sh` also registers the optional input method (DMG first launch does not).
-6. Leave Accessibility for you to grant from Easy Complete Settings (required — see below).
+5. Set up shell integration. `./scripts/install.sh` also registers the optional input method (DMG first launch does not).
+6. Leave Accessibility for you to grant from Fastab Settings (required — see below).
 
 When it finishes, reload your shell:
 
@@ -120,8 +124,8 @@ exec $SHELL
 
 ### Grant Accessibility permission
 
-Easy Complete positions the completion popup relative to your focused terminal
-window, which requires the macOS **Accessibility** permission. Open Easy Complete
+Fastab positions the completion popup relative to your focused terminal
+window, which requires the macOS **Accessibility** permission. Open Fastab
 Settings and click **Grant Accessibility**. That opens:
 
 > System Settings → Privacy & Security → Device Control and Data Access
@@ -129,14 +133,18 @@ Settings and click **Grant Accessibility**. That opens:
 > On macOS 26 and earlier the same list is named **Accessibility**. Grant still
 > opens it.
 
-and floats a card you can drag **Easy Complete** from into the list. The app never
+and floats a card you can drag **Fastab** from into the list. The app never
 opens that pane on its own.
+
+Upgrading from Easy Complete is a **new TCC identity** (`app.fastab`, not
+`dev.emmmm.easy-complete`). Grant Fastab even if Easy Complete was already
+allowed — the old checkbox does not cover this binary.
 
 If completions never appear, this is almost always the cause. Run the same flow
 again from Settings, or with:
 
 ```bash
-ec debug prompt-accessibility
+ftab debug prompt-accessibility
 ```
 
 ---
@@ -152,17 +160,17 @@ suggestions appear inline as you type.
 | `⇥` (Tab) / `→` | Accept the highlighted suggestion |
 | `Esc`           | Dismiss the popup                 |
 
-The native settings window is available from the **Easy Complete menu bar icon**
+The native settings window is available from the **Fastab menu bar icon**
 (system tray).
 
 Useful CLI commands:
 
 ```bash
-ec doctor                       # diagnose common problems
-ec diagnostic                   # print environment / integration status
-ec integrations install input-method   # (re)register the macOS input method
-ec settings list                # view settings
-ec settings <key> <value>       # change a setting
+ftab doctor                       # diagnose common problems
+ftab diagnostic                   # print environment / integration status
+ftab integrations install input-method   # (re)register the macOS input method
+ftab settings list                # view settings
+ftab settings <key> <value>       # change a setting
 ```
 
 ### Supported terminals
@@ -171,7 +179,7 @@ Most terminals work out of the box via the PTY integration — including iTerm2,
 Terminal, VS Code, Cursor, ChatGPT (Codex), and JetBrains IDE terminals. Terminals that
 bypass the standard PTY path (**Ghostty, Kitty, WezTerm, Zed, Alacritty, Otty**)
 additionally rely on the bundled input method for cursor tracking. Install it from
-Settings → Behavior, or with `ec integrations install input-method`.
+Settings → Behavior, or with `ftab integrations install input-method`.
 
 ---
 
@@ -182,7 +190,7 @@ Settings → Behavior, or with `ec integrations install input-method`.
 ```
 
 This removes the app bundle, CLI symlinks, LaunchAgent, input method, shell
-integration, and all application data. It surgically removes only Easy Complete's own
+integration, and all application data. It surgically removes only Fastab's own
 input source from the system preferences (your other keyboard layouts and input
 methods are left untouched).
 
@@ -190,24 +198,24 @@ methods are left untouched).
 
 ## 🧩 How it works
 
-Easy Complete runs as three cooperating native processes that talk over Unix domain
+Fastab runs as three cooperating native processes that talk over Unix domain
 sockets (Protobuf messages):
 
 | Binary          | Crate         | Role                                                                                                                             |
 | --------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `easy-complete` | `fig_desktop` | Native app host — GPUI overlay and settings (not WKWebView), completion engine worker, system tray, and window management |
-| `ecterm`        | `figterm`     | Pseudoterminal between your shell and terminal emulator; intercepts the shell edit buffer to drive completions                   |
-| `ec`            | `ec_cli`      | CLI entry point — `setup`, `integrations`, `diagnostic`, `settings`, and more                                                    |
+| `fastab` | `fig_desktop` | Native app host — GPUI overlay and settings (not WKWebView), completion engine worker, system tray, and window management |
+| `fastabterm`        | `figterm`     | Pseudoterminal between your shell and terminal emulator; intercepts the shell edit buffer to drive completions                   |
+| `ftab`            | `ec_cli`      | CLI entry point — `setup`, `integrations`, `diagnostic`, `settings`, and more                                                    |
 
 Shell hooks (`.zshrc`, `.bashrc`, fish config) report shell state — CWD, command text,
-cursor position — back to `ecterm` on every prompt and keystroke. On macOS, the
+cursor position — back to `fastabterm` on every prompt and keystroke. On macOS, the
 `fig_input_method` helper app reports caret position for terminals that bypass the PTY.
 
 **Identifiers**
 
-- App bundle ID: `dev.emmmm.easy-complete`
-- Input method bundle ID: `dev.emmmm.easy-complete.inputmethod`
-- App bundle: `/Applications/Easy Complete.app`
+- App bundle ID: `app.fastab`
+- Input method bundle ID: `app.fastab.inputmethod`
+- App bundle: `/Applications/Fastab.app`
 
 ---
 
@@ -226,8 +234,8 @@ cursor position — back to `ecterm` on every prompt and keystroke. On macOS, th
 cargo build --release -p fig_desktop -p figterm -p ec_cli -p fig_input_method
 
 # Run a single crate in dev mode
-cargo run --bin ec -- <subcommand>
-cargo run --bin easy-complete
+cargo run --bin ftab -- <subcommand>
+cargo run --bin fastab
 
 cargo clippy --locked --workspace --color always -- -D warnings   # lint (CI: -D warnings)
 cargo fmt                                                         # format
@@ -243,7 +251,7 @@ pnpm lint                                   # lint
 pnpm test                                   # run Vitest
 ```
 
-Headless completion (no overlay): `cargo run --bin ec -- engine complete --buffer "git ch"`.
+Headless completion (no overlay): `cargo run --bin ftab -- engine complete --buffer "git ch"`.
 Process memory: `./scripts/memory-usage.sh` (`--watch 5`, `--peak`, `--csv mem.csv`).
 
 ### Key crates
@@ -254,7 +262,7 @@ Process memory: `./scripts/memory-usage.sh` (`--watch 5`, `--peak`, `--csv mem.c
 | `ec_gpui`               | Overlay list, theme, macOS window placement                      |
 | `ec_engine`             | Headless completion: IR lookup, generators, typed hook IR        |
 | `figterm`               | PTY interceptor, shell edit-buffer tracking                      |
-| `ec_cli`                | CLI crate, providing the `ec` binary and all its subcommands     |
+| `ec_cli`                | CLI crate, providing the `ftab` binary and all its subcommands     |
 | `fig_input_method`      | macOS input method helper (cursor tracking)                      |
 | `fig_integrations`      | Shell/terminal/editor integration install logic                  |
 | `fig_ipc` / `fig_proto` | Unix-socket IPC primitives & generated Protobuf types            |
@@ -271,6 +279,7 @@ Process memory: `./scripts/memory-usage.sh` (`--watch 5`, `--peak`, `--csv mem.c
 
 ## 📜 License
 
-Licensed under the MIT License. Easy Complete is based on the Amazon Q Developer
-CLI; that copyright notice stays in [LICENSE](./LICENSE). Third-party terms are
-collected in [THIRD_PARTY_NOTICES.txt](./THIRD_PARTY_NOTICES.txt).
+Licensed under the MIT License. Fastab is a rename of Easy Complete, based on
+the Amazon Q Developer CLI and Fig; those copyright notices stay in
+[LICENSE](./LICENSE). Third-party terms are collected in
+[THIRD_PARTY_NOTICES.txt](./THIRD_PARTY_NOTICES.txt).

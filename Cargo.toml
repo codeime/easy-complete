@@ -11,9 +11,9 @@ members = [
 default-members = ["crates/ec_cli"]
 
 [workspace.package]
-authors = ["Easy Complete Contributors"]
+authors = ["Fastab Contributors"]
 edition = "2024"
-homepage = "https://easy-complete.emmmm.dev/"
+homepage = "https://fastab.app/"
 publish = false
 version = "3.0.0-beta.16"
 license = "MIT"
@@ -115,7 +115,7 @@ shellexpand = "3.0.0"
 shell-color = "1.0.0"
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-# `preserve_order` is not optional here. gpui turns it on, so `easy-complete`
+# `preserve_order` is not optional here. gpui turns it on, so `fastab`
 # already iterates `serde_json::Map` in insertion order — the order the Fig
 # hooks' `Object.keys` saw. Without it, `cargo test -p ec_engine` and a
 # standalone `cargo build -p ec_cli` get a `BTreeMap` and sort the same keys,

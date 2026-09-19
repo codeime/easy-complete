@@ -183,14 +183,6 @@ pub fn app_not_running_message() -> String {
     )
 }
 
-pub fn login_message() -> String {
-    format!(
-        "{}\nLooks like you aren't logged in to {PRODUCT_NAME}, to login run: {}",
-        "Not logged in".bold(),
-        format!("{CLI_BINARY_NAME} login").magenta()
-    )
-}
-
 pub fn match_regex(regex: impl AsRef<str>, input: impl AsRef<str>) -> Option<String> {
     Some(
         Regex::new(regex.as_ref())

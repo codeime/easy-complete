@@ -18,7 +18,8 @@ use tracing::{debug, warn};
 
 use crate::{Error, Result};
 
-const LEGACY_LABEL: &str = "dev.emmmm.easy-complete";
+const LEGACY_LABEL: &str = "app.fastab";
+const PREVIOUS_PRODUCT_LABEL: &str = "dev.emmmm.easy-complete";
 const UPSTREAM_LEGACY_LABEL: &str = "com.amazon.codewhisperer.launcher";
 
 // Force-load the framework so the dynamic `SMAppService` class lookup works.
@@ -54,6 +55,7 @@ pub fn reconcile(enabled: bool) -> Result<()> {
         remove_legacy_launch_agents()?;
         set_sm_app_service_enabled(enabled)
     } else {
+        remove_legacy_launch_agent(PREVIOUS_PRODUCT_LABEL)?;
         remove_legacy_launch_agent(UPSTREAM_LEGACY_LABEL)?;
         set_legacy_launch_agent_enabled(enabled)
     }
@@ -122,20 +124,20 @@ fn set_sm_app_service_enabled(enabled: bool) -> Result<()> {
 
 fn sm_error_message(error: *mut Object, action: &str) -> String {
     if error.is_null() {
-        return format!("Failed to {action} the Easy Complete login item");
+        return format!("Failed to {action} the Fastab login item");
     }
 
     unsafe {
         let description: *mut Object = msg_send![error, localizedDescription];
         if description.is_null() {
-            return format!("Failed to {action} the Easy Complete login item");
+            return format!("Failed to {action} the Fastab login item");
         }
         let utf8: *const std::ffi::c_char = msg_send![description, UTF8String];
         if utf8.is_null() {
-            return format!("Failed to {action} the Easy Complete login item");
+            return format!("Failed to {action} the Fastab login item");
         }
         format!(
-            "Failed to {action} the Easy Complete login item: {}",
+            "Failed to {action} the Fastab login item: {}",
             std::ffi::CStr::from_ptr(utf8).to_string_lossy()
         )
     }
@@ -156,9 +158,7 @@ fn set_legacy_launch_agent_enabled(enabled: bool) -> Result<()> {
         .map_err(|error| Error::Custom(error.to_string().into()))?;
     let status = Command::new("launchctl").arg("load").arg(path.as_str()).status()?;
     if !status.success() {
-        return Err(Error::Custom(
-            "launchctl failed to load the Easy Complete LaunchAgent".into(),
-        ));
+        return Err(Error::Custom("launchctl failed to load the Fastab LaunchAgent".into()));
     }
 
     Ok(())
@@ -181,12 +181,13 @@ fn current_app_executable() -> Result<PathBuf> {
     let bundle = current
         .ancestors()
         .find(|path| path.extension().is_some_and(|extension| extension == "app"))
-        .ok_or_else(|| Error::ApplicationNotInstalled(Cow::Borrowed("Easy Complete.app")))?;
+        .ok_or_else(|| Error::ApplicationNotInstalled(Cow::Borrowed("Fastab.app")))?;
     Ok(bundle.join("Contents").join("MacOS").join(APP_PROCESS_NAME))
 }
 
 fn remove_legacy_launch_agents() -> Result<()> {
     remove_legacy_launch_agent(LEGACY_LABEL)?;
+    remove_legacy_launch_agent(PREVIOUS_PRODUCT_LABEL)?;
     remove_legacy_launch_agent(UPSTREAM_LEGACY_LABEL)
 }
 
@@ -236,15 +237,13 @@ mod tests {
     #[test]
     fn legacy_labels_cover_both_previous_install_paths() {
         assert_eq!(LEGACY_LABEL, APP_BUNDLE_ID);
+        assert_ne!(PREVIOUS_PRODUCT_LABEL, LEGACY_LABEL);
         assert_ne!(LEGACY_LABEL, UPSTREAM_LEGACY_LABEL);
     }
 
     #[test]
     fn macos_12_launch_agent_starts_silently() {
-        let plist = legacy_launch_agent(PathBuf::from(
-            "/Applications/Easy Complete.app/Contents/MacOS/easy-complete",
-        ))
-        .plist();
+        let plist = legacy_launch_agent(PathBuf::from("/Applications/Fastab.app/Contents/MacOS/fastab")).plist();
         assert!(plist.contains("<string>--is-startup</string>"));
         assert!(plist.contains("<string>--no-dashboard</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>\n        <true/>"));

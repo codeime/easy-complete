@@ -39,7 +39,7 @@
  */
 import { readFileSync } from "node:fs";
 
-const SITE_ORIGIN = "https://easy-complete.emmmm.dev";
+const SITE_ORIGIN = "https://fastab.app";
 const SITEMAP_URL = `${SITE_ORIGIN}/sitemap.xml`;
 /**
  * The property identifier in Search Console. It must match what's registered
@@ -51,7 +51,7 @@ const SITEMAP_URL = `${SITE_ORIGIN}/sitemap.xml`;
  * which covers every subdomain), set GSC_SITE_URL to that instead.
  */
 const GSC_SITE_URL =
-  process.env.GSC_SITE_URL || "sc-domain:easy-complete.emmmm.dev";
+  process.env.GSC_SITE_URL || "sc-domain:fastab.app";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const CHECK = process.argv.includes("--check");
@@ -87,7 +87,7 @@ function readServiceAccountKey(): string | undefined {
  */
 async function fetchSitemapUrls(): Promise<string[]> {
   const response = await fetch(SITEMAP_URL, {
-    headers: { "User-Agent": "easy-complete.emmmm.dev deploy notifier" },
+    headers: { "User-Agent": "fastab.app deploy notifier" },
   });
   if (!response.ok) {
     throw new Error(`Failed to fetch the sitemap: HTTP ${response.status}`);

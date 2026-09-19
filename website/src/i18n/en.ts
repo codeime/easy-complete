@@ -10,12 +10,12 @@ import {
 import type { DocsCopy, HomeCopy } from "./types.ts";
 
 export const homeCopyEn: HomeCopy = {
-  badge: "macOS · 100% local · open source",
-  heroHeading: "Autocomplete for your macOS terminal",
+  badge: "macOS · local · open source",
+  heroHeading: "Autocomplete for your terminal",
   heroSubheading:
-    "Fish-shell-style suggestions for hundreds of CLIs — git, npm, docker, cargo. Native GPUI (not a WebView), fast, and entirely on-device.",
-  downloadCta: "Download DMG",
-  githubCta: "View on GitHub",
+    "IDE-style suggestions as you type — git, docker, npm, cargo — in Ghostty, iTerm2, Apple Terminal, VS Code, Cursor, Kitty, WezTerm, Alacritty, Zed, Otty, ChatGPT (Codex), and JetBrains. Native GPUI overlay, fully on-device. This fork has all telemetry off.",
+  downloadCta: "Download for Mac",
+  githubCta: "GitHub",
 
   marqueeLabel: "Runs in the terminal you already use",
   featuresLabel: "Features",
@@ -24,7 +24,7 @@ export const homeCopyEn: HomeCopy = {
   featuresSubheading:
     "One job, done well — no chat, no AI calls, no cloud completions.",
 
-  whyLabel: "Why Easy Complete",
+  whyLabel: "Why Fastab",
   whyHeading: "Opinionated, on purpose",
 
   terminalsLabel: "Supported terminals",
@@ -51,14 +51,13 @@ export const homeCopyEn: HomeCopy = {
   docsLabel: "Docs",
   docsHeading: "Get from download to first completion.",
   docsSubheading:
-    "Install Easy Complete, check which terminals are supported, set up cursor tracking for Ghostty, or fix a shell integration — without digging through the repository.",
-  docsCta: "Browse the docs",
+    "Install Fastab, check which terminals are supported, set up cursor tracking for Ghostty, or fix a shell integration — without digging through the repository.",
+  docsCta: "Docs and setup →",
 
   ctaHeading: "Stop memorizing flags",
   ctaSubheading: "Let your terminal remember them for you",
   ctaFootnote: "Requires macOS 12+ · Apple Silicon (ARM64) · MIT",
-  ctaTagline:
-    "A focused local completion engine built for fast terminal autocomplete.",
+  ctaTagline: "Fastab · local terminal autocomplete",
 
   features,
   reasons,
@@ -72,7 +71,7 @@ export const docsCopyEn: DocsCopy = {
   eyebrow: "Documentation",
   heading: "Install it, wire up your terminal, keep it working.",
   intro:
-    "Everything Easy Complete needs from you is on this page — the Native ARM64 DMG, one macOS permission, and a support list so you know which path your terminal takes.",
+    "Everything Fastab needs from you is on this page — the Native ARM64 DMG, one macOS permission, and a support list so you know which path your terminal takes.",
   quickStart: "Quick start",
   installGuideCta: "Full install guide",
   downloadCta: "Download DMG",
@@ -83,7 +82,7 @@ export const docsCopyEn: DocsCopy = {
   newBadge: "New",
   terminalsCalloutLead: `New in v2.1.0 — ${newTerminals.join(" and ")}.`,
   terminalsCalloutBody:
-    "Otty gets input-method cursor tracking, and Easy Complete now coexists with Otty-managed shell rc files instead of reporting its own integration as broken. ChatGPT (Codex) sessions are tracked through xterm.js caret detection, the same path VS Code uses.",
+    "Otty gets input-method cursor tracking, and Fastab now coexists with Otty-managed shell rc files instead of reporting its own integration as broken. ChatGPT (Codex) sessions are tracked through xterm.js caret detection, the same path VS Code uses.",
   docSections,
   terminalSupport,
 };

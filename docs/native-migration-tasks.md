@@ -6,7 +6,7 @@
 
 ### 0.1 目标与三条不变量（违反任何一条就是做错了）
 
-- 目标：`Easy Complete.app` 运行时**不执行任何 JavaScript**，且候选、插入、排序、缓存、shell 环境、超时六个维度的用户可见行为与当前 QuickJS 路径一致。构建期可以用 Node。
+- 目标：`Fastab.app` 运行时**不执行任何 JavaScript**，且候选、插入、排序、缓存、shell 环境、超时六个维度的用户可见行为与当前 QuickJS 路径一致。构建期可以用 Node。
 - 不变量 1：**未适配项不得静默丢失**。编译器不会还原的行为必须要么编译失败，要么出现在已提交清单里并阻断 gate。任何 "catch 后返回空" 的降级都是违规。
 - 不变量 2：**双路径比较只在 dev/test**。正式运行路径在 `inventory.json → gate.pathSwitchAllowed == true` 之前不切换。
 - 不变量 3：**发布门槛是依赖树 + 包内容 + 回归测试**（T4.2），不是 "代码删了"。
@@ -369,8 +369,8 @@ cargo test -p fig_desktop
 
 ```bash
 test "$(cargo tree -p fig_desktop -e normal | grep -c rquickjs)" = 0
-test -z "$(find 'build/Easy Complete.app/Contents/Resources' -name '*.js' -o -name '*.mjs')"
-test "$(du -sm 'build/Easy Complete.app/Contents/Resources/specs-ir' | cut -f1)" -le 35
+test -z "$(find 'build/Fastab.app/Contents/Resources' -name '*.js' -o -name '*.mjs')"
+test "$(du -sm 'build/Fastab.app/Contents/Resources/specs-ir' | cut -f1)" -le 35
 cargo test --workspace --locked        # 基线 parity + 引擎 golden + fig_desktop
 ```
 

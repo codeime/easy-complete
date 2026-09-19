@@ -46,7 +46,7 @@ const featureDataZh: Array<Omit<Feature, "glyph">> = [
   },
   {
     title: "一条命令装好",
-    desc: "./install.sh 完成构建、安装并接好 Shell 集成——之后直接开始输入即可",
+    desc: "./scripts/install.sh 完成构建、安装并接好 Shell 集成——之后直接开始输入即可",
   },
 ];
 
@@ -58,18 +58,18 @@ const featuresZh: Feature[] = featureDataZh.map((d, i) => ({
 const reasonsZh: Reason[] = [
   {
     num: "01",
-    title: "只做补全,别的都不做",
-    desc: "没有聊天、没有 AI 助手、没有云端补全。一件事,做好",
+    title: "只做补全",
+    desc: "没有聊天、没有 AI、没有云端。子命令、参数、路径，边输入边排序。",
   },
   {
     num: "02",
-    title: "原生应用,不是插件",
-    desc: "真正的 macOS 应用，GPUI 浮层和设置窗口——不是 WKWebView，也不是往提示符里塞转义字符",
+    title: "原生浮层",
+    desc: "紧贴光标的 GPUI 窗口——不是 WebView，也不是往提示符里画转义序列。",
   },
   {
     num: "03",
-    title: "默认保护隐私",
-    desc: "补全完全在本机完成——命令内容不会离开你的 Mac。仅收集匿名使用计数,一条命令即可关闭",
+    title: "完全本地",
+    desc: "补全不会离开这台 Mac。本 fork 关闭全部遥测，不收集任何信息。",
   },
   {
     num: "04",
@@ -80,57 +80,57 @@ const reasonsZh: Reason[] = [
 
 const faqsZh: Faq[] = [
   {
-    question: "Easy Complete 是什么?",
+    question: "Fastab 是什么?",
     answer:
-      "Easy Complete 是一款 macOS 终端自动补全应用,为命令行工具提供 IDE 风格的行内建议",
+      "Fastab 是一款 macOS 终端自动补全应用,为命令行工具提供 IDE 风格的行内建议",
   },
   {
-    question: "Easy Complete 在本地运行吗?",
+    question: "Fastab 在本地运行吗?",
     answer:
       "是的。补全完全在本机完成——无账号、无云端请求、无 AI 调用,命令内容不会离开你的 Mac",
   },
   {
-    question: "Easy Complete 会收集哪些数据?",
+    question: "Fastab 会收集哪些数据?",
     answer:
-      "只有匿名使用统计:应用启动、安装/更新事件,以及每日补全计数,关联到一个随机设备 ID。命令内容、补全文本和文件路径从不收集。随时用 `ec telemetry disable` 关闭——完整清单见隐私政策页面",
+      "本 fork 关闭全部遥测。Fastab 不收集任何信息——没有命令内容、没有补全文本、没有使用计数。",
   },
   {
-    question: "Easy Complete 支持哪些终端?",
+    question: "Fastab 支持哪些终端?",
     answer:
-      "Easy Complete 支持 Ghostty、Otty、Kitty、WezTerm、Alacritty、Zed、iTerm2、Apple Terminal、VS Code、ChatGPT(Codex)以及 JetBrains 系 IDE 终端。其中 Otty 与 ChatGPT(Codex)在 v2.1.0 加入",
+      "Fastab 支持 Ghostty、Otty、Kitty、WezTerm、Alacritty、Zed、iTerm2、Apple Terminal、VS Code、ChatGPT(Codex)以及 JetBrains 系 IDE 终端。",
   },
   {
-    question: "如何安装 Easy Complete?",
+    question: "如何安装 Fastab?",
     answer:
-      "从本仓库的 GitHub Releases 下载 Native ARM64 DMG，并按安装指南操作",
+      "从 GitHub Releases 下载 ARM64 DMG，然后按首页的安装步骤操作。",
   },
 ];
 
 const processesZh: Process[] = [
   {
-    bin: "easy-complete",
+    bin: "fastab",
     crate: "fig_desktop",
     role: "原生应用宿主——GPUI 补全浮层与设置窗口（不是 WKWebView）、补全引擎工作线程、系统托盘和窗口管理",
   },
   {
-    bin: "ecterm",
+    bin: "fastabterm",
     crate: "figterm",
     role: "位于 Shell 与终端模拟器之间的伪终端;拦截 Shell 编辑缓冲区来驱动补全",
   },
   {
-    bin: "ec",
+    bin: "ftab",
     crate: "ec_cli",
     role: "命令行入口——setup、integrations、diagnostic、settings 等子命令",
   },
 ];
 
 const NOTE_ZH: Record<string, string> = {
-  Ghostty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
-  Otty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`；并且 Easy Complete 会保留 Otty 自己写在 rc 文件末尾的集成块",
-  Kitty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
-  WezTerm: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
-  Alacritty: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
-  Zed: "可选输入法：设置 → 行为，或 `ec integrations install input-method`",
+  Ghostty: "可选输入法：设置 → 行为，或 `ftab integrations install input-method`",
+  Otty: "可选输入法：设置 → 行为，或 `ftab integrations install input-method`；并且 Fastab 会保留 Otty 自己写在 rc 文件末尾的集成块",
+  Kitty: "可选输入法：设置 → 行为，或 `ftab integrations install input-method`",
+  WezTerm: "可选输入法：设置 → 行为，或 `ftab integrations install input-method`",
+  Alacritty: "可选输入法：设置 → 行为，或 `ftab integrations install input-method`",
+  Zed: "可选输入法：设置 → 行为，或 `ftab integrations install input-method`",
   "JetBrains IDEs": "覆盖 JetBrains 全系 IDE 的内置终端",
   "ChatGPT (Codex)": "ChatGPT.app 里的 Codex 终端会话,通过 xterm.js 光标定位",
   "VS Code": "内置终端,含 Cursor、Windsurf 与 Trae",
@@ -153,7 +153,7 @@ const docSectionsZh: DocSection[] = [
         href: "/zh/install",
         label: "在 macOS 上安装",
         description:
-          "DMG、辅助功能权限、重载 Shell,以及用 ec doctor 验证",
+          "DMG、辅助功能权限、重载 Shell,以及用 ftab doctor 验证",
       },
       {
         href: "/zh/troubleshooting",
@@ -166,7 +166,7 @@ const docSectionsZh: DocSection[] = [
     id: "terminals",
     title: "终端支持",
     summary:
-      "所有终端都通过同一套 Shell 集成读取你输入的命令——区别在于 Easy Complete 用什么方式定位光标来摆放浮层",
+      "所有终端都通过同一套 Shell 集成读取你输入的命令——区别在于 Fastab 用什么方式定位光标来摆放浮层",
     links: [
       {
         href: "/zh/terminals/ghostty",
@@ -177,7 +177,7 @@ const docSectionsZh: DocSection[] = [
         href: "/terminals/otty",
         label: "Otty 自动补全(英文)",
         description:
-          "输入法光标跟踪,以及 Easy Complete 如何与 Otty 自己的 Shell 集成共存",
+          "输入法光标跟踪,以及 Fastab 如何与 Otty 自己的 Shell 集成共存",
       },
       {
         href: "/terminals/iterm2",
@@ -214,19 +214,19 @@ const docSectionsZh: DocSection[] = [
 const NEW_TERMINAL_NAMES_ZH = "Otty 与 ChatGPT(Codex)";
 
 export const homeCopyZh: HomeCopy = {
-  badge: "macOS · 100% 本地 · 开源",
-  heroHeading: "为 macOS 终端而生的自动补全",
+  badge: "macOS · 本地 · 开源",
+  heroHeading: "终端自动补全",
   heroSubheading:
-    "为数百种命令行工具提供 fish 风格的补全建议——git、npm、docker、cargo。原生 GPUI（不是 WebView）、快速，而且完全在本机运行",
-  downloadCta: "下载 DMG",
-  githubCta: "在 GitHub 查看",
+    "边输入边给出 IDE 风格建议——git、docker、npm、cargo。支持 Ghostty、iTerm2、Apple Terminal、VS Code、Cursor、Kitty、WezTerm、Alacritty、Zed、Otty、ChatGPT (Codex)、JetBrains。原生 GPUI 浮层，完全本地。本 fork 关闭全部遥测。",
+  downloadCta: "下载 macOS 版",
+  githubCta: "GitHub",
 
   marqueeLabel: "在你惯用的终端里运行",
   featuresLabel: "功能",
   featuresHeading: "补全一条命令所需的一切，多余的一概没有",
   featuresSubheading: "只做一件事并做好——没有聊天、没有 AI 调用、没有云端补全",
 
-  whyLabel: "为什么选 Easy Complete",
+  whyLabel: "为什么选 Fastab",
   whyHeading: "刻意为之的取舍",
 
   terminalsLabel: "支持的终端",
@@ -253,13 +253,13 @@ export const homeCopyZh: HomeCopy = {
   docsLabel: "文档",
   docsHeading: "从下载到第一次补全",
   docsSubheading:
-    "安装 Easy Complete、确认你的终端是否受支持、为 Ghostty 配置光标跟踪,或修复 Shell 集成——都不用翻源码仓库",
-  docsCta: "浏览文档",
+    "安装 Fastab、确认你的终端是否受支持、为 Ghostty 配置光标跟踪,或修复 Shell 集成——都不用翻源码仓库",
+  docsCta: "文档与安装 →",
 
   ctaHeading: "别再背参数了",
   ctaSubheading: "让终端替你记住",
   ctaFootnote: "需要 macOS 12+ · Apple Silicon(ARM64) · MIT",
-  ctaTagline: "一个专注的本地补全引擎,为快速的终端自动补全而生",
+  ctaTagline: "Fastab · 本地终端自动补全",
   features: featuresZh,
   reasons: reasonsZh,
   faqs: faqsZh,
@@ -272,7 +272,7 @@ export const docsCopyZh: DocsCopy = {
   eyebrow: "文档",
   heading: "装好它,接上终端,让它一直好用",
   intro:
-    "Easy Complete 需要你做的事都在这一页:Native ARM64 DMG、一项 macOS 权限,以及一份支持列表,让你知道自己的终端走的是哪条路径",
+    "Fastab 需要你做的事都在这一页:Native ARM64 DMG、一项 macOS 权限,以及一份支持列表,让你知道自己的终端走的是哪条路径",
   quickStart: "快速开始",
   installGuideCta: "完整安装指南",
   downloadCta: "下载 DMG",
@@ -283,7 +283,7 @@ export const docsCopyZh: DocsCopy = {
   newBadge: "新增",
   terminalsCalloutLead: `v2.1.0 新增 —— ${NEW_TERMINAL_NAMES_ZH}。`,
   terminalsCalloutBody:
-    "Otty 获得输入法光标跟踪,并且 Easy Complete 现在能与 Otty 管理的 Shell rc 文件共存,而不再把自己的集成误报为损坏。ChatGPT(Codex)会话则通过 xterm.js 光标定位跟踪,与 VS Code 走同一条路径",
+    "Otty 获得输入法光标跟踪,并且 Fastab 现在能与 Otty 管理的 Shell rc 文件共存,而不再把自己的集成误报为损坏。ChatGPT(Codex)会话则通过 xterm.js 光标定位跟踪,与 VS Code 走同一条路径",
   docSections: docSectionsZh,
   terminalSupport: terminalSupportZh,
 };

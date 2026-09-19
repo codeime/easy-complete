@@ -19,7 +19,7 @@ export TTY
 export SHELL_PID="$$"
 
 if [[ -z "${Q_SHELL:-}" ]]; then
-  Q_SHELL=$(ec _ get-shell)
+  Q_SHELL=$(ftab _ get-shell)
 fi
 
 # shellcheck disable=SC2059
@@ -171,8 +171,8 @@ fig_precmd() {
 
   Q_HAS_SET_PROMPT=1
 
-  if command -v ec >/dev/null 2>&1; then
-    (command ec _ pre-cmd --alias "$(\alias)" > /dev/null 2>&1 &) >/dev/null 2>&1
+  if command -v ftab >/dev/null 2>&1; then
+    (command ftab _ pre-cmd --alias "$(\alias)" > /dev/null 2>&1 &) >/dev/null 2>&1
   fi
 }
 
@@ -196,4 +196,4 @@ fi
 
 fi
 
-(command ec _ pre-cmd --alias "$(\alias)" > /dev/null 2>&1 &) >/dev/null 2>&1
+(command ftab _ pre-cmd --alias "$(\alias)" > /dev/null 2>&1 &) >/dev/null 2>&1

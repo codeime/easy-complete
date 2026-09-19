@@ -38,7 +38,7 @@ impl TelemetrySubcommand {
                 Ok(ExitCode::SUCCESS)
             },
             TelemetrySubcommand::Status { format } => {
-                let status = fig_settings::settings::get_bool_or(TELEMETRY_ENABLED_KEY, true);
+                let status = fig_settings::settings::get_bool_or(TELEMETRY_ENABLED_KEY, false);
                 format.print(
                     || {
                         format!(

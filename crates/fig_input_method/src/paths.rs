@@ -10,8 +10,8 @@ use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const RUNTIME_DIR_NAME: &str = "ecrun";
-const LOG_DIR_NAME: &str = "eclog";
+const RUNTIME_DIR_NAME: &str = "fastabrun";
+const LOG_DIR_NAME: &str = "ftablog";
 const DESKTOP_SOCKET_NAME: &str = "desktop.sock";
 const LOG_FILE_NAME: &str = "imk.log";
 

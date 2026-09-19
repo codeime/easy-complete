@@ -11,9 +11,9 @@ import {
 import { AX_SETTINGS_PANE_EN, AX_SETTINGS_PANE_EN_LEGACY } from "../data.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "Ghostty Autocomplete on macOS — Easy Complete";
+const TITLE = "Ghostty Autocomplete on macOS — Fastab";
 const DESCRIPTION =
-  "Add IDE-style autocomplete to Ghostty on macOS with Easy Complete. Learn how the shell integration and bundled input method keep suggestions aligned.";
+  "Add IDE-style autocomplete to Ghostty on macOS with Fastab. Learn how the shell integration and bundled input method keep suggestions aligned.";
 const ALTERNATES = [
   { locale: "en" as const, path: "/terminals/ghostty" },
   { locale: "zh-CN" as const, path: "/zh/terminals/ghostty" },
@@ -44,7 +44,7 @@ function GhosttyPage() {
       <GuidePage
         eyebrow="Ghostty autocomplete"
         title="IDE-style completions that follow your Ghostty cursor."
-        intro="Easy Complete combines shell state with a bundled macOS input method so its native suggestion window stays aligned inside Ghostty."
+        intro="Fastab combines shell state with a bundled macOS input method so its native suggestion window stays aligned inside Ghostty."
       >
         <h2 className={GUIDE_HEADING}>What gets installed</h2>
         <GuideList>
@@ -66,8 +66,8 @@ function GhosttyPage() {
           Ghostty requires the input-method integration because it bypasses part
           of the standard PTY path used for cursor tracking. Install it from
           Settings → Behavior, or with{" "}
-          <code className="font-mono text-[#cdd6e0]">
-            ec integrations install input-method
+          <code className="font-mono text-(--ink)">
+            ftab integrations install input-method
           </code>
           .
         </GuideCallout>
@@ -79,18 +79,18 @@ function GhosttyPage() {
               href="/install"
               className="text-(--accent) underline underline-offset-4"
             >
-              Install Easy Complete
+              Install Fastab
             </a>{" "}
             and grant Accessibility permission.
           </li>
           <li>Quit and reopen Ghostty, or reload the current shell.</li>
           <li>
-            Run <code className="font-mono text-[#cdd6e0]">ec doctor</code> to
+            Run <code className="font-mono text-(--ink)">ftab doctor</code> to
             confirm the shell and input-method integrations.
           </li>
         </GuideList>
         <pre className={GUIDE_CODE}>{`exec $SHELL
-ec doctor`}</pre>
+ftab doctor`}</pre>
 
         <h2 className={GUIDE_HEADING}>
           If suggestions are misaligned or missing
@@ -99,24 +99,24 @@ ec doctor`}</pre>
           Re-register the bundled input method, then restart Ghostty so macOS
           loads the updated integration.
         </p>
-        <pre className={GUIDE_CODE}>ec integrations install input-method</pre>
+        <pre className={GUIDE_CODE}>ftab integrations install input-method</pre>
         <p className={GUIDE_PARAGRAPH}>
-          Also confirm that Easy Complete remains enabled under{" "}
+          Also confirm that Fastab remains enabled under{" "}
           {AX_SETTINGS_PANE_EN} ({AX_SETTINGS_PANE_EN_LEGACY}).
         </p>
 
         <h2 className={GUIDE_HEADING}>Keyboard controls</h2>
         <GuideList>
           <li>
-            <code className="font-mono text-[#cdd6e0]">↑ / ↓</code> moves
+            <code className="font-mono text-(--ink)">↑ / ↓</code> moves
             through suggestions.
           </li>
           <li>
-            <code className="font-mono text-[#cdd6e0]">Tab / →</code> accepts
+            <code className="font-mono text-(--ink)">Tab / →</code> accepts
             the highlighted suggestion.
           </li>
           <li>
-            <code className="font-mono text-[#cdd6e0]">Esc</code> dismisses the
+            <code className="font-mono text-(--ink)">Esc</code> dismisses the
             popup.
           </li>
         </GuideList>

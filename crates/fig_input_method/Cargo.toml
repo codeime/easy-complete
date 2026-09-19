@@ -11,9 +11,9 @@ license.workspace = true
 workspace = true
 
 [package.metadata.bundle]
-bundle_name = "EasyCompleteInputMethod"
-bundle_identifier = "dev.emmmm.easy-complete.inputmethod"
-input_source_identifier = "dev.emmmm.easy-complete.inputmethod"
+bundle_name = "FastabInputMethod"
+bundle_identifier = "app.fastab.inputmethod"
+input_source_identifier = "app.fastab.inputmethod"
 invisible_in_system_ui = true
 input_method_type = "palette"
 

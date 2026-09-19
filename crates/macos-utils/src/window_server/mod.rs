@@ -45,6 +45,7 @@ const BLOCKED_BUNDLE_IDS: &[&str] = &[
     "com.apple.WebKit.WebContent",
     "com.apple.WebKit.Networking",
     "com.apple.controlcenter",
+    "app.fastab",
     "dev.emmmm.easy-complete",
     "com.mschrage.fig",
     "com.amazon.codewhisperer",

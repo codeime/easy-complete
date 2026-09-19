@@ -75,7 +75,7 @@ impl SettingsArgs {
                     OutputFormat::Plain => {
                         for (key, value) in map {
                             // A string setting prints bare, so the output can be
-                            // fed back to `ec settings <key> <value>` as-is.
+                            // fed back to `ftab settings <key> <value>` as-is.
                             match value.as_str() {
                                 Some(value) => println!("{key} = {value}"),
                                 None => println!("{key} = {value}"),

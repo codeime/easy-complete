@@ -1,7 +1,7 @@
-# Easy Complete — Landing Page
+# Fastab — Landing Page
 
-Marketing site for [Easy Complete](https://github.com/codeime/easy-complete), built from the
-Claude Design source (`Easy Complete.dc.html`).
+Marketing site for [Fastab](https://github.com/codeime/easy-complete), built from the
+Claude Design source (`Fastab.dc.html`).
 
 **Stack:** TanStack Start + React + TypeScript + Tailwind CSS v4, deployed on Cloudflare
 Workers with server-side rendering through `@cloudflare/vite-plugin`.

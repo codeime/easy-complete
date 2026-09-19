@@ -229,7 +229,7 @@ fn page_header(section: Section, zh: bool, chrome: Chrome) -> impl IntoElement {
         (Section::Appearance, true) => ("外观", "分别设置界面与终端补全提示的外观"),
         (Section::Appearance, false) => ("Appearance", "Personalize settings and your terminal completions"),
         (Section::Behavior, true) => ("行为", "调整启动方式、补全习惯与键盘操作"),
-        (Section::Behavior, false) => ("Behavior", "Choose how Easy Complete starts and responds as you type"),
+        (Section::Behavior, false) => ("Behavior", "Choose how Fastab starts and responds as you type"),
         (Section::About, true) => ("关于", "版本、更新与支持"),
         (Section::About, false) => ("About", "Version, updates, and support"),
     };
@@ -341,7 +341,7 @@ fn sidebar(section: Section, zh: bool, chrome: Chrome, entity: Entity<SettingsWi
                 .py(px(20.))
                 .text_size(px(11.))
                 .text_color(rgb(chrome.muted))
-                .child("Easy Complete")
+                .child("Fastab")
                 .child(div().mt(px(3.)).child(env!("CARGO_PKG_VERSION"))),
         )
 }
@@ -1088,9 +1088,9 @@ fn behavior_page(
                         "Show Menu Bar Icon"
                     },
                     Some(if zh {
-                        "隐藏后，再次启动 Easy Complete 可打开设置"
+                        "隐藏后，再次启动 Fastab 可打开设置"
                     } else {
-                        "When hidden, launch Easy Complete again to open settings"
+                        "When hidden, launch Fastab again to open settings"
                     }),
                     show_menubar_icon,
                     chrome,
@@ -1396,11 +1396,9 @@ fn bool_row(
 fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_doctor: bool) -> impl IntoElement {
     let version = env!("CARGO_PKG_VERSION");
     let auto_updates = !fig_settings::settings::get_bool_or("app.disableAutoupdates", false);
-    let telemetry = fig_settings::settings::get_bool_or("telemetry.enabled", false);
     let entity_copy = entity.clone();
     let entity_updates = entity.clone();
     let entity_auto = entity.clone();
-    let entity_tel = entity.clone();
 
     div()
         .w_full()
@@ -1408,7 +1406,7 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
         .flex()
         .flex_col()
         .child(card(
-            "Easy Complete",
+            "Fastab",
             chrome,
             div()
                 .px(px(16.))
@@ -1417,7 +1415,7 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
                     div()
                         .text_size(px(20.))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child("Easy Complete"),
+                        .child("Fastab"),
                 )
                 .child(div().mt(px(4.)).text_color(rgb(chrome.muted)).child(if zh {
                     "适用于 macOS 的终端自动补全".to_string()
@@ -1434,7 +1432,7 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
                             format!("{} {version}", if zh { "版本" } else { "Version" }),
                             chrome,
                             move |cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(format!("Easy Complete {version}")));
+                                cx.write_to_clipboard(ClipboardItem::new_string(format!("Fastab {version}")));
                                 entity_copy.update(cx, |_, cx| cx.notify());
                             },
                         ))
@@ -1472,27 +1470,6 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
             ),
         ))
         .child(card(
-            if zh { "隐私" } else { "Privacy" },
-            chrome,
-            bool_row(
-                if zh {
-                    "分享匿名使用数据"
-                } else {
-                    "Share Anonymous Usage Data"
-                },
-                Some(if zh {
-                    "仅匿名统计，从不包含命令或个人数据"
-                } else {
-                    "Anonymous statistics only, never commands or personal data"
-                }),
-                telemetry,
-                chrome,
-                true,
-                entity_tel,
-                |this, value, cx| this.set_bool("telemetry.enabled", value, cx),
-            ),
-        ))
-        .child(card(
             if zh { "故障排查" } else { "Troubleshooting" },
             chrome,
             div()
@@ -1522,7 +1499,7 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
                                 .bg(rgb(chrome.sidebar))
                                 .font_family("Menlo")
                                 .cursor_pointer()
-                                .child("ec doctor")
+                                .child("ftab doctor")
                                 .on_mouse_down(MouseButton::Left, move |_e, _w, cx| {
                                     copy_doctor(&entity_cmd, cx);
                                 }),
@@ -1567,7 +1544,7 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
                 ))
                 .child(link_row(
                     if zh { "隐私政策" } else { "Privacy Policy" },
-                    "https://easy-complete.emmmm.dev/privacy-policy",
+                    "https://fastab.app/privacy-policy",
                     chrome,
                     false,
                 ))
@@ -1578,10 +1555,44 @@ fn about_page(zh: bool, chrome: Chrome, entity: Entity<SettingsWindow>, copied_d
                     true,
                 )),
         ))
+        .child(card(
+            if zh { "许可与致谢" } else { "License & acknowledgments" },
+            chrome,
+            div()
+                .px(px(16.))
+                .py(px(14.))
+                .text_size(px(13.))
+                .text_color(rgb(chrome.muted))
+                .child(if zh {
+                    "MIT 许可。Fork 自 Easy Complete，基于 Amazon Q Developer CLI 与 Fig。感谢 Easy Complete、Amazon 与 Fig 的贡献者。"
+                        .to_string()
+                } else {
+                    "MIT License. Forked from Easy Complete, based on Amazon Q Developer CLI and Fig. Thanks to the Easy Complete, Amazon, and Fig contributors."
+                        .to_string()
+                })
+                .child(link_row(
+                    "Easy Complete",
+                    "https://github.com/chen86860/easy-complete",
+                    chrome,
+                    false,
+                ))
+                .child(link_row(
+                    "Amazon Q Developer CLI",
+                    "https://github.com/aws/amazon-q-developer-cli",
+                    chrome,
+                    false,
+                ))
+                .child(link_row(
+                    "Fig",
+                    "https://github.com/withfig/autocomplete",
+                    chrome,
+                    true,
+                )),
+        ))
 }
 
 fn copy_doctor(entity: &Entity<SettingsWindow>, cx: &mut App) {
-    cx.write_to_clipboard(ClipboardItem::new_string("ec doctor".into()));
+    cx.write_to_clipboard(ClipboardItem::new_string("ftab doctor".into()));
     entity.update(cx, |this, cx| {
         this.copied_doctor = true;
         cx.notify();
@@ -1610,9 +1621,9 @@ fn accessibility_hint(zh: bool) -> &'static str {
     #[cfg(not(target_os = "macos"))]
     {
         if zh {
-            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置；列表里失效的旧条目会先被移除，再把 Easy Complete 拖进旁边的列表。"
+            "用于读取当前聚焦的终端窗口并定位补全弹窗。点击后打开系统设置；列表里失效的旧条目会先被移除，再把 Fastab 拖进旁边的列表。从 Easy Complete 升级需要重新授权：Fastab 是新的应用身份。"
         } else {
-            "Required to read the focused terminal window and position completions. Click to open System Settings. A stale list row is removed first, then drag Easy Complete into the list beside the card."
+            "Required to read the focused terminal window and position completions. Click to open System Settings. A stale list row is removed first, then drag Fastab into the list beside the card. Upgrading from Easy Complete needs a new grant — Fastab is a different app identity."
         }
     }
 }
@@ -1627,12 +1638,12 @@ fn perm_label(id: PermId, zh: bool) -> (&'static str, &'static str, &'static str
         ),
         (PermId::Shell, true) => (
             "Shell 集成",
-            "向 .zshrc / .bashrc 注入钩子，使 Easy Complete 能够跟踪 Shell 状态。",
+            "向 .zshrc / .bashrc 注入钩子，使 Fastab 能够跟踪 Shell 状态。",
             "安装 Shell 钩子",
         ),
         (PermId::Shell, false) => (
             "Shell Integration",
-            "Injects hooks into .zshrc / .bashrc so Easy Complete can track your shell state.",
+            "Injects hooks into .zshrc / .bashrc so Fastab can track your shell state.",
             "Install Shell Hooks",
         ),
         (PermId::InputMethod, true) => (
@@ -1840,8 +1851,6 @@ fn permission_gate_page(
 
     let entity_refresh = entity.clone();
     let entity_all = entity.clone();
-    let entity_tel = entity.clone();
-    let telemetry = fig_settings::settings::get_bool_or("telemetry.enabled", false);
 
     div()
         .id("ec-permission-gate")
@@ -1945,54 +1954,6 @@ fn permission_gate_page(
                                     })
                                 }),
                         ),
-                )
-                .child(
-                    div()
-                        .mt(px(20.))
-                        .px(px(16.))
-                        .py(px(12.))
-                        .rounded(px(12.))
-                        .bg(rgb(chrome.sidebar))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(16.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .child(
-                                    div()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .child(if zh {
-                                            "共享匿名使用数据"
-                                        } else {
-                                            "Share anonymous usage data"
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .mt(px(3.))
-                                        .text_size(px(12.))
-                                        .text_color(rgb(chrome.muted))
-                                        .child(if zh {
-                                            "帮助我们了解安装数量和使用中的 macOS 版本。不会收集命令、路径或个人数据。"
-                                        } else {
-                                            "Helps us understand install counts and which macOS versions are in use. No commands, paths, or personal data are collected."
-                                        }),
-                                ),
-                        )
-                        .child(toggle(
-                            "ec-perm-telemetry".into(),
-                            telemetry,
-                            chrome,
-                            move |cx| {
-                                entity_tel.update(cx, |this, cx| {
-                                    this.set_bool("telemetry.enabled", !telemetry, cx);
-                                });
-                            },
-                        )),
                 ),
         )
 }

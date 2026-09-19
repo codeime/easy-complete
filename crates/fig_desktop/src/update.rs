@@ -84,7 +84,7 @@ mod macos {
     /// Returns a shared `SPUStandardUserDriverDelegate` instance that forces Sparkle's *scheduled*
     /// (non-user-initiated) update checks to surface immediately, the same way a manual check does.
     ///
-    /// Easy Complete runs as an `LSUIElement` menu-bar agent with no Dock icon and never becomes
+    /// Fastab runs as an `LSUIElement` menu-bar agent with no Dock icon and never becomes
     /// the active app. Sparkle 2's default behavior for background-found updates is a "gentle
     /// scheduled reminder" — it defers the update alert until the app is brought to the foreground,
     /// which for an agent app effectively never happens, so the popup is never seen.
@@ -184,7 +184,7 @@ mod macos {
 
         // Arm Sparkle's scheduled background checks explicitly. Without this, Sparkle defers
         // automatic checks until the user answers a first-run "Check for updates automatically?"
-        // permission prompt. Easy Complete runs as an LSUIElement (menu-bar-only) agent with no
+        // permission prompt. Fastab runs as an LSUIElement (menu-bar-only) agent with no
         // foreground window, so that prompt cannot reliably surface — leaving auto-update silently
         // disabled. Setting the choice programmatically suppresses the prompt and guarantees the
         // scheduled checker is running.
@@ -192,7 +192,7 @@ mod macos {
         // We also force setAutomaticallyDownloadsUpdates: NO. Otherwise Sparkle's
         // `automaticallyDownloadsUpdates` (persisted as the SUAutomaticallyUpdate user default,
         // which can be left at YES from a prior install) makes background checks *silently
-        // download and install* without ever showing the update alert. Easy Complete ships
+        // download and install* without ever showing the update alert. Fastab ships
         // ad-hoc signed with SUEnableInstallerLauncherService disabled, so that silent install
         // path cannot complete — the net effect is "no popup ever appears" for auto-updates even
         // though manual checks work. Disabling auto-download forces the background check to prompt.

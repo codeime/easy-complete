@@ -20,23 +20,13 @@ const PREVIOUS_VERSION_KEY: &str = "desktop.versionAtPreviousLaunch";
 #[cfg(target_os = "macos")]
 const MIGRATED_KEY: &str = "desktop.migratedFromFig";
 
-#[cfg(target_os = "macos")]
-pub async fn migrate_data_dir() {
-    // Migrate the user data dir
-    if let (Ok(old), Ok(new)) = (fig_util::directories::old_fig_data_dir(), fig_data_dir()) {
-        if !old.is_symlink() && old.is_dir() && !new.is_dir() {
-            match tokio::fs::rename(&old, &new).await {
-                Ok(()) => {
-                    if let Err(err) = symlink(&new, &old).await {
-                        error!(%err, "Failed to symlink old user data dir");
-                    }
-                },
-                Err(err) => {
-                    error!(%err, "Failed to migrate user data dir");
-                },
-            }
-        }
-    }
+pub fn migrate_data_dir() {
+    // Easy Complete users keep their settings/history under the new Fastab dir,
+    // including when install.sh already created `fastab/shell/`. The older
+    // Fig/CodeWhisperer path is still accepted if that is all they have.
+    // Integrations install also calls this so IME/sqlite writes land in the
+    // migrated database instead of creating an empty Fastab one first.
+    fig_settings::migrate_previous_product_user_data();
 }
 
 /// Tracks whether macOS has ever actually granted us Accessibility, so a grant that silently stops

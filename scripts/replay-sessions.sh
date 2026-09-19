@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Replay recorded session buffers through `ec engine complete`.
+# Replay recorded session buffers through `ftab engine complete`.
 #
 #   scripts/replay-sessions.sh
 #   scripts/replay-sessions.sh tests/session-replay/sessions/git.jsonl
@@ -49,17 +49,17 @@ resolve_ec() {
         printf '%s\n' "$EC_BIN"
         return
     fi
-    if [[ -x "$ROOT/target/debug/ec" ]]; then
-        printf '%s\n' "$ROOT/target/debug/ec"
+    if [[ -x "$ROOT/target/debug/ftab" ]]; then
+        printf '%s\n' "$ROOT/target/debug/ftab"
         return
     fi
-    if [[ -x "$ROOT/target/release/ec" ]]; then
-        printf '%s\n' "$ROOT/target/release/ec"
+    if [[ -x "$ROOT/target/release/ftab" ]]; then
+        printf '%s\n' "$ROOT/target/release/ftab"
         return
     fi
-    echo "building ec (cargo build -p ec_cli)..." >&2
+    echo "building ftab (cargo build -p ec_cli)..." >&2
     cargo build -p ec_cli --quiet
-    printf '%s\n' "$ROOT/target/debug/ec"
+    printf '%s\n' "$ROOT/target/debug/ftab"
 }
 
 setup_repos

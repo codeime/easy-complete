@@ -69,7 +69,7 @@ pub enum Processes {
     App,
 }
 
-/// The easy-complete CLI
+/// The Fastab CLI
 #[deny(missing_docs)]
 #[derive(Debug, PartialEq, Subcommand)]
 pub enum CliRootCommands {
@@ -122,7 +122,7 @@ pub enum CliRootCommands {
     #[command(subcommand, alias("integration"))]
     Integrations(IntegrationsSubcommands),
     /// Enable/disable anonymous usage statistics
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Telemetry(telemetry::TelemetrySubcommand),
     /// Show version information
     Version,
@@ -131,7 +131,7 @@ pub enum CliRootCommands {
 }
 
 const HELP_TEXT: &str = color_print::cstr! {"
-<magenta,em>{name}</magenta,em> (easy-complete) v{version}
+<magenta,em>{name}</magenta,em> (fastab) v{version}
 <dim>Project:</dim> https://github.com/codeime/easy-complete
 
 <magenta,em>Usage:</magenta,em> {usage}
@@ -397,7 +397,7 @@ mod test {
         assert!(Cli::try_parse_from([CLI_BINARY_NAME, "theme"]).is_err());
 
         let command = Cli::command();
-        for command_name in ["debug", "init"] {
+        for command_name in ["debug", "init", "telemetry"] {
             let subcommand = command
                 .get_subcommands()
                 .find(|subcommand| subcommand.get_name() == command_name)

@@ -61,7 +61,7 @@ export const executeLoginShell = async ({
 
   // When Process.run goes through figterm it does not apply the local
   // set_fig_vars() path, so without this the child is an interactive login
-  // shell that re-enters Easy Complete hooks and may exec ecterm — hang/empty
+  // shell that re-enters Fastab hooks and may exec fastabterm — hang/empty
   // output for callers like firstTokenSpec. Marking the process as launched by
   // us skips the PTY wrap and still emits DoneSourcing from post hooks.
   const process = Process.run({

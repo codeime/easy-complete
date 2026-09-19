@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Easy Complete macOS installer ──────────────────────────────────────────
+# ── Fastab macOS installer ──────────────────────────────────────────
 
-APP_NAME="easy-complete"          # binary / process name (no spaces)
-APP_DISPLAY="Easy Complete"       # human-readable / bundle directory name
-BUNDLE_ID="dev.emmmm.easy-complete"
+APP_NAME="fastab"          # binary / process name (no spaces)
+APP_DISPLAY="Fastab"       # human-readable / bundle directory name
+BUNDLE_ID="app.fastab"
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STAGING_BUNDLE="${REPO_DIR}/build/${APP_DISPLAY}.app"
@@ -49,7 +49,7 @@ stop_process() {
 
 # Ask the relaunched desktop process whether its Accessibility grant is in
 # effect, and leave the answer in `accessibility_state`: true, false, or
-# unknown when the app never answered. `ec debug accessibility status` reports
+# unknown when the app never answered. `ftab debug accessibility status` reports
 # the desktop process's own `AXIsProcessTrusted()` over its local socket, so it
 # speaks for the binary that was just installed, not for this shell. The socket
 # takes a moment to come up after `open`, and a `false` only counts once it has
@@ -58,7 +58,7 @@ probe_accessibility() {
   accessibility_state=unknown
   local answer="" false_count=0 tries=0
   while [ "${tries}" -lt 15 ]; do
-    answer="$(ec debug accessibility status 2>/dev/null | awk '/^Accessibility Enabled: /{print $3}' || true)"
+    answer="$(ftab debug accessibility status 2>/dev/null | awk '/^Accessibility Enabled: /{print $3}' || true)"
     case "${answer}" in
       true)
         accessibility_state=true
@@ -89,7 +89,7 @@ probe_accessibility() {
 info "Installing to /Applications/..."
 
 DESKTOP_BIN="Contents/MacOS/${APP_NAME}"
-IME_BIN="Contents/Helpers/EasyCompleteInputMethod.app/Contents/MacOS/fig_input_method"
+IME_BIN="Contents/Helpers/FastabInputMethod.app/Contents/MacOS/fig_input_method"
 
 for required in "${DESKTOP_BIN}" "${IME_BIN}"; do
   if [ ! -f "${STAGING_BUNDLE}/${required}" ]; then
@@ -113,6 +113,8 @@ fi
 # breaks completions until the next restart. It has no clients to preserve and
 # is relaunched at the end of this script.
 stop_process "${APP_NAME}"
+# Previous product name, left behind when the bundle ID and process name changed.
+stop_process "easy-complete"
 
 # The IME is the one process worth keeping alive: open Otty / Ghostty / Kitty
 # windows hold IMK connections to it and macOS never re-attaches them to a
@@ -138,25 +140,32 @@ else
 fi
 ditto "${STAGING_BUNDLE}" "${APP_BUNDLE}"
 
+if [ -d "/Applications/Easy Complete.app" ]; then
+  info "Removing the previous Easy Complete.app bundle..."
+  rm -rf "/Applications/Easy Complete.app"
+fi
+rm -rf "${HOME}/Library/Input Methods/EasyCompleteInputMethod.app"
+
 # ── 4. Symlink CLI binaries to ~/.local/bin ───────────────────────────────────
 info "Linking binaries to ${LOCAL_BIN}..."
 mkdir -p "${LOCAL_BIN}"
-ln -sf "/Applications/${APP_DISPLAY}.app/Contents/MacOS/ec"     "${LOCAL_BIN}/ec"
-ln -sf "/Applications/${APP_DISPLAY}.app/Contents/MacOS/ecterm" "${LOCAL_BIN}/ecterm"
+ln -sf "/Applications/${APP_DISPLAY}.app/Contents/MacOS/ftab"     "${LOCAL_BIN}/ftab"
+ln -sf "/Applications/${APP_DISPLAY}.app/Contents/MacOS/fastabterm" "${LOCAL_BIN}/fastabterm"
+rm -f "${LOCAL_BIN}/ec" "${LOCAL_BIN}/ecterm"
 
 # ── 6. Shell integration ───────────────────────────────────────────────────────
 info "Installing shell integration..."
 export PATH="${LOCAL_BIN}:${PATH}"
-ec integrations install --silent dotfiles 2>/dev/null || {
+ftab integrations install --silent dotfiles 2>/dev/null || {
   warn "Automatic shell setup skipped. Run manually:"
-  warn "  ec integrations install dotfiles"
+  warn "  ftab integrations install dotfiles"
 }
 
 # ── 7. Input Method ────────────────────────────────────────────────────────────
 info "Registering Input Method..."
-# `ec integrations install input-method` launches the IME when it is down, and
+# `ftab integrations install input-method` launches the IME when it is down, and
 # replaces it only when the on-disk helper is not the binary we last started.
-ec integrations install --silent input-method 2>/dev/null || {
+ftab integrations install --silent input-method 2>/dev/null || {
   warn "Input method registration skipped (only needed for Kitty/Alacritty/Zed/Ghostty/WezTerm)"
 }
 
@@ -184,12 +193,12 @@ if [ "${desktop_changed}" -eq 1 ]; then
       info "Accessibility grant did not survive; resetting it..."
       tccutil reset Accessibility "${BUNDLE_ID}" 2>/dev/null || true
       accessibility_reset=1
-      warn "Open Easy Complete Settings and click Grant Accessibility."
+      warn "Open Fastab Settings and click Grant Accessibility."
       ;;
     *)
       warn "Could not reach the desktop app to check its Accessibility grant. Once it is running, run:"
-      warn "  ec debug accessibility status"
-      warn "If it reports false, open Easy Complete Settings and click Grant Accessibility."
+      warn "  ftab debug accessibility status"
+      warn "If it reports false, open Fastab Settings and click Grant Accessibility."
       ;;
   esac
 fi
@@ -199,9 +208,9 @@ echo ""
 info "Installation complete!"
 echo ""
 echo "  App:  /Applications/${APP_DISPLAY}.app"
-echo "  CLI:  ${LOCAL_BIN}/ec  ($(ec --version 2>/dev/null || echo 'restart shell to verify'))"
+echo "  CLI:  ${LOCAL_BIN}/ftab  ($(ftab --version 2>/dev/null || echo 'restart shell to verify'))"
 echo ""
 if [ "${accessibility_reset}" -eq 1 ]; then
-  echo "  If autocomplete does not appear, open Easy Complete Settings and click"
-  echo "    Grant Accessibility, then drag Easy Complete into the list."
+  echo "  If autocomplete does not appear, open Fastab Settings and click"
+  echo "    Grant Accessibility, then drag Fastab into the list."
 fi

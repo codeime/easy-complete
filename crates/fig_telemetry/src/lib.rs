@@ -26,38 +26,27 @@ static QUEUE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static COUNTERS: LazyLock<Mutex<HashMap<String, i64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Call once at app startup.
-/// `endpoint` — Cloudflare Workers URL proxying to your PostHog instance,
-///              e.g. "https://analytics.example.com/capture/".
-/// `api_key`  — PostHog project API key (e.g. "phc_xxx").
-/// Either being empty silently disables telemetry.
 ///
-/// If a tokio runtime is running, also flushes any events queued from
-/// previous sessions that failed to send.
-pub fn init(endpoint: impl Into<String>, api_key: impl Into<String>) {
-    let url = endpoint.into();
-    let key = api_key.into();
-    if url.trim().is_empty() || key.trim().is_empty() {
-        return;
-    }
-    POSTHOG_ENDPOINT.set(url.trim_end_matches('/').to_owned()).ok();
-    POSTHOG_API_KEY.set(key.trim().to_owned()).ok();
-
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(async {
-            // Give the network stack / proxy a moment on cold boot.
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            flush_queue().await;
-        });
-    }
+/// Endpoint and API key are ignored. This product ships with reporting off;
+/// a placeholder host is recorded so leftover build-time PostHog env cannot
+/// send events.
+pub fn init(_endpoint: impl Into<String>, _api_key: impl Into<String>) {
+    POSTHOG_ENDPOINT
+        .set("https://telemetry.placeholder.invalid/capture".to_owned())
+        .ok();
+    POSTHOG_API_KEY.set(String::new()).ok();
 }
 
 fn is_enabled() -> bool {
-    fig_settings::settings::get_bool_or(TELEMETRY_ENABLED_KEY, true)
+    fig_settings::settings::get_bool_or(TELEMETRY_ENABLED_KEY, false)
 }
 
 /// True after [`init`] received a non-empty endpoint and API key.
 pub fn is_configured() -> bool {
-    POSTHOG_ENDPOINT.get().is_some() && POSTHOG_API_KEY.get().is_some()
+    matches!(
+        (POSTHOG_ENDPOINT.get(), POSTHOG_API_KEY.get()),
+        (Some(endpoint), Some(api_key)) if !endpoint.is_empty() && !api_key.is_empty()
+    )
 }
 
 fn device_id() -> String {

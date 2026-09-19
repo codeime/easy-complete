@@ -91,4 +91,4 @@ copy_if_changed "${DESKTOP_ICONS}/icon-monochrome.png" "${DESKTOP_ICONS}/not-log
 copy_if_changed "${DESKTOP_ICONS}/icon-monochrome@2x.png" "${DESKTOP_ICONS}/not-logged-in@2x.png"
 copy_if_changed "${DESKTOP_ICONS}/icon-monochrome.png" "${DESKTOP_ICONS}/not-logged-in-light.png"
 
-echo "Generated Easy Complete app and menu-bar icons."
+echo "Generated Fastab app and menu-bar icons."

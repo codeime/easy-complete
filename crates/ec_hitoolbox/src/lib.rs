@@ -4,7 +4,7 @@
 //! `TISEnableInputSource` can return success and still leave the source out of
 //! `AppleEnabledInputSources`, which is the list a new Otty / Ghostty / Kitty
 //! window is matched against. Both the IME (from its own `NSApplication`) and
-//! `ec integrations install input-method` (from a CLI process with no run loop)
+//! `ftab integrations install input-method` (from a CLI process with no run loop)
 //! have to repair that, so the write lives here rather than in either of them:
 //! an install runs both at once, and two whole-domain `defaults export`/`import`
 //! passes would race and drop each other's entry. These are key-scoped writes.

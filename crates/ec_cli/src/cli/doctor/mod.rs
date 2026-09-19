@@ -29,14 +29,16 @@ use fig_ipc::{BufferedUnixStream, SendMessage, SendRecvMessage};
 use fig_os_shim::{Context, Env, Os};
 use fig_proto::local::DiagnosticsResponse;
 use fig_settings::JsonStore;
+#[cfg(unix)]
+use fig_util::OLD_PTY_BINARY_NAMES;
 use fig_util::directories::{remote_socket_path, settings_path};
 use fig_util::env_var::{PROCESS_LAUNCHED_BY_Q, Q_PARENT, QTERM_SESSION_ID};
 use fig_util::macos::BUNDLE_CONTENTS_INFO_PLIST_PATH;
 use fig_util::system_info::SupportLevel;
 use fig_util::terminal::in_special_terminal;
 use fig_util::{
-    APP_BUNDLE_NAME, CLI_BINARY_NAME, CLI_CRATE_NAME, OLD_CLI_BINARY_NAMES, PRODUCT_NAME, PTY_BINARY_NAME, Shell,
-    Terminal, directories, system_paths,
+    APP_BUNDLE_ID, APP_BUNDLE_NAME, CLI_BINARY_NAME, CLI_CRATE_NAME, OLD_CLI_BINARY_NAMES, PRODUCT_NAME,
+    PTY_BINARY_NAME, Shell, Terminal, directories, system_paths,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -1164,7 +1166,10 @@ impl DoctorCheck<DiagnosticsResponse> for AccessibilityCheck {
         if diagnostics.accessibility != "true" {
             Err(DoctorError::Error {
                 reason: "Accessibility is disabled".into(),
-                info: vec![],
+                info: vec![format!(
+                    "{PRODUCT_NAME} is {APP_BUNDLE_ID}. Upgrading from Easy Complete is a new TCC identity — grant Accessibility again from Settings even if Easy Complete was already allowed."
+                )
+                .into()],
                 fix: command_fix(
                     vec![CLI_BINARY_NAME, "debug", "prompt-accessibility"],
                     Duration::from_secs(1),
@@ -1690,74 +1695,45 @@ impl DoctorCheck for WindowsConsoleCheck {
     }
 }
 
-struct LoginStatusCheck;
+#[cfg(unix)]
+struct LeftoverProductBinCheck;
 
+#[cfg(unix)]
 #[async_trait]
-impl DoctorCheck for LoginStatusCheck {
+impl DoctorCheck for LeftoverProductBinCheck {
     fn name(&self) -> Cow<'static, str> {
-        "Auth".into()
+        "No leftover Easy Complete binaries".into()
     }
 
     async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        // Auth check removed (fig_auth deleted)
-        Ok(())
-    }
-}
-
-struct DashboardHostCheck;
-
-#[async_trait]
-impl DoctorCheck for DashboardHostCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "Dashboard is loading from the correct URL".into()
-    }
-
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        match fig_settings::settings::get_string("developer.dashboard.host")
-            .ok()
-            .flatten()
-        {
-            Some(host) => {
-                if host.contains("localhost") {
-                    Err(DoctorError::Warning(
-                        format!("developer.dashboard.host = {host}, delete this setting if Dashboard fails to load")
-                            .into(),
-                    ))
-                } else {
-                    Ok(())
-                }
-            },
-            None => Ok(()),
-        }
-    }
-}
-
-struct AutocompleteHostCheck;
-
-#[async_trait]
-impl DoctorCheck for AutocompleteHostCheck {
-    fn name(&self) -> Cow<'static, str> {
-        "Autocomplete is loading from the correct URL".into()
-    }
-
-    async fn check(&self, _: &()) -> Result<(), DoctorError> {
-        match fig_settings::settings::get_string("developer.autocomplete.host")
-            .ok()
-            .flatten()
-        {
-            Some(host) => {
-                if host.contains("localhost") {
-                    Err(DoctorError::Warning(
-                        format!(
-                            "developer.autocomplete.host = {host}, delete this setting if Autocomplete fails to load"
-                        )
-                        .into(),
-                    ))
-                } else {
-                    Ok(())
-                }
-            },
-            None => Ok(()),
+        let Ok(local_bin) = directories::home_local_bin() else {
+            return Ok(());
+        };
+        let leftover_cli = OLD_CLI_BINARY_NAMES
+            .iter()
+            .map(|name| local_bin.join(name))
+            .filter(|path| path.exists() && !path.is_symlink());
+        // Desktop install keeps `ec` as a symlink to `ftab`. A leftover
+        // `ecterm` → `fastabterm` symlink is the same kind of shim.
+        let leftover_pty = OLD_PTY_BINARY_NAMES
+            .iter()
+            .map(|name| local_bin.join(name))
+            .filter(|path| path.exists() && !path.is_symlink());
+        let leftover: Vec<_> = leftover_cli.chain(leftover_pty).collect();
+        if leftover.is_empty() {
+            Ok(())
+        } else {
+            let names = leftover
+                .iter()
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(doctor_warning!(
+                "Leftover Easy Complete binaries still in ~/.local/bin: {}. Use {} instead.",
+                names,
+                CLI_BINARY_NAME.magenta()
+            ))
         }
     }
 }
@@ -1952,15 +1928,6 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
         }
     }
 
-    run_checks(
-        "Let's check if you're logged in...".into(),
-        vec![&LoginStatusCheck {}],
-        config,
-        &mut spinner,
-    )
-    .await?;
-
-    // If user is logged in, try to launch fig
     launch_fig_desktop(LaunchArgs {
         wait_for_socket: true,
         open_dashboard: false,
@@ -1996,6 +1963,8 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
             vec![
                 &FigBinCheck,
                 #[cfg(unix)]
+                &LeftoverProductBinCheck,
+                #[cfg(unix)]
                 &LocalBinPathCheck,
                 #[cfg(target_os = "windows")]
                 &WindowsConsoleCheck,
@@ -2026,8 +1995,6 @@ pub async fn doctor_cli(all: bool, strict: bool) -> Result<ExitCode> {
                 &PtySocketCheck,
                 &AutocompleteDevModeCheck,
                 &PluginDevModeCheck,
-                &DashboardHostCheck,
-                &AutocompleteHostCheck,
             ],
             config,
             &mut spinner,

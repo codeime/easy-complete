@@ -10,9 +10,9 @@ import {
 import { DOWNLOAD_URL } from "../download.ts";
 import { SeoJsonLd, guideSchema, pageHead } from "../seo.tsx";
 
-const TITLE = "Open-Source Fig Alternative for macOS — Easy Complete";
+const TITLE = "Open-Source Fig Alternative for macOS — Fastab";
 const DESCRIPTION =
-  "Easy Complete is a free, open-source, fully local Fig-style terminal autocomplete app for zsh, bash, and fish on Apple Silicon Macs.";
+  "Fastab is a free, open-source, fully local Fig-style terminal autocomplete app for zsh, bash, and fish on Apple Silicon Macs.";
 const ALTERNATES = [
   { locale: "en" as const, path: "/fig-alternative" },
   { locale: "zh-CN" as const, path: "/zh/fig-alternative" },
@@ -43,14 +43,20 @@ function FigAlternativePage() {
       <GuidePage
         eyebrow="Fig alternative"
         title="The autocomplete workflow, without the assistant around it."
-        intro="Easy Complete is a focused, open-source terminal completion engine for people who liked Fig-style suggestions and want a local macOS tool dedicated to autocomplete."
+        intro="Fastab is a focused, open-source terminal completion engine for people who liked Fig-style suggestions and want a local macOS tool dedicated to autocomplete."
       >
         <GuideCallout>
-          Easy Complete is an independent open-source project. Fig and Amazon Q
-          are trademarks of their respective owners; no affiliation is implied.
+          Fastab is a fork of{" "}
+          <a href="https://github.com/chen86860/easy-complete">Easy Complete</a>,
+          based on{" "}
+          <a href="https://github.com/aws/amazon-q-developer-cli">
+            Amazon Q Developer CLI
+          </a>{" "}
+          and <a href="https://github.com/withfig/autocomplete">Fig</a>. Thanks
+          to the Easy Complete, Amazon, and Fig contributors.
         </GuideCallout>
 
-        <h2 className={GUIDE_HEADING}>What Easy Complete keeps</h2>
+        <h2 className={GUIDE_HEADING}>What Fastab keeps</h2>
         <GuideList>
           <li>
             IDE-style suggestions for flags, subcommands, arguments, and paths.
@@ -65,21 +71,20 @@ function FigAlternativePage() {
 
         <h2 className={GUIDE_HEADING}>What it deliberately leaves out</h2>
         <p className={GUIDE_PARAGRAPH}>
-          Easy Complete is not a chat product or a cloud coding assistant.
+          Fastab is not a chat product or a cloud coding assistant.
           Completion generation stays on your Mac, requires no account, and
-          makes no AI requests. Anonymous product counters can be disabled at
-          any time.
+          makes no AI requests. This fork has all telemetry off.
         </p>
 
-        <div className="my-9 overflow-x-auto rounded-[14px] border border-[#1c232d]">
+        <div className="my-9 overflow-x-auto rounded-lg border border-(--border)">
           <table className="w-full min-w-155 border-collapse text-left text-sm">
-            <thead className="border-b border-[#1c232d] bg-[#0d1219] font-mono text-xs uppercase tracking-wider text-[#65707d]">
+            <thead className="border-b border-(--border) bg-(--surface) font-mono text-xs uppercase tracking-wider text-(--muted)">
               <tr>
                 <th className="px-5 py-4">Capability</th>
-                <th className="px-5 py-4">Easy Complete</th>
+                <th className="px-5 py-4">Fastab</th>
               </tr>
             </thead>
-            <tbody className="text-[#9aa4b0]">
+            <tbody className="text-(--muted)">
               {[
                 ["Autocomplete engine", "Local, native macOS app"],
                 ["Overlay & settings", "Native GPUI — not WKWebView"],
@@ -93,7 +98,7 @@ function FigAlternativePage() {
                   key={label}
                   className="border-b border-[#141a21] last:border-b-0"
                 >
-                  <th className="px-5 py-4 font-medium text-[#cdd6e0]">
+                  <th className="px-5 py-4 font-medium text-(--ink)">
                     {label}
                   </th>
                   <td className="px-5 py-4">{value}</td>
@@ -105,16 +110,16 @@ function FigAlternativePage() {
 
         <h2 className={GUIDE_HEADING}>Who it is for</h2>
         <p className={GUIDE_PARAGRAPH}>
-          Easy Complete is a good fit if you want structured command
+          Fastab is a good fit if you want structured command
           suggestions, prefer local software, use an Apple Silicon Mac, and do
           not need a terminal chat assistant bundled with autocomplete.
         </p>
         <p>
           <a
             href={DOWNLOAD_URL}
-            className="inline-flex rounded-[10px] bg-(--accent) px-5 py-3 font-semibold text-[#06140a] transition hover:brightness-110"
+            className="inline-flex rounded-md bg-(--accent) px-5 py-3 font-semibold text-(--accent-fg) transition-opacity hover:opacity-90"
           >
-            Try Easy Complete for free
+            Download Fastab
           </a>
         </p>
 
@@ -122,7 +127,7 @@ function FigAlternativePage() {
           links={[
             {
               href: "/install",
-              label: "Install Easy Complete",
+              label: "Install Fastab",
               description: "Get the ARM64 app running on macOS.",
             },
             {

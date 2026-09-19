@@ -1,6 +1,6 @@
 # TS API Bindings
 
-The TypeScript definitions for the Easy Complete command line API.
+The TypeScript definitions for the Fastab command line API.
 
 Note: The protobuf definitions are generated from the local proto package.
 

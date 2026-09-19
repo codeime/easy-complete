@@ -1,10 +1,13 @@
-Easy Complete
-Copyright (c) 2026 Easy Complete contributors
+Fastab
+Copyright (c) 2026 Fastab contributors
 
-This product is based on Amazon Q Developer CLI
-(https://github.com/aws/amazon-q-developer-cli),
+This product is a rename of Easy Complete
+(https://github.com/chen86860/easy-complete), which is based on Amazon Q
+Developer CLI (https://github.com/aws/amazon-q-developer-cli),
 Copyright (c) 2024 Amazon.com, Inc. or its affiliates,
 and is distributed under the MIT License.
+
+Thanks to the Easy Complete, Amazon, and Fig contributors.
 
 Third-party copyright and license information is provided in
 THIRD_PARTY_NOTICES.txt.

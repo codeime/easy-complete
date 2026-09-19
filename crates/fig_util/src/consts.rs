@@ -1,42 +1,42 @@
-pub const APP_BUNDLE_ID: &str = "dev.emmmm.easy-complete";
-pub const APP_BUNDLE_NAME: &str = "Easy Complete.app";
+pub const APP_BUNDLE_ID: &str = "app.fastab";
+pub const APP_BUNDLE_NAME: &str = "Fastab.app";
 
 #[cfg(target_os = "macos")]
-pub const APP_PROCESS_NAME: &str = "easy-complete";
+pub const APP_PROCESS_NAME: &str = "fastab";
 
 #[cfg(target_os = "linux")]
-pub const APP_PROCESS_NAME: &str = "easy-complete";
+pub const APP_PROCESS_NAME: &str = "fastab";
 
 #[cfg(windows)]
-pub const APP_PROCESS_NAME: &str = "easy-complete.exe";
+pub const APP_PROCESS_NAME: &str = "fastab.exe";
 
 /// The name configured under `"package.productName"` in the tauri.conf.json file.
-pub const TAURI_PRODUCT_NAME: &str = "Easy Complete";
+pub const TAURI_PRODUCT_NAME: &str = "Fastab";
 
-pub const CLI_BINARY_NAME: &str = "ec";
-pub const CLI_BINARY_NAME_MINIMAL: &str = "ec-minimal";
-pub const PTY_BINARY_NAME: &str = "ecterm";
+pub const CLI_BINARY_NAME: &str = "ftab";
+pub const CLI_BINARY_NAME_MINIMAL: &str = "ftab-minimal";
+pub const PTY_BINARY_NAME: &str = "fastabterm";
 
 pub const CLI_CRATE_NAME: &str = "ec_cli";
 
-pub const URL_SCHEMA: &str = "ec";
+pub const URL_SCHEMA: &str = "fastab";
 
-pub const PRODUCT_NAME: &str = "Easy Complete";
+pub const PRODUCT_NAME: &str = "Fastab";
 
-pub const RUNTIME_DIR_NAME: &str = "ecrun";
+pub const RUNTIME_DIR_NAME: &str = "fastabrun";
 
 /// Data directory name used in paths like ~/.local/share/{DATA_DIR_NAME}
 #[cfg(unix)]
-pub const DATA_DIR_NAME: &str = "easy-complete";
+pub const DATA_DIR_NAME: &str = "fastab";
 #[cfg(windows)]
-pub const DATA_DIR_NAME: &str = "easy-complete";
+pub const DATA_DIR_NAME: &str = "fastab";
 
 /// Backup directory name
-pub const BACKUP_DIR_NAME: &str = ".easy-complete.dotfiles.bak";
+pub const BACKUP_DIR_NAME: &str = ".fastab.dotfiles.bak";
 
-pub const OLD_PRODUCT_NAME: &str = "Amazon Q";
-pub const OLD_CLI_BINARY_NAMES: &[&str] = &["q"];
-pub const OLD_PTY_BINARY_NAMES: &[&str] = &["qterm"];
+pub const OLD_PRODUCT_NAME: &str = "Easy Complete";
+pub const OLD_CLI_BINARY_NAMES: &[&str] = &["ec", "q"];
+pub const OLD_PTY_BINARY_NAMES: &[&str] = &["ecterm", "qterm"];
 
 pub const GITHUB_REPO_NAME: &str = "codeime/easy-complete";
 
@@ -81,9 +81,9 @@ pub mod macos {
 /// branch both import these; they were dropped during the rebrand and the
 /// crate no longer compiled on the CI ubuntu job.
 pub mod linux {
-    pub const DESKTOP_ENTRY_NAME: &str = "easy-complete.desktop";
-    pub const PACKAGE_NAME: &str = "easy-complete";
-    pub const DESKTOP_APP_WM_CLASS: &str = "Easy-complete";
+    pub const DESKTOP_ENTRY_NAME: &str = "fastab.desktop";
+    pub const PACKAGE_NAME: &str = "fastab";
+    pub const DESKTOP_APP_WM_CLASS: &str = "Fastab";
 }
 
 pub mod env_var {

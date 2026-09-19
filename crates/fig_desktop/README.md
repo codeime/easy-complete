@@ -1,6 +1,6 @@
-# Easy Complete Desktop
+# Fastab Desktop
 
-Native macOS host (`easy-complete`). The autocomplete overlay and settings
+Native macOS host (`fastab`). The autocomplete overlay and settings
 window are GPUI views. Completions run in `ec_engine` on a worker thread.
 
 Follow the [root README](../../README.md) for toolchain and install steps.
@@ -8,16 +8,16 @@ Follow the [root README](../../README.md) for toolchain and install steps.
 ## Developing
 
 ```bash
-cargo run --bin easy-complete
+cargo run --bin fastab
 ```
 
-Settings open from the menu bar or a `ec://` deep link. There is no dashboard
+Settings open from the menu bar or a `fastab://` deep link. There is no dashboard
 dev server and no `DASHBOARD_URL`.
 
 Headless completions (no overlay):
 
 ```bash
-cargo run --bin ec -- engine complete --buffer "git ch"
+cargo run --bin ftab -- engine complete --buffer "git ch"
 ```
 
 ## Layout

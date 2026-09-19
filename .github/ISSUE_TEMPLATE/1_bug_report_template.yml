@@ -1,5 +1,5 @@
 name: "Bug report"
-description: "Report something that is broken in Easy Complete / 报告 Easy Complete 的问题"
+description: "Report something that is broken in Fastab / 报告 Fastab 的问题"
 
 title: "bug: "
 labels: ["bug"]
@@ -22,16 +22,16 @@ body:
     options:
     - label: "I have searched [existing issues](https://github.com/codeime/easy-complete/issues?q=) and found no duplicate / 我已搜索过现有 issue，没有重复"
       required: true
-    - label: "I have run `ec doctor` in the affected terminal / 我已在出问题的终端里运行过 `ec doctor`"
+    - label: "I have run `ftab doctor` in the affected terminal / 我已在出问题的终端里运行过 `ftab doctor`"
       required: true
-    - label: "I have run `ec restart` and the problem still happens / 我已运行过 `ec restart`，问题依旧"
+    - label: "I have run `ftab restart` and the problem still happens / 我已运行过 `ftab restart`，问题依旧"
       required: true
 
 - type: input
   id: "app-version"
   attributes:
-    label: "Easy Complete version"
-    description: "Output of `ec --version` / `ec --version` 的输出"
+    label: "Fastab version"
+    description: "Output of `ftab --version` / `ftab --version` 的输出"
     placeholder: "2.2.1"
   validations:
     required: true
@@ -50,7 +50,7 @@ body:
   attributes:
     label: "Terminal"
     description: |
-      Easy Complete tracks the cursor differently per terminal — through the input method, the
+      Fastab tracks the cursor differently per terminal — through the input method, the
       accessibility API, or the pseudoterminal — so this usually decides where a bug lives.
 
       不同终端的光标追踪方式不同（输入法 / 辅助功能 API / 伪终端），这一项往往直接决定问题出在哪。
@@ -115,7 +115,7 @@ body:
   id: "environment"
   attributes:
     label: "Diagnostics"
-    description: "Paste the output of `ec diagnostic` / 粘贴 `ec diagnostic` 的输出"
+    description: "Paste the output of `ftab diagnostic` / 粘贴 `ftab diagnostic` 的输出"
     render: yaml
 
 - type: textarea

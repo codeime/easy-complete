@@ -22,6 +22,19 @@ use tracing::error;
 
 pub type Map = serde_json::Map<String, Value>;
 
+/// Merge leftover Easy Complete / CodeWhisperer user data into the Fastab
+/// directory: files first, then sqlite state and history. Opening the dest
+/// database also drops previous-product identity keys exactly once so a
+/// renamed Easy Complete sqlite cannot fake a Fastab Accessibility grant or
+/// IME launch hash.
+pub fn migrate_previous_product_user_data() {
+    fig_util::directories::migrate_previous_product_data_dirs();
+    if let Err(err) = sqlite::database() {
+        tracing::warn!(%err, "Failed to open Fastab sqlite during product migrate");
+    }
+    state::import_missing_state_from_previous_product();
+}
+
 static SETTINGS_FILE_LOCK: RwLock<()> = RwLock::new(());
 
 static SETTINGS_DATA: RwLock<Option<Map>> = RwLock::new(None);
@@ -188,6 +201,8 @@ pub trait JsonStore: Sized {
     }
 
     fn load_from_file() -> Result<Map> {
+        // Move leftover settings.json before this creates dest `{}`.
+        fig_util::directories::migrate_previous_product_data_dirs();
         let path = Self::path()?;
 
         // If the folder doesn't exist, create it.

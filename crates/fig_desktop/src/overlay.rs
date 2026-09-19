@@ -271,7 +271,7 @@ impl OverlayController {
         });
     }
 
-    /// `ec hook clear-autocomplete-cache`. The WebView answered its
+    /// `ftab hook clear-autocomplete-cache`. The WebView answered its
     /// `clear-cache` event by dropping every loaded spec and generator result;
     /// the engine worker owns those now.
     pub fn clear_caches(&self) {

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DMG_PATH="${1:-${REPO_DIR}/dist/Easy-Complete-arm64.dmg}"
+DMG_PATH="${1:-${REPO_DIR}/dist/Fastab-arm64.dmg}"
 APPCAST_DIR="${APPCAST_DIR:-${REPO_DIR}/dist/sparkle}"
 SPARKLE_VERSION="${SPARKLE_VERSION:-2.9.3}"
 SPARKLE_MAXIMUM_VERSIONS="${SPARKLE_MAXIMUM_VERSIONS:-1}"
@@ -36,7 +36,7 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-ARCHIVE_NAME="${SPARKLE_ARCHIVE_NAME:-Easy-Complete-${VERSION}-arm64.dmg}"
+ARCHIVE_NAME="${SPARKLE_ARCHIVE_NAME:-Fastab-${VERSION}-arm64.dmg}"
 ARCHIVE_PATH="${APPCAST_DIR}/${ARCHIVE_NAME}"
 DMG_DIR="$(cd "$(dirname "$DMG_PATH")" && pwd)"
 APPCAST_ABS_DIR="$(cd "$APPCAST_DIR" && pwd)"
@@ -59,7 +59,7 @@ printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
 
 [ -f "$APPCAST_DIR/appcast.xml" ] || { echo "error: appcast.xml was not generated" >&2; exit 1; }
 
-# Sparkle derives delta names from the app bundle display name ("Easy Complete")
+# Sparkle derives delta names from the app bundle display name ("Fastab")
 # and writes files with spaces on disk. GitHub normalizes those spaces to dots in
 # release asset names, so normalize the files ourselves and keep the appcast URLs
 # aligned with the exact names uploaded to the release.

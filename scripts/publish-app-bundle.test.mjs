@@ -27,11 +27,11 @@ async function pathExists(path) {
 test("exclusive publication rollback confirms that final is absent", async (t) => {
   const temporaryRoot = process.platform === "darwin" ? "/private/tmp" : tmpdir();
   const publicationRoot = await mkdtemp(join(temporaryRoot, "easy-complete-publish-"));
-  const finalPath = join(publicationRoot, "Easy Complete.app");
+  const finalPath = join(publicationRoot, "Fastab.app");
   const workRoot = await mkdtemp(
     join(publicationRoot, ".specs-inputs.publish-test-"),
   );
-  const staging = join(workRoot, "Easy Complete.app");
+  const staging = join(workRoot, "Fastab.app");
   const swapHelper = join(workRoot, "fake-swap-helper");
   await mkdir(join(staging, "Contents"), { recursive: true });
   await writeFile(join(staging, "Contents", "marker"), "staging\n");

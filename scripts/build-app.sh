@@ -1,20 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Build & assemble Easy Complete.app ──────────────────────────────────────
+# ── Build & assemble Fastab.app ──────────────────────────────────────
 #
 # Builds the Rust binaries and TypeScript frontend, then assembles a complete
-# `build/Easy Complete.app` bundle. Does NOT install to /Applications or touch
+# `build/Fastab.app` bundle. Does NOT install to /Applications or touch
 # any system state — that is install.sh's job. This script is the single source
 # of truth for how the .app is put together, shared by install.sh and CI.
 #
-# Output: build/Easy Complete.app  (ad-hoc code-signed)
+# Output: build/Fastab.app  (ad-hoc code-signed)
 
-APP_NAME="easy-complete"          # binary / process name (no spaces)
-APP_DISPLAY="Easy Complete"       # human-readable / bundle directory name
-BUNDLE_ID="dev.emmmm.easy-complete"
+APP_NAME="fastab"          # binary / process name (no spaces)
+APP_DISPLAY="Fastab"       # human-readable / bundle directory name
+BUNDLE_ID="app.fastab"
 APP_CATEGORY="public.app-category.productivity"   # Finder / Launchpad "Developer Tools"
-COPYRIGHT="${COPYRIGHT:-© 2026 Easy Complete contributors}"
+COPYRIGHT="${COPYRIGHT:-© 2026 Fastab contributors}"
 DEFAULT_SPARKLE_APPCAST_URL="https://github.com/codeime/easy-complete/releases/latest/download/appcast.xml"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 
@@ -40,7 +40,7 @@ if [ -n "${EC_SPECS_IR:-}" ] && [ "$EC_SPECS_IR" != "$CANONICAL_SPECS_IR" ]; the
 fi
 
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
-  echo "error: Easy Complete release bundles must be built on Apple Silicon macOS" >&2
+  echo "error: Fastab release bundles must be built on Apple Silicon macOS" >&2
   exit 1
 fi
 
@@ -278,8 +278,8 @@ PLIST
 node "${REPO_DIR}/scripts/build-spec-inputs.mjs" \
   --verify-snapshot "$SPECS_IR_BUILD_SNAPSHOT"
 cp "${BIN_BUILD_SNAPSHOT}/${APP_NAME}" "$MACOS_DIR/"
-cp "${BIN_BUILD_SNAPSHOT}/ec"          "$MACOS_DIR/"
-cp "${BIN_BUILD_SNAPSHOT}/ecterm"      "$MACOS_DIR/"
+cp "${BIN_BUILD_SNAPSHOT}/ftab"        "$MACOS_DIR/"
+cp "${BIN_BUILD_SNAPSHOT}/fastabterm"  "$MACOS_DIR/"
 
 cp themes/*.json                       "${RESOURCES_DIR}/themes/"
 # Only specs-ir ships. bundle/specs is build-time input: it feeds the IR compiler
@@ -307,7 +307,7 @@ cp LICENSE NOTICE THIRD_PARTY_NOTICES.txt "$LICENSES_DIR/"
 "${REPO_DIR}/scripts/verify-license-bundle.sh" "$STAGING_BUNDLE"
 
 # Input Method helper app
-IM_APP="${STAGING_BUNDLE}/Contents/Helpers/EasyCompleteInputMethod.app"
+IM_APP="${STAGING_BUNDLE}/Contents/Helpers/FastabInputMethod.app"
 mkdir -p "${IM_APP}/Contents/MacOS"
 mkdir -p "${IM_APP}/Contents/Resources"
 node "${REPO_DIR}/scripts/build-spec-inputs.mjs" \
@@ -360,7 +360,7 @@ cat > "${STAGING_BUNDLE}/Contents/Info.plist" <<PLIST
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
     <!--
-      macOS Tahoe spawns an "AutoFill (Easy Complete)" helper that heuristically
+      macOS Tahoe spawns an "AutoFill (Fastab)" helper that heuristically
       scans text fields for one-time codes. This app never marks fields as
       one-time-code, so the helper is pure overhead. Documented Apple key:
       https://developer.apple.com/documentation/bundleresources/information-property-list/nsautofillrequirestextcontenttypeforonetimecodeonmac
@@ -376,7 +376,7 @@ cat > "${STAGING_BUNDLE}/Contents/Info.plist" <<PLIST
             <string>${APP_DISPLAY} URL</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>ec</string>
+                <string>fastab</string>
             </array>
         </dict>
     </array>

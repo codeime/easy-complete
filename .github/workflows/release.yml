@@ -192,13 +192,13 @@ jobs:
             export SPARKLE_AUTOMATIC_CHECKS=false
           fi
           ./scripts/build-app.sh
-          ./scripts/assert-no-runtime-js.sh "build/Easy Complete.app/Contents/Resources"
+          ./scripts/assert-no-runtime-js.sh "build/Fastab.app/Contents/Resources"
 
       - name: Verify built app version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
-          plist="build/Easy Complete.app/Contents/Info.plist"
+          plist="build/Fastab.app/Contents/Info.plist"
           tag_version="${GITHUB_REF_NAME#v}"
           short_version="$(plutil -extract CFBundleShortVersionString raw -o - "$plist")"
           bundle_version="$(plutil -extract CFBundleVersion raw -o - "$plist")"
@@ -215,16 +215,16 @@ jobs:
 
       - name: Package ARM DMG
         if: startsWith(github.ref, 'refs/tags/')
-        run: ./scripts/make-dmg.sh dist/Easy-Complete-arm64.dmg
+        run: ./scripts/make-dmg.sh dist/Fastab-arm64.dmg
 
       - name: Verify bundled license payload
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
           MOUNT_DIR="$(mktemp -d)"
-          hdiutil attach dist/Easy-Complete-arm64.dmg -readonly -nobrowse -mountpoint "$MOUNT_DIR" >/dev/null
+          hdiutil attach dist/Fastab-arm64.dmg -readonly -nobrowse -mountpoint "$MOUNT_DIR" >/dev/null
           trap 'hdiutil detach "$MOUNT_DIR" >/dev/null || true' EXIT
-          ./scripts/verify-license-bundle.sh "$MOUNT_DIR/Easy Complete.app"
+          ./scripts/verify-license-bundle.sh "$MOUNT_DIR/Fastab.app"
           test ! -e "$MOUNT_DIR/Licenses"
 
       - name: Notarize DMG
@@ -238,14 +238,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: ./scripts/notarize-dmg.sh dist/Easy-Complete-arm64.dmg
+        run: ./scripts/notarize-dmg.sh dist/Fastab-arm64.dmg
 
       - name: Copy versioned DMG
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
           APP_VERSION="${GITHUB_REF_NAME#v}"
-          cp dist/Easy-Complete-arm64.dmg "dist/Easy-Complete-${APP_VERSION}-arm64.dmg"
+          cp dist/Fastab-arm64.dmg "dist/Fastab-${APP_VERSION}-arm64.dmg"
 
       - name: Prepare Sparkle archives
         if: startsWith(github.ref, 'refs/tags/') && steps.caps.outputs.sparkle == 'true'
@@ -258,7 +258,7 @@ jobs:
           set -euo pipefail
 
           APP_VERSION="${CURRENT_TAG#v}"
-          VERSIONED_DMG="dist/Easy-Complete-${APP_VERSION}-arm64.dmg"
+          VERSIONED_DMG="dist/Fastab-${APP_VERSION}-arm64.dmg"
           VERSIONED_NAME="$(basename "$VERSIONED_DMG")"
 
           rm -rf "$APPCAST_DIR"
@@ -294,23 +294,23 @@ jobs:
 
           for tag in "${PREVIOUS_TAGS[@]}"; do
             version="${tag#v}"
-            dest="$APPCAST_DIR/Easy-Complete-${version}-arm64.dmg"
+            dest="$APPCAST_DIR/Fastab-${version}-arm64.dmg"
             tmp="$RUNNER_TEMP/sparkle-${tag//[^A-Za-z0-9._-]/_}"
             rm -rf "$tmp"
             mkdir -p "$tmp"
 
             if gh release download "$tag" \
               --repo "$GITHUB_REPOSITORY" \
-              --pattern "Easy-Complete-${version}-arm64.dmg" \
+              --pattern "Fastab-${version}-arm64.dmg" \
               --dir "$tmp" \
               --clobber; then
-              mv "$tmp/Easy-Complete-${version}-arm64.dmg" "$dest"
+              mv "$tmp/Fastab-${version}-arm64.dmg" "$dest"
             elif gh release download "$tag" \
               --repo "$GITHUB_REPOSITORY" \
-              --pattern "Easy-Complete-arm64.dmg" \
+              --pattern "Fastab-arm64.dmg" \
               --dir "$tmp" \
               --clobber; then
-              mv "$tmp/Easy-Complete-arm64.dmg" "$dest"
+              mv "$tmp/Fastab-arm64.dmg" "$dest"
             else
               echo "Skipping $tag: no compatible ARM64 DMG asset found."
             fi
@@ -343,7 +343,7 @@ jobs:
         run: |
           APP_VERSION="${SPARKLE_BUNDLE_VERSION#v}"
           SPARKLE_BUNDLE_VERSION="$APP_VERSION" \
-          ./scripts/generate-sparkle-appcast.sh "dist/Easy-Complete-${APP_VERSION}-arm64.dmg"
+          ./scripts/generate-sparkle-appcast.sh "dist/Fastab-${APP_VERSION}-arm64.dmg"
 
       - name: Verify release assets
         if: startsWith(github.ref, 'refs/tags/')
@@ -352,8 +352,8 @@ jobs:
         run: |
           set -euo pipefail
           APP_VERSION="${GITHUB_REF_NAME#v}"
-          test -f dist/Easy-Complete-arm64.dmg
-          test -f "dist/Easy-Complete-${APP_VERSION}-arm64.dmg"
+          test -f dist/Fastab-arm64.dmg
+          test -f "dist/Fastab-${APP_VERSION}-arm64.dmg"
 
           if [ "$SPARKLE_ENABLED" != "true" ]; then
             echo "Sparkle secrets are absent; skipping appcast verification."
@@ -413,10 +413,10 @@ jobs:
           {
             cat dist/changelog-notes.md
             printf '\n---\n\n### Install\n\n'
-            printf '%s\n' "1. Download \`Easy-Complete-arm64.dmg\`, open it, and drag **Easy Complete** to Applications."
+            printf '%s\n' "1. Download \`Fastab-arm64.dmg\`, open it, and drag **Fastab** to Applications."
             if [ "$SIGNING" = "true" ]; then
               cat <<'EOF'
-          2. Launch **Easy Complete**, open Easy Complete Settings, and click **Grant
+          2. Launch **Fastab**, open Fastab Settings, and click **Grant
              Accessibility**. Follow the drag guide in System Settings -> Privacy &
              Security -> Device Control and Data Access (named Accessibility on macOS 26
              and earlier). The input method is optional and can be installed in Settings.
@@ -428,10 +428,10 @@ jobs:
              copying to Applications, clear the quarantine flag once:
 
              ```bash
-             xattr -dr com.apple.quarantine "/Applications/Easy Complete.app"
+             xattr -dr com.apple.quarantine "/Applications/Fastab.app"
              ```
 
-          3. Launch **Easy Complete**, open Easy Complete Settings, and click **Grant
+          3. Launch **Fastab**, open Fastab Settings, and click **Grant
              Accessibility**. Follow the drag guide in System Settings -> Privacy &
              Security -> Device Control and Data Access (named Accessibility on macOS 26
              and earlier). The input method is optional and can be installed in Settings.
@@ -464,8 +464,8 @@ jobs:
           APP_VERSION="${GITHUB_REF_NAME#v}"
           rm -rf dist/upload
           mkdir -p dist/upload
-          cp dist/Easy-Complete-arm64.dmg dist/upload/
-          cp "dist/Easy-Complete-${APP_VERSION}-arm64.dmg" dist/upload/
+          cp dist/Fastab-arm64.dmg dist/upload/
+          cp "dist/Fastab-${APP_VERSION}-arm64.dmg" dist/upload/
           if [ -f dist/sparkle/appcast.xml ]; then
             cp dist/sparkle/appcast.xml dist/upload/
           fi
@@ -477,7 +477,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v7
         with:
-          name: Easy-Complete-arm64
+          name: Fastab-arm64
           path: dist/upload/*
           if-no-files-found: error
 
@@ -495,7 +495,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          PRODUCT_NAME: Easy Complete
+          PRODUCT_NAME: Fastab
           BUILD_RESULT: ${{ job.status }}
           GH_ACTOR: ${{ github.actor }}
           GH_REF: ${{ github.ref_name }}

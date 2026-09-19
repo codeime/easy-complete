@@ -17,9 +17,21 @@ const STATE_TABLE_NAME: &str = "state";
 const AUTH_TABLE_NAME: &str = "auth_kv";
 const POOL_MAX_SIZE: u32 = 4;
 
+/// Keys that belong to the previous product's TCC / IME / login-item identity.
+/// A renamed Easy Complete sqlite still contains them; they are not a Fastab
+/// grant, launch hash, or SMAppService migration.
+const PREVIOUS_PRODUCT_IDENTITY_KEYS: &[&str] = &[
+    "desktop.accessibilityGranted",
+    "input-method.launched-binary-sha256",
+    "desktop.loginItemMigratedToSMAppService",
+];
+
+const CLEARED_PREVIOUS_PRODUCT_IDENTITY_KEY: &str = "desktop.clearedPreviousProductIdentity";
+
 pub static DATABASE: LazyLock<Result<Db, DbOpenError>> = LazyLock::new(|| {
     let db = Db::new().map_err(|e| DbOpenError(e.to_string()))?;
     db.migrate().map_err(|e| DbOpenError(e.to_string()))?;
+    forget_previous_product_identity_once(&db).map_err(|e| DbOpenError(e.to_string()))?;
     Ok(db)
 });
 
@@ -69,6 +81,9 @@ impl Db {
     }
 
     pub fn new() -> Result<Self> {
+        // File-level only. Import uses `database()` after open so this cannot
+        // re-enter the LazyLock.
+        fig_util::directories::migrate_previous_product_data_dirs();
         Self::open(&Self::path()?)
     }
 
@@ -232,6 +247,77 @@ impl Db {
         self.all_values(STATE_TABLE_NAME)
     }
 
+    /// Copy state keys from `from` that `into` does not already have.
+    /// Used when Fastab already created `data.sqlite3` (IME hash) before
+    /// the Easy Complete database was merged. Identity keys are skipped —
+    /// Easy Complete's Accessibility grant is not a Fastab grant.
+    pub fn import_missing_state_values(from: &Self, into: &Self) -> Result<usize> {
+        let mut imported = 0;
+        for (key, value) in from.all_state_values()? {
+            if is_previous_product_identity_key(&key) {
+                continue;
+            }
+            if into.get_state_value(&key)?.is_none() {
+                into.set_state_value(&key, value)?;
+                imported += 1;
+            }
+        }
+        Ok(imported)
+    }
+
+    pub fn import_missing_state_from_path(path: &Path) -> Result<usize> {
+        import_missing_from_leftover_path(path).map(|(state, _history)| state)
+    }
+
+    /// Copy history rows when dest history is empty. File-level migrate
+    /// skips dest `data.sqlite3`, so Easy Complete history would otherwise
+    /// stay behind after IME created an empty Fastab database.
+    pub fn import_history_if_dest_empty(from: &Self, into: &Self) -> Result<usize> {
+        match history_row_count(into)? {
+            Some(count) if count > 0 => return Ok(0),
+            None => return Ok(0),
+            Some(_) => {},
+        }
+        if !matches!(history_row_count(from)?, Some(count) if count > 0) {
+            return Ok(0);
+        }
+
+        let from_conn = from.pool.get()?;
+        let into_conn = into.pool.get()?;
+        let mut stmt = from_conn.prepare(
+            "SELECT command, shell, pid, session_id, cwd, start_time, end_time, duration, hostname, exit_code FROM history",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i32>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i32>>(9)?,
+            ))
+        })?;
+
+        let mut imported = 0;
+        for row in rows {
+            let (command, shell, pid, session_id, cwd, start_time, end_time, duration, hostname, exit_code) = row?;
+            into_conn.execute(
+                "INSERT INTO history
+                    (command, shell, pid, session_id, cwd, start_time, end_time, duration, hostname, exit_code)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    command, shell, pid, session_id, cwd, start_time, end_time, duration, hostname, exit_code
+                ],
+            )?;
+            imported += 1;
+        }
+        Ok(imported)
+    }
+
     // atomic style operations
 
     fn atomic_op<T: FromSql + ToSql>(
@@ -283,6 +369,77 @@ impl Db {
         })
         .map(|val| val.and_then(|val| val.as_bool()).unwrap_or(false))
     }
+}
+
+fn is_previous_product_identity_key(key: &str) -> bool {
+    PREVIOUS_PRODUCT_IDENTITY_KEYS.contains(&key)
+}
+
+/// Copy leftover sqlite to a scratch file before open/migrate so we do not
+/// mutate the Easy Complete database (and so WAL init does not drop
+/// `-wal`/`-shm` next to it).
+pub(crate) fn import_missing_from_leftover_path(path: &Path) -> Result<(usize, usize)> {
+    if !path.is_file() {
+        return Ok((0, 0));
+    }
+    let scratch = std::env::temp_dir().join(format!("fastab-import-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&scratch)?;
+    let copy = scratch.join("data.sqlite3");
+    let result = (|| {
+        copy_sqlite_bundle(path, &copy)?;
+        let from = Db::open(&copy)?;
+        from.migrate()?;
+        let into = database()?;
+        let state = Db::import_missing_state_values(&from, into)?;
+        let history = Db::import_history_if_dest_empty(&from, into)?;
+        Ok((state, history))
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+fn copy_sqlite_bundle(src: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::copy(src, dest)?;
+    for suffix in ["-wal", "-shm"] {
+        let mut src_extra = src.as_os_str().to_os_string();
+        src_extra.push(suffix);
+        let src_extra = PathBuf::from(src_extra);
+        if src_extra.is_file() {
+            let mut dest_extra = dest.as_os_str().to_os_string();
+            dest_extra.push(suffix);
+            std::fs::copy(&src_extra, dest_extra)?;
+        }
+    }
+    Ok(())
+}
+
+fn forget_previous_product_identity_once(db: &Db) -> Result<()> {
+    if db
+        .get_state_value(CLEARED_PREVIOUS_PRODUCT_IDENTITY_KEY)?
+        .and_then(|value| value.as_bool())
+        == Some(true)
+    {
+        return Ok(());
+    }
+    for key in PREVIOUS_PRODUCT_IDENTITY_KEYS {
+        db.unset_state_value(key)?;
+    }
+    db.set_state_value(CLEARED_PREVIOUS_PRODUCT_IDENTITY_KEY, true)?;
+    Ok(())
+}
+
+fn history_row_count(db: &Db) -> Result<Option<i64>> {
+    let conn = db.pool.get()?;
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'history'",
+        [],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        return Ok(None);
+    }
+    let count = conn.query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))?;
+    Ok(Some(count))
 }
 
 /// Applied to every pooled connection of the on-disk database.
@@ -383,6 +540,129 @@ mod tests {
         let migration_folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sqlite/migrations");
         let migration_count = std::fs::read_dir(migration_folder).unwrap().count();
         assert_eq!(MIGRATIONS.len(), migration_count);
+    }
+
+    #[test]
+    fn import_missing_state_copies_only_absent_keys() {
+        let from = mock();
+        let into = mock();
+        from.set_state_value("keep-me", true).unwrap();
+        from.set_state_value("already", "old").unwrap();
+        into.set_state_value("already", "new").unwrap();
+
+        let imported = Db::import_missing_state_values(&from, &into).unwrap();
+        assert_eq!(imported, 1);
+        assert_eq!(into.get_state_value("keep-me").unwrap().unwrap(), true);
+        assert_eq!(into.get_state_value("already").unwrap().unwrap(), "new");
+    }
+
+    #[test]
+    fn import_missing_state_skips_previous_product_identity_keys() {
+        let from = mock();
+        let into = mock();
+        from.set_state_value("desktop.accessibilityGranted", true).unwrap();
+        from.set_state_value("input-method.launched-binary-sha256", "old-hash")
+            .unwrap();
+        from.set_state_value("desktop.loginItemMigratedToSMAppService", true)
+            .unwrap();
+        from.set_state_value("theme", "dark").unwrap();
+
+        let imported = Db::import_missing_state_values(&from, &into).unwrap();
+        assert_eq!(imported, 1);
+        assert_eq!(into.get_state_value("theme").unwrap().unwrap(), "dark");
+        assert!(into.get_state_value("desktop.accessibilityGranted").unwrap().is_none());
+        assert!(
+            into.get_state_value("input-method.launched-binary-sha256")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            into.get_state_value("desktop.loginItemMigratedToSMAppService")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn forget_previous_product_identity_runs_once() {
+        let db = mock();
+        db.set_state_value("desktop.accessibilityGranted", true).unwrap();
+        db.set_state_value("input-method.launched-binary-sha256", "old-hash")
+            .unwrap();
+        db.set_state_value("keep", 1).unwrap();
+
+        forget_previous_product_identity_once(&db).unwrap();
+        assert!(db.get_state_value("desktop.accessibilityGranted").unwrap().is_none());
+        assert!(
+            db.get_state_value("input-method.launched-binary-sha256")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(db.get_state_value("keep").unwrap().unwrap(), 1);
+        assert_eq!(
+            db.get_state_value("desktop.clearedPreviousProductIdentity")
+                .unwrap()
+                .unwrap(),
+            true
+        );
+
+        db.set_state_value("input-method.launched-binary-sha256", "fastab-hash")
+            .unwrap();
+        forget_previous_product_identity_once(&db).unwrap();
+        assert_eq!(
+            db.get_state_value("input-method.launched-binary-sha256")
+                .unwrap()
+                .unwrap(),
+            "fastab-hash"
+        );
+    }
+
+    #[test]
+    fn import_history_copies_only_when_dest_is_empty() {
+        let from = mock();
+        let into = mock();
+        from.pool
+            .get()
+            .unwrap()
+            .execute("INSERT INTO history (command, shell) VALUES ('ls', 'zsh')", [])
+            .unwrap();
+
+        let imported = Db::import_history_if_dest_empty(&from, &into).unwrap();
+        assert_eq!(imported, 1);
+        assert_eq!(history_row_count(&into).unwrap(), Some(1));
+
+        from.pool
+            .get()
+            .unwrap()
+            .execute("INSERT INTO history (command) VALUES ('pwd')", [])
+            .unwrap();
+        assert_eq!(Db::import_history_if_dest_empty(&from, &into).unwrap(), 0);
+        assert_eq!(history_row_count(&into).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn leftover_sqlite_copy_does_not_mutate_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("data.sqlite3");
+        {
+            let conn = rusqlite::Connection::open(&src).unwrap();
+            conn.execute_batch("CREATE TABLE t (k TEXT); INSERT INTO t VALUES ('a');")
+                .unwrap();
+        }
+        let before = std::fs::read(&src).unwrap();
+
+        let scratch = dir.path().join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        copy_sqlite_bundle(&src, &scratch.join("data.sqlite3")).unwrap();
+        let _copy = Db::open(&scratch.join("data.sqlite3")).unwrap();
+
+        assert_eq!(std::fs::read(&src).unwrap(), before);
+        let extras: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().contains("data.sqlite3"))
+            .collect();
+        assert_eq!(extras.len(), 1);
     }
 
     #[test]

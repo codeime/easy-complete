@@ -42,7 +42,7 @@ pub fn menu_bar() -> Menu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(Some("Quit Easy Complete")),
+            &PredefinedMenuItem::quit(Some("Quit Fastab")),
         ])
         .unwrap();
 
